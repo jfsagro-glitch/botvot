@@ -8,7 +8,7 @@ Create a file named `.env` in the project root with the following content:
 
 ```env
 # Telegram Bot Tokens
-# Sales Bot Token (GameChangerQ_bot)
+# Sales Bot Token (StartNowQ_bot)
 SALES_BOT_TOKEN=your_sales_bot_token_here
 
 # Course Bot Token - CREATE A SECOND BOT VIA @BotFather
@@ -31,7 +31,7 @@ LESSON_INTERVAL_HOURS=24
 
 ## Step 2: Get Your Admin Chat ID
 
-1. Open Telegram and go to: `t.me/GameChangerQ_bot`
+1. Open Telegram and go to: `t.me/StartNowQ_bot`
 2. Send any message to your bot (e.g., `/start`)
 3. Visit this URL in your browser:
    ```
@@ -80,7 +80,7 @@ You need a second bot for course delivery:
    ```
 
 4. Test in Telegram:
-   - Go to `t.me/GameChangerQ_bot`
+   - Go to `t.me/StartNowQ_bot`
    - Send `/start`
    - You should see course information and tariff options
 

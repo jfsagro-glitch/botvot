@@ -2,7 +2,7 @@
 
 ## Step 1: Configure Your Bots
 
-You've already created your **Sales Bot** (GameChangerQ_bot). Now you need:
+You've already created your **Sales Bot** (StartNowQ_bot). Now you need:
 
 ### Create Course Bot
 1. Go to Telegram and message `@BotFather`
@@ -11,7 +11,7 @@ You've already created your **Sales Bot** (GameChangerQ_bot). Now you need:
 4. Copy the token and update `COURSE_BOT_TOKEN` in `.env`
 
 ### Get Your Admin Chat ID
-1. Send any message to your Sales Bot: `t.me/GameChangerQ_bot`
+1. Send any message to your Sales Bot: `t.me/StartNowQ_bot`
 2. Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
 3. Find your chat ID in the response (look for `"chat":{"id":123456789}`)
 4. Update `ADMIN_CHAT_ID` in `.env`
@@ -45,7 +45,7 @@ python -m bots.sales_bot
 ```
 
 Then:
-1. Open Telegram and go to `t.me/GameChangerQ_bot`
+1. Open Telegram and go to `t.me/StartNowQ_bot`
 2. Send `/start`
 3. You should see course information and tariff options
 4. Select a tariff and test payment (mock payment auto-completes in 5 seconds)

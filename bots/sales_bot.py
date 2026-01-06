@@ -105,7 +105,7 @@ class SalesBot:
                 await message.answer(
                     f"👋 Welcome back, {first_name}!\n\n"
                     f"You already have access to the course with {user.tariff.value.upper()} tariff.\n\n"
-                    f"Your course bot: @GameChangerNow_bot\n"
+                    f"Your course bot: @StartNowAI_bot\n"
                     f"Current day: {user.current_day}/30"
                 )
                 return
@@ -299,7 +299,7 @@ class SalesBot:
             [
                 InlineKeyboardButton(
                     text="🚀 Перейти в курс",
-                    url=f"https://t.me/GameChangerNow_bot?start=course"
+                    url=f"https://t.me/StartNowAI_bot?start=course"
                 )
             ]
         ])
