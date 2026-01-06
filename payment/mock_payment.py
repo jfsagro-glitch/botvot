@@ -81,15 +81,15 @@ class MockPaymentProcessor(PaymentProcessor):
             return None
         
         payment = self.payments[payment_id]
-        if payment["status"] == PaymentStatus.COMPLETED:
-            return {
-                "payment_id": payment_id,
-                "user_id": payment["user_id"],
-                "amount": payment["amount"],
-                "metadata": payment["metadata"]
-            }
-        
-        return None
+        # Return payment details
+        # Status is PaymentStatus enum, convert to value for consistency
+        return {
+            "payment_id": payment_id,
+            "user_id": payment["user_id"],
+            "amount": payment["amount"],
+            "metadata": payment["metadata"],
+            "status": payment["status"]  # This is PaymentStatus enum
+        }
     
     async def process_webhook(self, webhook_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

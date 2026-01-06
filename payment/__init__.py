@@ -1,2 +1,1 @@
-# Payment module
-
+"""Payment processors package."""

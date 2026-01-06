@@ -103,26 +103,26 @@ def format_tariff_description(tariff: Tariff) -> str:
     """Format tariff description for display."""
     descriptions = {
         Tariff.BASIC: (
-            "📚 <b>BASIC Tariff - $100</b>\n\n"
-            "✅ Full course content (30 days)\n"
-            "✅ Daily automated lessons\n"
-            "❌ No feedback on assignments\n"
-            "✅ General community access"
+            "📚 <b>БАЗОВЫЙ тариф - $100</b>\n\n"
+            "✅ Полный контент курса (30 дней)\n"
+            "✅ Ежедневные автоматические уроки\n"
+            "❌ Без обратной связи по заданиям\n"
+            "✅ Доступ к общему сообществу"
         ),
         Tariff.FEEDBACK: (
-            "💬 <b>FEEDBACK Tariff - $200</b>\n\n"
-            "✅ Full course content (30 days)\n"
-            "✅ Daily automated lessons\n"
-            "✅ Personal feedback on assignments\n"
-            "✅ General community access"
+            "💬 <b>С ОБРАТНОЙ СВЯЗЬЮ тариф - $200</b>\n\n"
+            "✅ Полный контент курса (30 дней)\n"
+            "✅ Ежедневные автоматические уроки\n"
+            "✅ Персональная обратная связь по заданиям\n"
+            "✅ Доступ к общему сообществу"
         ),
         Tariff.PREMIUM: (
-            "⭐ <b>PREMIUM Tariff - $300</b>\n\n"
-            "✅ Full course content (30 days)\n"
-            "✅ Daily automated lessons\n"
-            "✅ Personal feedback on assignments\n"
-            "✅ General community access\n"
-            "✅ Premium community access"
+            "⭐ <b>ПРЕМИУМ тариф - $300</b>\n\n"
+            "✅ Полный контент курса (30 дней)\n"
+            "✅ Ежедневные автоматические уроки\n"
+            "✅ Персональная обратная связь по заданиям\n"
+            "✅ Доступ к общему сообществу\n"
+            "✅ Доступ к премиум сообществу"
         )
     }
     return descriptions.get(tariff, "")

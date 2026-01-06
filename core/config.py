@@ -34,6 +34,17 @@ class Config:
     COURSE_DURATION_DAYS: int = int(os.getenv("COURSE_DURATION_DAYS", "30"))
     LESSON_INTERVAL_HOURS: int = int(os.getenv("LESSON_INTERVAL_HOURS", "24"))
     
+    # Payment Settings
+    PAYMENT_PROVIDER: str = os.getenv("PAYMENT_PROVIDER", "mock")  # "mock" or "yookassa"
+    
+    # YooKassa Settings (if PAYMENT_PROVIDER == "yookassa")
+    YOOKASSA_SHOP_ID: str = os.getenv("YOOKASSA_SHOP_ID", "")
+    YOOKASSA_SECRET_KEY: str = os.getenv("YOOKASSA_SECRET_KEY", "")
+    YOOKASSA_RETURN_URL: str = os.getenv("YOOKASSA_RETURN_URL", "https://t.me/StartNowQ_bot")
+    
+    # Payment Currency
+    PAYMENT_CURRENCY: str = os.getenv("PAYMENT_CURRENCY", "RUB")  # RUB, USD, EUR, etc.
+    
     @classmethod
     def validate(cls) -> bool:
         """Validate that required configuration is present."""

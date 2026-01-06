@@ -39,8 +39,10 @@ class PaymentService:
         
         Returns payment information including payment URL.
         """
+        from core.config import Config
+        
         amount = self.TARIFF_PRICES[tariff]
-        currency = "USD"  # Adjust based on your needs
+        currency = Config.PAYMENT_CURRENCY  # RUB, USD, EUR, etc.
         
         description = f"Course Access - {tariff.value.upper()} Tariff"
         
@@ -75,25 +77,51 @@ class PaymentService:
         This should be called when payment webhook is received or
         when checking payment status shows completion.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"🔄 Processing payment completion for: {payment_id}")
+        
         # Get payment info from webhook or check status
         if webhook_data:
             payment_data = await self.payment_processor.process_webhook(webhook_data)
         else:
+            # First check if payment is completed
             status = await self.check_payment(payment_id)
+            logger.info(f"   Payment status check: {status.value}")
+            
             if status != PaymentStatus.COMPLETED:
+                logger.warning(f"   Payment not completed yet: {status.value}")
                 return None
+            
             # Fetch payment details from processor
             # For mock processor, use get_payment_details if available
             if hasattr(self.payment_processor, 'get_payment_details'):
                 payment_data = await self.payment_processor.get_payment_details(payment_id)
+                logger.info(f"   Payment data retrieved: {payment_data is not None}")
             else:
                 # Fallback: try webhook with payment_id
                 payment_data = await self.payment_processor.process_webhook({"payment_id": payment_id})
             
             if not payment_data:
+                logger.error(f"   Failed to get payment data for {payment_id}")
                 return None
+            
+            # Double-check status from payment data if available
+            # Status might be PaymentStatus enum or string
+            payment_status = payment_data.get("status")
+            if payment_status:
+                if isinstance(payment_status, PaymentStatus):
+                    if payment_status != PaymentStatus.COMPLETED:
+                        logger.warning(f"   Payment data status check failed: {payment_status.value}")
+                        return None
+                elif isinstance(payment_status, str):
+                    if payment_status != PaymentStatus.COMPLETED.value:
+                        logger.warning(f"   Payment data status check failed: {payment_status}")
+                        return None
         
         if not payment_data:
+            logger.error("   No payment data available")
             return None
         
         metadata = payment_data.get("metadata", {})
@@ -101,17 +129,23 @@ class PaymentService:
         tariff_str = metadata.get("tariff")
         referral_partner_id = metadata.get("referral_partner_id")
         
+        logger.info(f"   Extracted: user_id={user_id}, tariff={tariff_str}, referral={referral_partner_id}")
+        
         if not user_id or not tariff_str:
+            logger.error(f"   Missing required data: user_id={user_id}, tariff={tariff_str}")
             return None
         
         tariff = Tariff(tariff_str)
         
         # Grant access to user
+        logger.info(f"   Granting access to user {user_id} with tariff {tariff.value}")
         user = await self.user_service.grant_access(
             user_id=user_id,
             tariff=tariff,
             referral_partner_id=referral_partner_id
         )
+        
+        logger.info(f"   ✅ Access granted successfully to user {user_id}")
         
         return {
             "user_id": user_id,

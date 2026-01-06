@@ -15,6 +15,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
 from core.config import Config
 from core.database import Database
@@ -39,7 +40,7 @@ class CourseBot:
     """Course Delivery Bot implementation."""
     
     def __init__(self):
-        self.bot = Bot(token=Config.COURSE_BOT_TOKEN, parse_mode=ParseMode.HTML)
+        self.bot = Bot(token=Config.COURSE_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         self.dp = Dispatcher()
         self.db = Database()
         self.user_service = UserService(self.db)
