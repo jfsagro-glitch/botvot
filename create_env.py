@@ -8,7 +8,7 @@ def create_env_file():
     """Создать файл .env с токеном Sales Bot."""
     env_content = """# Токены Telegram ботов
 # Токен Sales Bot (GameChangerQ_bot)
-SALES_BOT_TOKEN=8320633481:AAH4xZLPOARQL2U7XkvwAgZxDG_VQmoo468
+SALES_BOT_TOKEN=your_sales_bot_token_here
 
 # Токен Course Bot - СОЗДАЙТЕ ВТОРОГО БОТА ЧЕРЕЗ @BotFather
 COURSE_BOT_TOKEN=ваш_токен_курс_бота_здесь

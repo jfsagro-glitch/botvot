@@ -9,7 +9,7 @@ Create a file named `.env` in the project root with the following content:
 ```env
 # Telegram Bot Tokens
 # Sales Bot Token (GameChangerQ_bot)
-SALES_BOT_TOKEN=8320633481:AAH4xZLPOARQL2U7XkvwAgZxDG_VQmoo468
+SALES_BOT_TOKEN=your_sales_bot_token_here
 
 # Course Bot Token - CREATE A SECOND BOT VIA @BotFather
 COURSE_BOT_TOKEN=your_course_bot_token_here
@@ -35,7 +35,7 @@ LESSON_INTERVAL_HOURS=24
 2. Send any message to your bot (e.g., `/start`)
 3. Visit this URL in your browser:
    ```
-   https://api.telegram.org/bot8320633481:AAH4xZLPOARQL2U7XkvwAgZxDG_VQmoo468/getUpdates
+   https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates
    ```
 4. Look for your chat ID in the JSON response. It will look like:
    ```json

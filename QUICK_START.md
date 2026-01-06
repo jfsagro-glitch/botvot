@@ -12,7 +12,7 @@ You've already created your **Sales Bot** (GameChangerQ_bot). Now you need:
 
 ### Get Your Admin Chat ID
 1. Send any message to your Sales Bot: `t.me/GameChangerQ_bot`
-2. Visit: `https://api.telegram.org/bot8320633481:AAH4xZLPOARQL2U7XkvwAgZxDG_VQmoo468/getUpdates`
+2. Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
 3. Find your chat ID in the response (look for `"chat":{"id":123456789}`)
 4. Update `ADMIN_CHAT_ID` in `.env`
 

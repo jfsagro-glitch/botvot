@@ -17,3 +17,10 @@ data/
 .vscode/
 .idea/
 
+# Секретные данные
+*.key
+*.pem
+*.secret
+secrets/
+credentials/
+
