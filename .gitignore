@@ -24,3 +24,18 @@ data/
 secrets/
 credentials/
 
+# Тестовые файлы
+test_*.py
+check_bot_*.py
+simple_test_*.py
+run_bots_debug.py
+quick_start_bots.py
+
+# Логи
+*.log
+bot_logs.txt
+*.txt
+!requirements.txt
+!README.md
+!*.md
+
