@@ -7,7 +7,7 @@ You've already created your **Sales Bot** (StartNowQ_bot). Now you need:
 ### Create Course Bot
 1. Go to Telegram and message `@BotFather`
 2. Send `/newbot`
-3. Follow instructions to create a second bot (e.g., "GameChangerQ_CourseBot")
+3. Follow instructions to create a second bot (e.g., "StartNowAI_bot")
 4. Copy the token and update `COURSE_BOT_TOKEN` in `.env`
 
 ### Get Your Admin Chat ID

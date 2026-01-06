@@ -7,7 +7,7 @@ from pathlib import Path
 def create_env_file():
     """Создать файл .env с токеном Sales Bot."""
     env_content = """# Токены Telegram ботов
-# Токен Sales Bot (GameChangerQ_bot)
+# Токен Sales Bot (StartNowQ_bot)
 SALES_BOT_TOKEN=your_sales_bot_token_here
 
 # Токен Course Bot - СОЗДАЙТЕ ВТОРОГО БОТА ЧЕРЕЗ @BotFather

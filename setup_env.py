@@ -11,7 +11,7 @@ from pathlib import Path
 def create_env_file():
     """Create .env file with Sales Bot token."""
     env_content = """# Telegram Bot Tokens
-# Sales Bot Token (GameChangerQ_bot)
+# Sales Bot Token (StartNowQ_bot)
 SALES_BOT_TOKEN=your_sales_bot_token_here
 
 # Course Bot Token - CREATE A SECOND BOT VIA @BotFather
@@ -20,7 +20,7 @@ COURSE_BOT_TOKEN=your_course_bot_token_here
 
 # Admin Chat ID (for assignment feedback)
 # Get this by:
-# 1. Send a message to your Sales Bot: t.me/GameChangerQ_bot
+# 1. Send a message to your Sales Bot: t.me/StartNowQ_bot
 # 2. Visit: https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates
 # 3. Find your chat ID in the response
 ADMIN_CHAT_ID=your_admin_chat_id_here

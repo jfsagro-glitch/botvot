@@ -49,7 +49,7 @@ You need a second bot for course delivery:
 
 1. Go to Telegram and message `@BotFather`
 2. Send `/newbot`
-3. Follow the instructions to create a bot (e.g., name it "GameChangerQ Course Bot")
+3. Follow the instructions to create a bot (e.g., name it "StartNowAI_bot")
 4. Copy the token you receive
 5. Update `COURSE_BOT_TOKEN` in `.env`
 
