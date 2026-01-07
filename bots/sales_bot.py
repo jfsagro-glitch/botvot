@@ -402,6 +402,211 @@ class SalesBot:
                 except:
                     pass
     
+    async def handle_upgrade_tariff(self, callback: CallbackQuery):
+        """Handle upgrade tariff button click - show available upgrade options."""
+        try:
+            # Отвечаем на callback сразу
+            try:
+                await callback.answer()
+            except Exception as answer_error:
+                logger.warning(f"   Не удалось ответить на callback: {answer_error}")
+            
+            logger.info(f"🔄 Upgrade tariff requested by user {callback.from_user.id}")
+            
+            user_id = callback.from_user.id
+            user = await self.user_service.get_user(user_id)
+            
+            if not user or not user.has_access():
+                await callback.message.answer("❌ У вас нет активного доступа к курсу.")
+                return
+            
+            current_tariff = user.tariff
+            current_price = PaymentService.TARIFF_PRICES[current_tariff]
+            
+            # Определяем доступные тарифы для апгрейда
+            available_upgrades = []
+            if current_tariff == Tariff.BASIC:
+                available_upgrades = [
+                    (Tariff.FEEDBACK, PaymentService.TARIFF_PRICES[Tariff.FEEDBACK]),
+                    (Tariff.PREMIUM, PaymentService.TARIFF_PRICES[Tariff.PREMIUM])
+                ]
+            elif current_tariff == Tariff.FEEDBACK:
+                available_upgrades = [
+                    (Tariff.PREMIUM, PaymentService.TARIFF_PRICES[Tariff.PREMIUM])
+                ]
+            elif current_tariff == Tariff.PREMIUM:
+                await callback.message.answer(
+                    "✅ У вас уже максимальный тариф PREMIUM!\n\n"
+                    "Вы получаете:\n"
+                    "• Все материалы курса\n"
+                    "• Персональную обратную связь\n"
+                    "• Доступ в премиум сообщество"
+                )
+                return
+            
+            if not available_upgrades:
+                await callback.message.answer("❌ Нет доступных тарифов для апгрейда.")
+                return
+            
+            # Формируем сообщение с доступными тарифами
+            upgrade_text = (
+                f"{create_premium_separator()}\n"
+                f"🔄 <b>СМЕНА ТАРИФА (АПГРЕЙД)</b>\n"
+                f"{create_premium_separator()}\n\n"
+                f"Ваш текущий тариф: <b>{current_tariff.value.upper()}</b> ({current_price:.0f}₽)\n\n"
+                f"Доступные тарифы для апгрейда:\n\n"
+            )
+            
+            # Создаем клавиатуру с доступными тарифами
+            keyboard_buttons = []
+            for tariff, price in available_upgrades:
+                price_diff = price - current_price
+                tariff_name = tariff.value.upper()
+                if tariff == Tariff.FEEDBACK:
+                    tariff_name = "С ОБРАТНОЙ СВЯЗЬЮ"
+                elif tariff == Tariff.PREMIUM:
+                    tariff_name = "ПРЕМИУМ"
+                
+                upgrade_text += (
+                    f"• <b>{tariff_name}</b> — {price:.0f}₽\n"
+                    f"  (доплата: {price_diff:.0f}₽)\n\n"
+                )
+                
+                keyboard_buttons.append([
+                    InlineKeyboardButton(
+                        text=f"⬆️ {tariff_name} (+{price_diff:.0f}₽)",
+                        callback_data=f"upgrade:{tariff.value}"
+                    )
+                ])
+            
+            keyboard_buttons.append([
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data="cancel"
+                )
+            ])
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+            
+            await callback.message.edit_text(
+                upgrade_text + "Выберите тариф для апгрейда:",
+                reply_markup=keyboard
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error in handle_upgrade_tariff: {e}", exc_info=True)
+            try:
+                await callback.answer("❌ Ошибка при загрузке тарифов", show_alert=True)
+            except:
+                try:
+                    await callback.message.answer("❌ Ошибка при загрузке тарифов. Попробуйте позже.")
+                except:
+                    pass
+    
+    async def handle_upgrade_tariff_selection(self, callback: CallbackQuery):
+        """Handle upgrade tariff selection - calculate price difference and initiate payment."""
+        try:
+            # Отвечаем на callback сразу
+            try:
+                await callback.answer()
+            except Exception as answer_error:
+                logger.warning(f"   Не удалось ответить на callback: {answer_error}")
+            
+            logger.info(f"🔄 Upgrade tariff selection: {callback.data}")
+            
+            user_id = callback.from_user.id
+            user = await self.user_service.get_user(user_id)
+            
+            if not user or not user.has_access():
+                await callback.message.answer("❌ У вас нет активного доступа к курсу.")
+                return
+            
+            # Парсим выбранный тариф
+            tariff_str = callback.data.split(":")[1].strip().lower()
+            new_tariff = Tariff(tariff_str)
+            current_tariff = user.tariff
+            
+            # Проверяем, что это действительно апгрейд
+            tariff_order = {Tariff.BASIC: 1, Tariff.FEEDBACK: 2, Tariff.PREMIUM: 3}
+            if tariff_order[new_tariff] <= tariff_order[current_tariff]:
+                await callback.message.answer(
+                    "❌ Вы можете только улучшить тариф, а не понизить его.\n"
+                    "Используйте /start для просмотра доступных тарифов."
+                )
+                return
+            
+            # Вычисляем разницу в цене
+            current_price = PaymentService.TARIFF_PRICES[current_tariff]
+            new_price = PaymentService.TARIFF_PRICES[new_tariff]
+            price_diff = new_price - current_price
+            
+            logger.info(f"   Current: {current_tariff.value} ({current_price}₽)")
+            logger.info(f"   New: {new_tariff.value} ({new_price}₽)")
+            logger.info(f"   Difference: {price_diff}₽")
+            
+            # Создаем платеж на разницу
+            payment_info = await self.payment_service.initiate_payment(
+                user_id=user_id,
+                tariff=new_tariff,  # Новый тариф
+                referral_partner_id=user.referral_partner_id,
+                upgrade_from=current_tariff,  # Старый тариф для справки
+                upgrade_price=price_diff  # Цена апгрейда
+            )
+            
+            payment_id = payment_info["payment_id"]
+            payment_url = payment_info["payment_url"]
+            
+            # Форматируем цену с валютой
+            currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
+            
+            payment_note = ""
+            if Config.PAYMENT_PROVIDER.lower() == "mock":
+                payment_note = "\n\n<i>Примечание: Это тестовая система оплаты. Платеж автоматически завершится через 5 секунд.</i>\n\nЧерез 5 секунд нажмите кнопку 'Проверить статус оплаты'."
+            else:
+                payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
+            
+            upgrade_message = (
+                f"{create_premium_separator()}\n"
+                f"💳 <b>ОПЛАТА АПГРЕЙДА ТАРИФА</b>\n"
+                f"{create_premium_separator()}\n\n"
+                f"Текущий тариф: <b>{current_tariff.value.upper()}</b> ({current_price:.0f}₽)\n"
+                f"Новый тариф: <b>{new_tariff.value.upper()}</b> ({new_price:.0f}₽)\n\n"
+                f"💰 К доплате: <b>{price_diff:.0f}{currency_symbol}</b>{payment_note}"
+            )
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💳 Оплатить",
+                        url=payment_url
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Проверить статус оплаты",
+                        callback_data=f"check_payment:{payment_id}"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ Отмена",
+                        callback_data="cancel"
+                    )
+                ]
+            ])
+            
+            await callback.message.edit_text(upgrade_message, reply_markup=keyboard)
+            
+        except Exception as e:
+            logger.error(f"❌ Error in handle_upgrade_tariff_selection: {e}", exc_info=True)
+            try:
+                await callback.answer("❌ Ошибка при создании платежа", show_alert=True)
+            except:
+                try:
+                    await callback.message.answer("❌ Ошибка при создании платежа. Попробуйте позже.")
+                except:
+                    pass
+    
     async def handle_payment_initiate(self, callback: CallbackQuery):
         """Handle payment initiation."""
         # ЛОГИРОВАНИЕ В САМОМ НАЧАЛЕ
