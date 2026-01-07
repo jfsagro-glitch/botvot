@@ -351,10 +351,14 @@ class SalesBot:
             else:
                 payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
             
+            # Форматируем цену с валютой
+            price = PaymentService.TARIFF_PRICES[tariff]
+            currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
+            
             await callback.message.edit_text(
                 f"💳 <b>Требуется оплата</b>\n\n"
                 f"Тариф: <b>{tariff.value.upper()}</b>\n"
-                f"Сумма: {PaymentService.TARIFF_PRICES[tariff]} {Config.PAYMENT_CURRENCY}\n\n"
+                f"Сумма: {price:.0f}{currency_symbol}\n\n"
                 f"Нажмите кнопку ниже для завершения оплаты:{payment_note}",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [

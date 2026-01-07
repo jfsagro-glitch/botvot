@@ -18,9 +18,9 @@ class PaymentService:
     
     # Tariff prices (in your currency - adjust as needed)
     TARIFF_PRICES = {
-        Tariff.BASIC: 100.0,
-        Tariff.FEEDBACK: 200.0,
-        Tariff.PREMIUM: 300.0,
+        Tariff.BASIC: 3000.0,      # Базовый тариф - только задания без обратной связи
+        Tariff.FEEDBACK: 5000.0,   # С обратной связью от лидера
+        Tariff.PREMIUM: 8000.0,    # Обратная связь + премиум сообщество
     }
     
     def __init__(self, db: Database, payment_processor: PaymentProcessor):
