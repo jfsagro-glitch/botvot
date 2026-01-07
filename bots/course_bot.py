@@ -76,15 +76,15 @@ class CourseBot:
         
         if not user:
             await message.answer(
-                "❌ You don't have access to this course.\n\n"
-                "Please purchase access through our sales bot first."
+                "❌ У вас нет доступа к этому курсу.\n\n"
+                "Пожалуйста, сначала приобретите доступ через нашего продающего бота @StartNowQ_bot"
             )
             return
         
         if not user.has_access():
             await message.answer(
-                "❌ You don't have active course access.\n\n"
-                "Please purchase access through our sales bot first."
+                "❌ У вас нет активного доступа к курсу.\n\n"
+                "Пожалуйста, сначала приобретите доступ через нашего продающего бота @StartNowQ_bot"
             )
             return
         
@@ -146,17 +146,17 @@ class CourseBot:
         user = await self.user_service.get_user(user_id)
         
         if not user or not user.has_access():
-            await message.answer("❌ You don't have access to this course.")
+            await message.answer("❌ У вас нет доступа к этому курсу.")
             return
         
         progress_percent = (user.current_day / Config.COURSE_DURATION_DAYS) * 100
         
         await message.answer(
-            f"📊 <b>Your Progress</b>\n\n"
-            f"Current Day: <b>{user.current_day}/{Config.COURSE_DURATION_DAYS}</b>\n"
-            f"Progress: <b>{progress_percent:.1f}%</b>\n"
-            f"Tariff: <b>{user.tariff.value.upper()}</b>\n"
-            f"Started: {user.start_date.strftime('%Y-%m-%d') if user.start_date else 'N/A'}"
+            f"📊 <b>Ваш прогресс</b>\n\n"
+            f"Текущий день: <b>{user.current_day}/{Config.COURSE_DURATION_DAYS}</b>\n"
+            f"Прогресс: <b>{progress_percent:.1f}%</b>\n"
+            f"Тариф: <b>{user.tariff.value.upper()}</b>\n"
+            f"Начало: {user.start_date.strftime('%Y-%m-%d') if user.start_date else 'Не указано'}"
         )
     
     async def handle_submit_assignment(self, callback: CallbackQuery):
@@ -167,14 +167,14 @@ class CourseBot:
         user = await self.user_service.get_user(user_id)
         
         if not user or not user.has_access():
-            await callback.message.answer("❌ You don't have access to this course.")
+            await callback.message.answer("❌ У вас нет доступа к этому курсу.")
             return
         
         lesson_id = int(callback.data.split(":")[2])
         lesson = await self.lesson_service.get_lesson_for_day(user.current_day)
         
-        if not lesson or lesson.lesson_id != lesson_id:
-            await callback.message.answer("❌ Lesson not found.")
+        if not lesson or lesson.day_number != day_from_callback:
+            await callback.message.answer("❌ Урок не найден.")
             return
         
         # Check if user can submit assignments (BASIC tariff cannot)
@@ -350,9 +350,9 @@ class CourseBot:
         )
         
         await message.answer(
-            "✅ <b>Assignment Submitted!</b>\n\n"
-            "Your assignment has been sent to our team for review.\n"
-            "You'll receive feedback soon."
+            "✅ <b>Задание отправлено!</b>\n\n"
+            "Ваше задание отправлено нашей команде на проверку.\n"
+            "Вы получите обратную связь в ближайшее время."
         )
     
     async def handle_assignment_media(self, message: Message):
@@ -369,8 +369,11 @@ class CourseBot:
         
         if not user.can_receive_feedback():
             await message.answer(
-                "ℹ️ Your media has been noted, but feedback is not included "
-                "in your current tariff."
+                "ℹ️ <b>Ваши медиа отмечены</b>\n\n"
+                "Обратная связь не включена в ваш текущий тариф.\n\n"
+                "Вы можете выполнять задания для себя, "
+                "но они не будут проверяться нашей командой.\n\n"
+                "Для получения обратной связи обновитесь до тарифа FEEDBACK или PREMIUM."
             )
             return
         
