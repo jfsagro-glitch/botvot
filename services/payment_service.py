@@ -32,25 +32,44 @@ class PaymentService:
         self,
         user_id: int,
         tariff: Tariff,
-        referral_partner_id: Optional[str] = None
+        referral_partner_id: Optional[str] = None,
+        upgrade_from: Optional[Tariff] = None,
+        upgrade_price: Optional[float] = None
     ) -> Dict[str, Any]:
         """
-        Initiate a payment for course access.
+        Initiate a payment for course access or upgrade.
+        
+        Args:
+            user_id: User ID
+            tariff: Target tariff
+            referral_partner_id: Optional referral partner ID
+            upgrade_from: If this is an upgrade, the current tariff
+            upgrade_price: If this is an upgrade, the price difference to pay
         
         Returns payment information including payment URL.
         """
         from core.config import Config
         
-        amount = self.TARIFF_PRICES[tariff]
-        currency = Config.PAYMENT_CURRENCY  # RUB, USD, EUR, etc.
+        # Если это апгрейд, используем цену апгрейда, иначе полную цену тарифа
+        if upgrade_price is not None:
+            amount = upgrade_price
+            description = f"Tariff Upgrade: {upgrade_from.value.upper()} → {tariff.value.upper()}"
+        else:
+            amount = self.TARIFF_PRICES[tariff]
+            description = f"Course Access - {tariff.value.upper()} Tariff"
         
-        description = f"Course Access - {tariff.value.upper()} Tariff"
+        currency = Config.PAYMENT_CURRENCY  # RUB, USD, EUR, etc.
         
         metadata = {
             "tariff": tariff.value,
             "user_id": user_id,
             "referral_partner_id": referral_partner_id
         }
+        
+        # Добавляем информацию об апгрейде в метаданные
+        if upgrade_from is not None:
+            metadata["upgrade_from"] = upgrade_from.value
+            metadata["is_upgrade"] = True
         
         payment_info = await self.payment_processor.create_payment(
             user_id=user_id,
@@ -139,11 +158,26 @@ class PaymentService:
         
         # Grant access to user
         logger.info(f"   Granting access to user {user_id} with tariff {tariff.value}")
-        user = await self.user_service.grant_access(
-            user_id=user_id,
-            tariff=tariff,
-            referral_partner_id=referral_partner_id
-        )
+        # Проверяем, это апгрейд или новый доступ
+        is_upgrade = metadata.get("is_upgrade", False)
+        
+        if is_upgrade:
+            # Это апгрейд - обновляем тариф пользователя
+            user = await self.user_service.get_user(user_id)
+            if user:
+                user.tariff = tariff
+                await self.db.update_user(user)
+                logger.info(f"   ✅ User {user_id} upgraded to {tariff.value.upper()}")
+            else:
+                logger.error(f"   ❌ User {user_id} not found for upgrade")
+                return None
+        else:
+            # Это новый доступ
+            user = await self.user_service.grant_access(
+                user_id=user_id,
+                tariff=tariff,
+                referral_partner_id=referral_partner_id
+            )
         
         logger.info(f"   ✅ Access granted successfully to user {user_id}")
         

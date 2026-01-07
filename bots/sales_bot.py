@@ -106,7 +106,9 @@ class SalesBot:
         
         # Регистрация обработчиков callback query
         # ВАЖНО: Порядок регистрации важен - более специфичные первыми
+        self.dp.callback_query.register(self.handle_upgrade_tariff, F.data == "upgrade_tariff")
         self.dp.callback_query.register(self.handle_tariff_selection, F.data.startswith("tariff:"))
+        self.dp.callback_query.register(self.handle_upgrade_tariff_selection, F.data.startswith("upgrade:"))
         self.dp.callback_query.register(self.handle_payment_initiate, F.data.startswith("pay:"))
         self.dp.callback_query.register(self.handle_payment_check, F.data.startswith("check_payment:"))
         self.dp.callback_query.register(self.handle_cancel, F.data == "cancel")
@@ -115,8 +117,10 @@ class SalesBot:
         logger.info(f"   - CommandStart handler: {self.handle_start.__name__}")
         logger.info(f"   - Command help handler: {self.handle_help.__name__}")
         logger.info(f"   - Command author handler: {self.handle_author.__name__}")
-        logger.info(f"   - Callback handlers: 4 registered")
+        logger.info(f"   - Callback handlers: 6 registered")
+        logger.info(f"     * upgrade_tariff -> handle_upgrade_tariff")
         logger.info(f"     * tariff: -> handle_tariff_selection")
+        logger.info(f"     * upgrade: -> handle_upgrade_tariff_selection")
         logger.info(f"     * pay: -> handle_payment_initiate")
         logger.info(f"     * check_payment: -> handle_payment_check")
         logger.info(f"     * cancel -> handle_cancel")
@@ -175,11 +179,24 @@ class SalesBot:
             
             # Check if user already has access
             if user.has_access():
+                # Создаем клавиатуру с кнопкой смены тарифа
+                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🔄 Сменить тариф (апгрейд)",
+                            callback_data="upgrade_tariff"
+                        )
+                    ]
+                ])
+                
                 await message.answer(
                     f"👋 Добро пожаловать обратно, {first_name}!\n\n"
-                    f"У вас уже есть доступ к курсу с тарифом {user.tariff.value.upper()}.\n\n"
+                    f"У вас уже есть доступ к курсу с тарифом <b>{user.tariff.value.upper()}</b>.\n\n"
                     f"Ваш курс-бот: @StartNowAI_bot\n"
-                    f"Текущий день: {user.current_day}/30"
+                    f"Текущий день: {user.current_day}/30\n\n"
+                    f"💡 Хотите улучшить свой тариф? Нажмите кнопку ниже:",
+                    reply_markup=keyboard
                 )
                 return
             
@@ -467,9 +484,10 @@ class SalesBot:
                 result = await self.payment_service.process_payment_completion(payment_id)
                 
                 if result:
-                    logger.info(f"   Access granted to user {result['user_id']}")
+                    logger.info(f"   Access granted/upgraded to user {result['user_id']}")
                     user = result["user"]
-                    await self._grant_access_and_notify(callback.message, user)
+                    is_upgrade = result.get("is_upgrade", False)
+                    await self._grant_access_and_notify(callback.message, user, is_upgrade=is_upgrade)
                 else:
                     logger.error(f"   Failed to process payment completion for {payment_id}")
                     await callback.message.edit_text(
@@ -500,7 +518,7 @@ class SalesBot:
             logger.error(f"❌ Error in handle_payment_check: {e}", exc_info=True)
             await callback.message.edit_text("❌ Ошибка при проверке платежа. Попробуйте позже.")
     
-    async def _grant_access_and_notify(self, message: Message, user):
+    async def _grant_access_and_notify(self, message: Message, user, is_upgrade: bool = False):
         """
         Grant access to course and send onboarding message.
         
@@ -508,28 +526,44 @@ class SalesBot:
         1. Send onboarding message
         2. Invite user to course bot
         3. Invite user to appropriate groups
+        
+        Args:
+            message: Message object to reply to
+            user: User object
+            is_upgrade: True if this is a tariff upgrade, False if new access
         """
         # Send onboarding message
-        onboarding_text = (
-            f"🎉 <b>Поздравляем, {user.first_name}!</b>\n\n"
-            f"Ваша оплата подтверждена.\n"
-            f"Тариф: <b>{user.tariff.value.upper()}</b>\n\n"
-            f"📚 <b>Сегодня — День 1 вашего путешествия!</b>\n\n"
-            f"Нажмите кнопку ниже, чтобы начать курс 👇"
-        )
+        if is_upgrade:
+            onboarding_text = (
+                f"🎉 <b>Поздравляем, {user.first_name}!</b>\n\n"
+                f"Ваш тариф успешно обновлён!\n"
+                f"Новый тариф: <b>{user.tariff.value.upper()}</b>\n\n"
+                f"✅ Теперь у вас есть доступ ко всем возможностям нового тарифа.\n\n"
+                f"Продолжайте обучение в курс-боте: @StartNowAI_bot"
+            )
+        else:
+            onboarding_text = (
+                f"🎉 <b>Поздравляем, {user.first_name}!</b>\n\n"
+                f"Ваша оплата подтверждена.\n"
+                f"Тариф: <b>{user.tariff.value.upper()}</b>\n\n"
+                f"📚 <b>Сегодня — День 1 вашего путешествия!</b>\n\n"
+                f"Нажмите кнопку ниже, чтобы начать курс 👇"
+            )
         
-        # Кнопка для перехода в курс-бот
-        from aiogram.types import InlineKeyboardButton
-        course_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🚀 Перейти в курс",
-                    url=f"https://t.me/StartNowAI_bot?start=course"
-                )
-            ]
-        ])
-        
-        await message.answer(onboarding_text, reply_markup=course_keyboard)
+        # Кнопка для перехода в курс-бот (только для новых пользователей)
+        if not is_upgrade:
+            from aiogram.types import InlineKeyboardButton
+            course_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🚀 Перейти в курс",
+                        url=f"https://t.me/StartNowAI_bot?start=course"
+                    )
+                ]
+            ])
+            await message.answer(onboarding_text, reply_markup=course_keyboard)
+        else:
+            await message.answer(onboarding_text)
         
         # Get groups user should have access to
         groups = self.community_service.get_groups_for_user(user)
