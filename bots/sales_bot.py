@@ -421,7 +421,11 @@ class SalesBot:
     async def handle_payment_check(self, callback: CallbackQuery):
         """Handle payment status check callback."""
         try:
-            await callback.answer()
+            # Отвечаем на callback сразу
+            try:
+                await callback.answer()
+            except Exception as answer_error:
+                logger.warning(f"   Не удалось ответить на callback: {answer_error}")
             
             payment_id = callback.data.split(":")[1]
             logger.info(f"🔄 Checking payment status: {payment_id}")
