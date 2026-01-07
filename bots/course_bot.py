@@ -530,9 +530,9 @@ class CourseBot:
             await self.bot.send_message(user.user_id, feedback_message)
             await self.assignment_service.mark_feedback_sent(assignment_id)
             
-            await message.answer("✅ Feedback sent to user.")
+            await message.answer("✅ Обратная связь отправлена пользователю.")
         else:
-            await message.answer("❌ User not found.")
+            await message.answer("❌ Пользователь не найден.")
     
     async def deliver_lesson(self, user: User, lesson):
         """
