@@ -114,6 +114,7 @@ class SalesBot:
         self.dp.callback_query.register(self.handle_upgrade_tariff, F.data == "upgrade_tariff")
         self.dp.callback_query.register(self.handle_tariff_selection, F.data.startswith("tariff:"))
         self.dp.callback_query.register(self.handle_upgrade_tariff_selection, F.data.startswith("upgrade:"))
+        self.dp.callback_query.register(self.handle_back_to_tariffs, F.data == "back_to_tariffs")
         self.dp.callback_query.register(self.handle_payment_initiate, F.data.startswith("pay:"))
         self.dp.callback_query.register(self.handle_payment_check, F.data.startswith("check_payment:"))
         self.dp.callback_query.register(self.handle_cancel, F.data == "cancel")
@@ -122,10 +123,11 @@ class SalesBot:
         logger.info(f"   - CommandStart handler: {self.handle_start.__name__}")
         logger.info(f"   - Command help handler: {self.handle_help.__name__}")
         logger.info(f"   - Command author handler: {self.handle_author.__name__}")
-        logger.info(f"   - Callback handlers: 6 registered")
+        logger.info(f"   - Callback handlers: 7 registered")
         logger.info(f"     * upgrade_tariff -> handle_upgrade_tariff")
         logger.info(f"     * tariff: -> handle_tariff_selection")
         logger.info(f"     * upgrade: -> handle_upgrade_tariff_selection")
+        logger.info(f"     * back_to_tariffs -> handle_back_to_tariffs")
         logger.info(f"     * pay: -> handle_payment_initiate")
         logger.info(f"     * check_payment: -> handle_payment_check")
         logger.info(f"     * cancel -> handle_cancel")
@@ -382,7 +384,15 @@ class SalesBot:
                         InlineKeyboardButton(
                             text="✅ Оплатить",
                             callback_data=f"pay:{tariff.value}"
-                        ),
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="📋 Выбор тарифа",
+                            callback_data="back_to_tariffs"
+                        )
+                    ],
+                    [
                         InlineKeyboardButton(
                             text="❌ Отмена",
                             callback_data="cancel"
@@ -399,6 +409,34 @@ class SalesBot:
                 # Если не удалось ответить на callback, пробуем отправить сообщение
                 try:
                     await callback.message.answer("❌ Ошибка при выборе тарифа. Попробуйте снова.")
+                except:
+                    pass
+    
+    async def handle_back_to_tariffs(self, callback: CallbackQuery):
+        """Handle back to tariffs button - show tariff selection again."""
+        try:
+            # Отвечаем на callback сразу
+            try:
+                await callback.answer()
+            except Exception as answer_error:
+                logger.warning(f"   Не удалось ответить на callback: {answer_error}")
+            
+            logger.info(f"📋 Back to tariffs requested by user {callback.from_user.id}")
+            
+            # Получаем информацию о пользователе для приветствия
+            user_id = callback.from_user.id
+            first_name = callback.from_user.first_name
+            
+            # Показываем список тарифов снова
+            await self._show_course_info(callback.message, None, first_name)
+            
+        except Exception as e:
+            logger.error(f"❌ Error in handle_back_to_tariffs: {e}", exc_info=True)
+            try:
+                await callback.answer("❌ Ошибка при загрузке тарифов", show_alert=True)
+            except:
+                try:
+                    await callback.message.answer("❌ Ошибка при загрузке тарифов. Попробуйте позже.")
                 except:
                     pass
     
