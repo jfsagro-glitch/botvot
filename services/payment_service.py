@@ -184,6 +184,7 @@ class PaymentService:
         return {
             "user_id": user_id,
             "tariff": tariff.value,
-            "user": user
+            "user": user,
+            "is_upgrade": is_upgrade
         }
 
