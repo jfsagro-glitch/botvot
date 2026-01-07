@@ -309,7 +309,14 @@ class SalesBot:
             logger.info(f"   Payment button created with callback_data: pay:{tariff.value}")
         except Exception as e:
             logger.error(f"❌ Error in handle_tariff_selection: {e}", exc_info=True)
-            await callback.answer("❌ Ошибка при выборе тарифа", show_alert=True)
+            try:
+                await callback.answer("❌ Ошибка при выборе тарифа", show_alert=True)
+            except:
+                # Если не удалось ответить на callback, пробуем отправить сообщение
+                try:
+                    await callback.message.answer("❌ Ошибка при выборе тарифа. Попробуйте снова.")
+                except:
+                    pass
     
     async def handle_payment_initiate(self, callback: CallbackQuery):
         """Handle payment initiation."""
@@ -322,7 +329,11 @@ class SalesBot:
         logger.info("=" * 60)
         
         try:
-            await callback.answer()
+            # Отвечаем на callback сразу
+            try:
+                await callback.answer()
+            except Exception as answer_error:
+                logger.warning(f"   Не удалось ответить на callback: {answer_error}")
             
             logger.info(f"💳 Payment initiation requested by user {callback.from_user.id}")
             
