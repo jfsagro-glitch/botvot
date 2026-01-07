@@ -22,11 +22,13 @@ from core.database import Database
 from core.models import User, Tariff
 from services.user_service import UserService
 from services.lesson_service import LessonService
+from services.lesson_loader import LessonLoader
 from services.assignment_service import AssignmentService
 from services.community_service import CommunityService
 from services.question_service import QuestionService
 from utils.telegram_helpers import create_lesson_keyboard, format_lesson_message
 from utils.scheduler import LessonScheduler
+from utils.premium_ui import send_typing_action, create_premium_separator
 
 # Configure logging
 logging.basicConfig(
@@ -45,6 +47,7 @@ class CourseBot:
         self.db = Database()
         self.user_service = UserService(self.db)
         self.lesson_service = LessonService(self.db)
+        self.lesson_loader = LessonLoader()  # Загрузчик уроков из JSON
         self.assignment_service = AssignmentService(self.db)
         self.community_service = CommunityService()
         self.question_service = QuestionService(self.db)
@@ -102,30 +105,40 @@ class CourseBot:
         await self._send_current_lesson(user_id)
     
     async def _send_current_lesson(self, user_id: int):
-        """Send current lesson to user."""
+        """Send current lesson to user from JSON."""
         user = await self.user_service.get_user(user_id)
         if not user or not user.has_access():
             return
         
-        lesson = await self.lesson_service.get_user_current_lesson(user)
-        
-        if not lesson:
+        # Проверяем, не завершен ли курс
+        if user.current_day > Config.COURSE_DURATION_DAYS:
             await self.bot.send_message(
                 user_id,
-                f"📚 You've completed all lessons! Congratulations! 🎉"
+                f"🎉 <b>Поздравляем!</b>\n\n"
+                f"Вы завершили все {Config.COURSE_DURATION_DAYS} уроков курса!\n\n"
+                f"Спасибо за участие! 🎊"
             )
             return
         
-        # Format and send lesson
-        lesson_text = format_lesson_message(lesson)
-        keyboard = create_lesson_keyboard(lesson, Config.GENERAL_GROUP_ID)
+        # Загружаем урок из JSON
+        lesson_data = self.lesson_loader.get_lesson(user.current_day)
         
-        # Send text
-        await self.bot.send_message(user_id, lesson_text, reply_markup=keyboard)
+        if not lesson_data:
+            await self.bot.send_message(
+                user_id,
+                f"⏳ Урок для дня {user.current_day} пока не готов.\n"
+                f"Он будет отправлен автоматически, когда наступит время."
+            )
+            return
         
-        # Send image if available
-        if lesson.image_url:
-            await self.bot.send_photo(user_id, lesson.image_url)
+        # Проверяем день тишины
+        if self.lesson_loader.is_silent_day(user.current_day):
+            logger.info(f"Day {user.current_day} is silent day for user {user_id}")
+            return
+        
+        # Отправляем урок с анимацией
+        await send_typing_action(self.bot, user_id, 0.8)
+        await self._send_lesson_from_json(user, lesson_data)
     
     async def handle_progress(self, message: Message):
         """Handle /progress command - show user progress."""
@@ -193,18 +206,96 @@ class CourseBot:
             await callback.message.answer("❌ У вас нет доступа к этому курсу.")
             return
         
-        lesson_id = int(callback.data.split(":")[2])
+        # Парсим lesson_id из callback
+        callback_parts = callback.data.split(":")
+        if len(callback_parts) >= 3:
+            lesson_str = callback_parts[2]
+            if lesson_str.startswith("lesson_"):
+                day_from_callback = int(lesson_str.replace("lesson_", ""))
+            else:
+                day_from_callback = int(lesson_str)
+        else:
+            day_from_callback = user.current_day
+        
         lesson = await self.lesson_service.get_lesson_for_day(user.current_day)
         
         await callback.message.answer(
             f"❓ <b>Задать вопрос</b>\n\n"
-            f"Отправьте ваш вопрос по уроку <b>День {lesson.day_number if lesson else 'N/A'}</b>.\n\n"
+            f"Отправьте ваш вопрос по уроку <b>День {day_from_callback}</b>.\n\n"
             f"Наша команда ответит как можно скорее.\n\n"
             f"💡 <i>Совет: Чем конкретнее вопрос, тем быстрее вы получите ответ!</i>"
         )
         
         # Сохраняем контекст вопроса для дальнейшей обработки
         # В production можно сохранить в БД, что пользователь задаёт вопрос по конкретному уроку
+    
+    async def _send_lesson_from_json(self, user: User, lesson_data: dict):
+        """
+        Отправляет урок из JSON структуры пользователю.
+        
+        Args:
+            user: Пользователь
+            lesson_data: Данные урока из JSON
+        """
+        try:
+            day = user.current_day
+            title = lesson_data.get("title", f"День {day}")
+            text = lesson_data.get("text", "")
+            
+            # Получаем задание в зависимости от тарифа
+            task = self.lesson_loader.get_task_for_tariff(day, user.tariff)
+            
+            # Формируем сообщение урока
+            lesson_message = (
+                f"{create_premium_separator()}\n"
+                f"📚 <b>{title}</b>\n"
+                f"{create_premium_separator()}\n\n"
+                f"{text}\n\n"
+            )
+            
+            # Добавляем задание, если есть
+            if task:
+                lesson_message += (
+                    f"{create_premium_separator()}\n\n"
+                    f"📝 <b>Задание:</b>\n"
+                    f"{task}\n\n"
+                )
+            
+            # Отправляем текст урока
+            keyboard = create_lesson_keyboard_from_json(lesson_data, user, Config.GENERAL_GROUP_ID)
+            await self.bot.send_message(user.user_id, lesson_message, reply_markup=keyboard)
+            
+            # Отправляем медиа, если есть
+            media_list = lesson_data.get("media", [])
+            for media_item in media_list[:5]:  # Ограничиваем количество
+                media_type = media_item.get("type", "photo")
+                file_path = media_item.get("path")
+                file_id = media_item.get("file_id")
+                
+                try:
+                    if media_type == "photo":
+                        if file_id:
+                            await self.bot.send_photo(user.user_id, file_id)
+                        elif file_path:
+                            from pathlib import Path
+                            if Path(file_path).exists():
+                                with open(file_path, "rb") as photo:
+                                    await self.bot.send_photo(user.user_id, photo)
+                    elif media_type == "video":
+                        if file_id:
+                            await self.bot.send_video(user.user_id, file_id)
+                        elif file_path:
+                            from pathlib import Path
+                            if Path(file_path).exists():
+                                with open(file_path, "rb") as video:
+                                    await self.bot.send_video(user.user_id, video)
+                except Exception as media_error:
+                    logger.warning(f"Не удалось отправить медиа для урока {day}: {media_error}")
+            
+            logger.info(f"✅ Урок {day} отправлен пользователю {user.user_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка при отправке урока пользователю {user.user_id}: {e}", exc_info=True)
     
     async def handle_assignment_text(self, message: Message):
         """Handle assignment text submission."""
@@ -445,21 +536,40 @@ class CourseBot:
         Deliver a lesson to a user.
         
         This is called by the scheduler when it's time to send a lesson.
+        Использует данные из JSON файла.
         """
         try:
-            lesson_text = format_lesson_message(lesson)
-            keyboard = create_lesson_keyboard(lesson, Config.GENERAL_GROUP_ID)
+            # Проверяем день тишины
+            if self.lesson_loader and self.lesson_loader.is_silent_day(user.current_day):
+                logger.info(f"Day {user.current_day} is silent day for user {user.user_id}")
+                # Пропускаем день, но не увеличиваем current_day
+                return
             
-            # Send lesson text
-            await self.bot.send_message(user.user_id, lesson_text, reply_markup=keyboard)
+            # Загружаем урок из JSON
+            lesson_data = None
+            if self.lesson_loader:
+                lesson_data = self.lesson_loader.get_lesson(user.current_day)
             
-            # Send image if available
-            if lesson.image_url:
-                await self.bot.send_photo(user.user_id, lesson.image_url)
+            if lesson_data:
+                # Отправляем урок из JSON
+                await send_typing_action(self.bot, user.user_id, 0.8)
+                await self._send_lesson_from_json(user, lesson_data)
+            else:
+                # Fallback на старый метод, если JSON нет
+                lesson_text = format_lesson_message(lesson)
+                keyboard = create_lesson_keyboard(lesson, Config.GENERAL_GROUP_ID)
+                
+                # Send lesson text
+                await self.bot.send_message(user.user_id, lesson_text, reply_markup=keyboard)
+                
+                # Send image if available
+                if lesson.image_url:
+                    await self.bot.send_photo(user.user_id, lesson.image_url)
             
-            logger.info(f"Delivered lesson {lesson.day_number} to user {user.user_id}")
+            logger.info(f"✅ Урок {user.current_day} отправлен пользователю {user.user_id}")
+            
         except Exception as e:
-            logger.error(f"Error delivering lesson to user {user.user_id}: {e}")
+            logger.error(f"❌ Ошибка при отправке урока пользователю {user.user_id}: {e}", exc_info=True)
     
     async def start(self):
         """Start the bot and scheduler."""

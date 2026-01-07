@@ -36,6 +36,50 @@ def create_tariff_keyboard() -> InlineKeyboardMarkup:
     return keyboard
 
 
+def create_lesson_keyboard_from_json(lesson_data: dict, user, general_group_id: str) -> InlineKeyboardMarkup:
+    """
+    Create keyboard for lesson from JSON data.
+    
+    Args:
+        lesson_data: Данные урока из JSON
+        user: Пользователь (для проверки тарифа)
+        general_group_id: ID общей группы
+    """
+    buttons = []
+    
+    # Кнопка "Сдать задание" (если есть задание)
+    task = lesson_data.get("task") or lesson_data.get("task_basic") or lesson_data.get("task_feedback")
+    if task:
+        day = lesson_data.get("day_number", 1)
+        buttons.append([
+            InlineKeyboardButton(
+                text="📝 Отправить задание",
+                callback_data=f"assignment:submit:lesson_{day}"
+            )
+        ])
+    
+    # Кнопка "Задать вопрос"
+    day = lesson_data.get("day_number", 1)
+    buttons.append([
+        InlineKeyboardButton(
+            text="❓ Задать вопрос",
+            callback_data=f"question:ask:lesson_{day}"
+        )
+    ])
+    
+    # Кнопка "Перейти в обсуждение" (если есть группа)
+    if general_group_id:
+        group_id_clean = str(general_group_id).replace('-100', '').replace('-', '')
+        buttons.append([
+            InlineKeyboardButton(
+                text="💬 Перейти в обсуждение",
+                url=f"https://t.me/c/{group_id_clean}"
+            )
+        ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def create_lesson_keyboard(lesson: Lesson, general_group_id: str) -> InlineKeyboardMarkup:
     """
     Create keyboard for lesson interactions.

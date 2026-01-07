@@ -11,15 +11,39 @@ from core.database import Database
 from core.models import User, Lesson, UserProgress
 from core.config import Config
 
+# Импортируем LessonLoader с проверкой, чтобы избежать циклических зависимостей
+try:
+    from services.lesson_loader import LessonLoader
+    LESSON_LOADER_AVAILABLE = True
+except ImportError:
+    LESSON_LOADER_AVAILABLE = False
+    LessonLoader = None
+
 
 class LessonService:
     """Service for lesson management and delivery."""
     
     def __init__(self, db: Database):
         self.db = db
+        # Инициализируем загрузчик из JSON, если доступен
+        if LESSON_LOADER_AVAILABLE and LessonLoader:
+            self.lesson_loader = LessonLoader()
+        else:
+            self.lesson_loader = None
     
     async def get_lesson_for_day(self, day_number: int) -> Optional[Lesson]:
-        """Get lesson for a specific day."""
+        """
+        Get lesson for a specific day.
+        
+        Сначала пытается загрузить из JSON, если нет - из базы данных.
+        """
+        # Пробуем загрузить из JSON
+        if self.lesson_loader:
+            lesson_model = self.lesson_loader.convert_to_lesson_model(day_number)
+            if lesson_model:
+                return lesson_model
+        
+        # Если нет в JSON, загружаем из базы данных
         return await self.db.get_lesson_by_day(day_number)
     
     async def get_user_current_lesson(self, user: User) -> Optional[Lesson]:
@@ -75,4 +99,3 @@ class LessonService:
     async def get_all_lessons(self) -> List[Lesson]:
         """Get all lessons in the course."""
         return await self.db.get_all_lessons()
-

@@ -62,10 +62,24 @@ class LessonScheduler:
     
     async def _check_and_deliver_lessons(self):
         """Check all users and deliver lessons that are due."""
+        from services.lesson_loader import LessonLoader
+        lesson_loader = LessonLoader()
+        
         users = await self.db.get_users_with_access()
         
         for user in users:
             try:
+                # Проверяем, не завершен ли курс
+                if user.current_day > Config.COURSE_DURATION_DAYS:
+                    continue
+                
+                # Проверяем день тишины
+                if lesson_loader.is_silent_day(user.current_day):
+                    # Пропускаем день тишины, но увеличиваем счетчик
+                    if await self.lesson_service.should_send_lesson(user):
+                        await self.lesson_service.advance_user_to_next_day(user)
+                    continue
+                
                 # Check if lesson should be sent
                 if await self.lesson_service.should_send_lesson(user):
                     lesson = await self.lesson_service.get_user_current_lesson(user)
@@ -80,5 +94,6 @@ class LessonScheduler:
                         )
                         await self.lesson_service.advance_user_to_next_day(user)
             except Exception as e:
-                print(f"Error processing lesson for user {user.user_id}: {e}")
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error processing lesson for user {user.user_id}: {e}", exc_info=True)
 
