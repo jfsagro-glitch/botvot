@@ -43,10 +43,19 @@ async def main():
         
         # Запуск ботов параллельно
         logger.info("Запуск ботов...")
-        await asyncio.gather(
-            sales_bot.start(),
-            course_bot.start()
-        )
+        
+        # Запускаем оба бота в фоне
+        sales_task = asyncio.create_task(sales_bot.start())
+        course_task = asyncio.create_task(course_bot.start())
+        
+        # Ждем завершения (или KeyboardInterrupt)
+        try:
+            await asyncio.gather(sales_task, course_task)
+        except asyncio.CancelledError:
+            logger.info("Получен сигнал остановки")
+            sales_task.cancel()
+            course_task.cancel()
+            await asyncio.gather(sales_task, course_task, return_exceptions=True)
     except KeyboardInterrupt:
         logger.info("Остановка ботов...")
     except Exception as e:
