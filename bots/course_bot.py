@@ -328,12 +328,12 @@ class CourseBot:
         
         # Forward to admin
         admin_text = (
-            f"📝 <b>New Assignment Submission</b>\n\n"
-            f"User: {user.first_name} (@{user.username or 'N/A'})\n"
-            f"User ID: {user.user_id}\n"
-            f"Lesson: Day {lesson.day_number} - {lesson.title}\n"
-            f"Assignment ID: {assignment.assignment_id}\n\n"
-            f"<b>Submission:</b>\n{message.text}"
+            f"📝 <b>Новое задание</b>\n\n"
+            f"Пользователь: {user.first_name} (@{user.username or 'Не указано'})\n"
+            f"ID пользователя: {user.user_id}\n"
+            f"Урок: День {lesson.day_number} - {lesson.title}\n"
+            f"ID задания: {assignment.assignment_id}\n\n"
+            f"<b>Ответ:</b>\n{message.text}"
         )
         
         await self.bot.send_message(
