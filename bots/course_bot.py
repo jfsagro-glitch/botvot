@@ -342,7 +342,7 @@ class CourseBot:
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=f"💬 Reply to User",
+                        text=f"💬 Ответить пользователю",
                         callback_data=f"admin_reply:{assignment.assignment_id}"
                     )
                 ]
@@ -396,15 +396,15 @@ class CourseBot:
         
         # Forward to admin
         admin_text = (
-            f"📝 <b>New Assignment Submission (Media)</b>\n\n"
-            f"User: {user.first_name} (@{user.username or 'N/A'})\n"
-            f"User ID: {user.user_id}\n"
-            f"Lesson: Day {lesson.day_number} - {lesson.title}\n"
-            f"Assignment ID: {assignment.assignment_id}"
+            f"📝 <b>Новое задание (Медиа)</b>\n\n"
+            f"Пользователь: {user.first_name} (@{user.username or 'Не указано'})\n"
+            f"ID пользователя: {user.user_id}\n"
+            f"Урок: День {lesson.day_number} - {lesson.title}\n"
+            f"ID задания: {assignment.assignment_id}"
         )
         
         if message.caption:
-            admin_text += f"\n\n<b>Caption:</b>\n{message.caption}"
+            admin_text += f"\n\n<b>Подпись:</b>\n{message.caption}"
         
         # Forward media to admin
         if message.photo:
@@ -506,12 +506,12 @@ class CourseBot:
                 pass
         
         if not assignment_id:
-            await message.answer("❌ Could not find assignment ID. Please reply to the assignment message.")
+            await message.answer("❌ Не удалось найти ID задания. Пожалуйста, ответьте на сообщение с заданием.")
             return
         
         assignment = await self.assignment_service.get_assignment(assignment_id)
         if not assignment:
-            await message.answer("❌ Assignment not found.")
+            await message.answer("❌ Задание не найдено.")
             return
         
         # Add feedback
@@ -522,8 +522,8 @@ class CourseBot:
         user = await self.user_service.get_user(assignment.user_id)
         if user:
             feedback_message = (
-                f"💬 <b>Feedback on Your Assignment</b>\n\n"
-                f"Day {assignment.day_number} Assignment\n\n"
+                f"💬 <b>Обратная связь по вашему заданию</b>\n\n"
+                f"День {assignment.day_number}\n\n"
                 f"{feedback_text}"
             )
             
@@ -609,7 +609,7 @@ class CourseBot:
 async def main():
     """Main entry point."""
     if not Config.validate():
-        logger.error("Invalid configuration. Please check your .env file.")
+        logger.error("❌ Неверная конфигурация. Проверьте файл .env")
         return
     
     bot = CourseBot()

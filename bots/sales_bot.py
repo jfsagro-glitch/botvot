@@ -994,7 +994,7 @@ class SalesBot:
 async def main():
     """Main entry point."""
     if not Config.validate():
-        logger.error("Invalid configuration. Please check your .env file.")
+        logger.error("❌ Неверная конфигурация. Проверьте файл .env")
         return
     
     bot = None
