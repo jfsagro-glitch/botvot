@@ -254,8 +254,12 @@ class SalesBot:
         
         try:
             # Сначала отвечаем на callback, чтобы убрать индикатор загрузки
-            await callback.answer()
-            logger.info("   ✅ Callback answered")
+            try:
+                await callback.answer()
+                logger.info("   ✅ Callback answered")
+            except Exception as answer_error:
+                logger.warning(f"   Не удалось ответить на callback (возможно устарел): {answer_error}")
+                # Продолжаем выполнение, даже если не удалось ответить
             
             # Парсим тариф из callback data
             if not callback.data or ":" not in callback.data:
@@ -271,7 +275,10 @@ class SalesBot:
                 logger.info(f"   ✅ Selected tariff: {tariff.value}")
             except ValueError as e:
                 logger.error(f"   ❌ Invalid tariff value: '{tariff_str}', error: {e}")
-                await callback.message.answer(f"❌ Ошибка: неверный тариф '{tariff_str}'. Попробуйте снова.")
+                try:
+                    await callback.message.answer(f"❌ Ошибка: неверный тариф '{tariff_str}'. Попробуйте снова.")
+                except:
+                    pass
                 return
             
             user_id = callback.from_user.id
@@ -388,8 +395,17 @@ class SalesBot:
     
     async def handle_cancel(self, callback: CallbackQuery):
         """Handle cancel action."""
-        await callback.answer("Отменено")
-        await callback.message.edit_text("Оплата отменена. Используйте /start для начала заново.")
+        try:
+            await callback.answer("Отменено")
+        except:
+            pass
+        try:
+            await callback.message.edit_text("Оплата отменена. Используйте /start для начала заново.")
+        except:
+            try:
+                await callback.message.answer("Оплата отменена. Используйте /start для начала заново.")
+            except:
+                pass
     
     async def handle_payment_check(self, callback: CallbackQuery):
         """Handle payment status check callback."""
