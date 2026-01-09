@@ -14,7 +14,7 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
@@ -26,7 +26,8 @@ from payment.mock_payment import MockPaymentProcessor
 from services.user_service import UserService
 from services.payment_service import PaymentService
 from services.community_service import CommunityService
-from utils.telegram_helpers import create_tariff_keyboard, format_tariff_description
+from services.question_service import QuestionService
+from utils.telegram_helpers import create_tariff_keyboard, format_tariff_description, create_persistent_keyboard
 from utils.premium_ui import (
     send_animated_message, send_typing_action,
     format_premium_header, format_premium_section, create_premium_separator,
@@ -62,6 +63,7 @@ class SalesBot:
         self.payment_service = PaymentService(self.db, self.payment_processor)
         self.user_service = UserService(self.db)
         self.community_service = CommunityService()
+        self.question_service = QuestionService(self.db)
         
         # Register handlers
         self._register_handlers()
@@ -104,11 +106,6 @@ class SalesBot:
         self.dp.message.register(self.handle_help, Command("help"))
         self.dp.message.register(self.handle_author, Command("author"))
         
-        # Добавляем общий обработчик для диагностики всех сообщений (после специфичных)
-        @self.dp.message()
-        async def debug_all_messages(msg: Message):
-            logger.info(f"🔍 DEBUG: Все сообщения - User {msg.from_user.id} -> '{msg.text}'")
-        
         # Регистрация обработчиков callback query
         # ВАЖНО: Порядок регистрации важен - более специфичные первыми
         self.dp.callback_query.register(self.handle_upgrade_tariff, F.data == "upgrade_tariff")
@@ -118,6 +115,18 @@ class SalesBot:
         self.dp.callback_query.register(self.handle_payment_initiate, F.data.startswith("pay:"))
         self.dp.callback_query.register(self.handle_payment_check, F.data.startswith("check_payment:"))
         self.dp.callback_query.register(self.handle_cancel, F.data == "cancel")
+        self.dp.callback_query.register(self.handle_talk_to_human, F.data == "sales:talk_to_human")
+        self.dp.callback_query.register(self.handle_about_course, F.data == "sales:about_course")
+        
+        # Регистрация обработчиков для постоянных кнопок клавиатуры
+        # ВАЖНО: Регистрируем ПЕРЕД общим обработчиком текста, чтобы они имели приоритет
+        self.dp.message.register(self.handle_keyboard_upgrade, F.text == "⬆️ Апгрейд тарифа")
+        self.dp.message.register(self.handle_keyboard_go_to_course, F.text == "📚 Перейти в курс")
+        self.dp.message.register(self.handle_keyboard_select_tariff, F.text == "📋 Выбор тарифа")
+        self.dp.message.register(self.handle_keyboard_about_course, F.text == "📖 О курсе")
+        
+        # Регистрация обработчика вопросов из sales bot (должен быть после кнопок, но перед общим текстом)
+        self.dp.message.register(self.handle_question_from_sales, F.text & ~F.command)
         
         logger.info("✅ Handlers registered successfully")
         logger.info(f"   - CommandStart handler: {self.handle_start.__name__}")
@@ -162,11 +171,21 @@ class SalesBot:
             
             logger.info(f"User info: {user_id}, {username}, {first_name}")
             
-            # Extract referral partner ID from command arguments
+            # Extract referral partner ID or upgrade/tariffs parameter from command arguments
             referral_partner_id = None
+            upgrade_requested = False
+            tariffs_requested = False
             if message.text and len(message.text.split()) > 1:
-                referral_partner_id = message.text.split()[1]
-                logger.info(f"User {user_id} accessed via referral: {referral_partner_id}")
+                param = message.text.split()[1]
+                if param == "upgrade":
+                    upgrade_requested = True
+                    logger.info(f"User {user_id} requested tariff upgrade")
+                elif param == "tariffs":
+                    tariffs_requested = True
+                    logger.info(f"User {user_id} requested tariffs view")
+                else:
+                    referral_partner_id = param
+                    logger.info(f"User {user_id} accessed via referral: {referral_partner_id}")
             
             # Get or create user
             logger.info("Getting or creating user...")
@@ -184,6 +203,24 @@ class SalesBot:
             if referral_partner_id and not user.referral_partner_id:
                 user.referral_partner_id = referral_partner_id
                 await self.db.update_user(user)
+            
+            # Если запрошены тарифы - показываем только тарифы
+            if tariffs_requested:
+                await self.handle_keyboard_select_tariff(message)
+                return
+            
+            # Если запрошен апгрейд и пользователь имеет доступ - показываем меню апгрейда
+            if upgrade_requested and user.has_access():
+                await self._show_upgrade_menu(message, user, first_name)
+                return
+            # Если запрошен апгрейд, но пользователь не имеет доступа - показываем обычное меню
+            elif upgrade_requested:
+                await message.answer(
+                    "❌ У вас нет активного доступа к курсу.\n\n"
+                    "Для обновления тарифа сначала необходимо приобрести доступ к курсу."
+                )
+                await self._show_course_info(message, referral_partner_id, first_name)
+                return
             
             # Check if user already has access
             if user.has_access():
@@ -222,11 +259,17 @@ class SalesBot:
                     ]
                 ])
                 
-                await send_animated_message(self.bot, message.chat.id, welcome_back, keyboard, 0.5)
+                # Устанавливаем постоянную клавиатуру
+                persistent_keyboard = create_persistent_keyboard()
+                await message.answer(welcome_back, reply_markup=persistent_keyboard)
+                await send_animated_message(self.bot, message.chat.id, "", keyboard, 0.5)
                 return
             
             # Show course description and tariffs
             logger.info("Showing course info...")
+            # Устанавливаем постоянную клавиатуру
+            persistent_keyboard = create_persistent_keyboard()
+            await message.answer("Используйте кнопки внизу для навигации 👇", reply_markup=persistent_keyboard)
             await self._show_course_info(message, referral_partner_id, first_name)
             logger.info("Course info shown successfully")
         except Exception as e:
@@ -394,6 +437,82 @@ class SalesBot:
         keyboard = create_tariff_keyboard()
         await send_animated_message(self.bot, message.chat.id, final_message, keyboard, 0.8)
     
+    async def _show_upgrade_menu(self, message: Message, user, first_name: str):
+        """Show tariff upgrade menu for user with access."""
+        try:
+            current_tariff = user.tariff
+            current_price = PaymentService.TARIFF_PRICES[current_tariff]
+            
+            # Определяем доступные тарифы для апгрейда
+            available_upgrades = []
+            if current_tariff == Tariff.BASIC:
+                available_upgrades = [
+                    (Tariff.FEEDBACK, PaymentService.TARIFF_PRICES[Tariff.FEEDBACK])
+                ]
+            elif current_tariff == Tariff.FEEDBACK:
+                await message.answer(
+                    "✅ У вас уже максимальный доступный тариф!\n\n"
+                    "Вы получаете:\n"
+                    "• Все материалы курса\n"
+                    "• Персональную обратную связь\n"
+                    "• Доступ к общему сообществу участников"
+                )
+                return
+            
+            if not available_upgrades:
+                await message.answer("❌ Нет доступных тарифов для апгрейда.")
+                return
+            
+            # Формируем сообщение с доступными тарифами
+            upgrade_text = (
+                f"{create_premium_separator()}\n"
+                f"🔄 <b>СМЕНА ТАРИФА (АПГРЕЙД)</b>\n"
+                f"{create_premium_separator()}\n\n"
+                f"👋 Привет, {first_name}!\n\n"
+                f"Ваш текущий тариф: <b>{current_tariff.value.upper()}</b> ({current_price:.0f}₽)\n\n"
+                f"Доступные тарифы для апгрейда:\n\n"
+            )
+            
+            # Создаем клавиатуру с доступными тарифами
+            keyboard_buttons = []
+            for tariff, price in available_upgrades:
+                price_diff = price - current_price
+                tariff_name = tariff.value.upper()
+                if tariff == Tariff.FEEDBACK:
+                    tariff_name = "С ОБРАТНОЙ СВЯЗЬЮ"
+                elif tariff == Tariff.PRACTIC:
+                    tariff_name = "PRACTIC"
+                
+                upgrade_text += (
+                    f"• <b>{tariff_name}</b> — {price:.0f}₽\n"
+                    f"  (доплата: {price_diff:.0f}₽)\n\n"
+                )
+                
+                keyboard_buttons.append([
+                    InlineKeyboardButton(
+                        text=f"⬆️ {tariff_name} (+{price_diff:.0f}₽)",
+                        callback_data=f"upgrade:{tariff.value}"
+                    )
+                ])
+            
+            keyboard_buttons.append([
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data="cancel"
+                )
+            ])
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+            
+            await send_animated_message(self.bot, message.chat.id, upgrade_text + "Выберите тариф для апгрейда:", keyboard, 0.5)
+            
+        except Exception as e:
+            logger.error(f"❌ Error in _show_upgrade_menu: {e}", exc_info=True)
+            try:
+                await message.answer("❌ Ошибка при загрузке меню апгрейда. Попробуйте позже.")
+            except:
+                pass
+    
     async def handle_tariff_selection(self, callback: CallbackQuery):
         """Handle tariff selection callback."""
         # ЛОГИРОВАНИЕ В САМОМ НАЧАЛЕ - ДО ВСЕГО
@@ -431,6 +550,18 @@ class SalesBot:
                     await callback.message.answer(f"❌ Ошибка: неверный тариф '{tariff_str}'. Попробуйте снова.")
                 except:
                     pass
+                return
+            
+            # Проверяем, что выбранный тариф доступен
+            if tariff not in [Tariff.BASIC, Tariff.FEEDBACK, Tariff.PRACTIC]:
+                await callback.message.answer(
+                    "❌ Этот тариф временно недоступен.\n\n"
+                    "Доступные тарифы:\n"
+                    "• 📚 БАЗОВЫЙ - 3000₽\n"
+                    "• 💬 С ОБРАТНОЙ СВЯЗЬЮ - 5000₽\n"
+                    "• 🎯 PRACTIC - 20000₽\n\n"
+                    "Используйте /start для выбора тарифа."
+                )
                 return
             
             user_id = callback.from_user.id
@@ -532,19 +663,21 @@ class SalesBot:
             if current_tariff == Tariff.BASIC:
                 available_upgrades = [
                     (Tariff.FEEDBACK, PaymentService.TARIFF_PRICES[Tariff.FEEDBACK]),
-                    (Tariff.PREMIUM, PaymentService.TARIFF_PRICES[Tariff.PREMIUM])
+                    (Tariff.PRACTIC, PaymentService.TARIFF_PRICES[Tariff.PRACTIC])
                 ]
             elif current_tariff == Tariff.FEEDBACK:
                 available_upgrades = [
-                    (Tariff.PREMIUM, PaymentService.TARIFF_PRICES[Tariff.PREMIUM])
+                    (Tariff.PRACTIC, PaymentService.TARIFF_PRICES[Tariff.PRACTIC])
                 ]
-            elif current_tariff == Tariff.PREMIUM:
+            elif current_tariff == Tariff.PRACTIC:
                 await callback.message.answer(
-                    "✅ У вас уже максимальный тариф PREMIUM!\n\n"
+                    "✅ У вас уже максимальный доступный тариф!\n\n"
                     "Вы получаете:\n"
                     "• Все материалы курса\n"
                     "• Персональную обратную связь\n"
-                    "• Доступ в премиум сообщество"
+                    "• 3 онлайн интервью с разбором\n"
+                    "• Видеозапись интервью\n"
+                    "• Доступ к общему сообществу участников"
                 )
                 return
             
@@ -568,8 +701,8 @@ class SalesBot:
                 tariff_name = tariff.value.upper()
                 if tariff == Tariff.FEEDBACK:
                     tariff_name = "С ОБРАТНОЙ СВЯЗЬЮ"
-                elif tariff == Tariff.PREMIUM:
-                    tariff_name = "ПРЕМИУМ"
+                elif tariff == Tariff.PRACTIC:
+                    tariff_name = "PRACTIC"
                 
                 upgrade_text += (
                     f"• <b>{tariff_name}</b> — {price:.0f}₽\n"
@@ -631,7 +764,13 @@ class SalesBot:
             current_tariff = user.tariff
             
             # Проверяем, что это действительно апгрейд
-            tariff_order = {Tariff.BASIC: 1, Tariff.FEEDBACK: 2, Tariff.PREMIUM: 3}
+            tariff_order = {Tariff.BASIC: 1, Tariff.FEEDBACK: 2, Tariff.PRACTIC: 3}
+            if new_tariff not in tariff_order or current_tariff not in tariff_order:
+                await callback.message.answer(
+                    "❌ Этот тариф временно недоступен.\n"
+                    "Используйте /start для просмотра доступных тарифов."
+                )
+                return
             if tariff_order[new_tariff] <= tariff_order[current_tariff]:
                 await callback.message.answer(
                     "❌ Вы можете только улучшить тариф, а не понизить его.\n"
@@ -810,6 +949,363 @@ class SalesBot:
                 await callback.message.answer("Оплата отменена. Используйте /start для начала заново.")
             except:
                 pass
+    
+    async def handle_talk_to_human(self, callback: CallbackQuery):
+        """Handle 'Talk to human' button - send question to curator group."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        first_name = callback.from_user.first_name or "Пользователь"
+        username = callback.from_user.username
+        
+        # Сохраняем контекст, что пользователь хочет поговорить с человеком
+        if not hasattr(self, '_user_question_context'):
+            self._user_question_context = {}
+        self._user_question_context[user_id] = {
+            'waiting_for_question': True,
+            'source': 'sales_bot'
+        }
+        
+        await callback.message.answer(
+            f"💬 <b>Поговорить с человеком</b>\n\n"
+            f"👋 Привет, {first_name}!\n\n"
+            f"✍️ Напишите ваш вопрос прямо здесь 👇\n\n"
+            f"📤 Ваш вопрос будет отправлен куратору, и мы ответим вам как можно скорее ⚡\n\n"
+            f"💡 <i>Можете задать любой вопрос о курсе, тарифах или оплате.</i>"
+        )
+    
+    async def handle_about_course(self, callback: CallbackQuery):
+        """Handle 'About course' button - show course description."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        # Показываем описание курса (используем ту же логику, что и в _show_course_info)
+        await send_typing_action(self.bot, callback.message.chat.id, 0.5)
+        
+        course_description = (
+            f"{create_premium_separator()}\n"
+            f"✨ <b>ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ</b> ✨\n"
+            f"{create_premium_separator()}\n\n"
+            f"📱 <b>Телеграм-практикум</b>\n\n"
+            f"💭 <b>Знакомо ли вам, когда...</b>\n\n"
+            f"• Собеседник отвечает односложно, а вы не знаете, как разговорить?\n"
+            f"• На мероприятии хочется подойти к интересному человеку, но не знаете, с чего начать?\n"
+            f"• Коллеги и клиенты не раскрывают свой настоящий потенциал в общении с вами?\n"
+            f"• Хочется строить глубокие связи, но вместо этого — только поверхностные контакты?\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"🎯 <b>Что если через 30 дней вы сможете:</b>\n\n"
+            f"✨ С первого вопроса создавать атмосферу доверия, где люди сами хотят раскрываться\n\n"
+            f"✨ Превращать случайные знакомства в ценные связи для бизнеса и жизни\n\n"
+            f"✨ Находить подход к любому человеку — от замкнутого подростка до важного клиента\n\n"
+            f"✨ Строить личный бренд через искреннюю коммуникацию, привлекающую нужных людей\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"💎 <b>Что делает этот практикум особенным:</b>\n\n"
+            f"🎯 <b>Не теория, а пошаговая инструкция</b> — конкретные инструменты для раскрытия собеседника, которые работают сразу\n\n"
+            f"🎯 <b>Система нетворкинга</b> — учитесь выстраивать связи, которые приведут к новым возможностям и проектам\n\n"
+            f"🎯 <b>Практика с обратной связью</b> — применяете знания сразу, получаете фидбек и корректируете подход\n\n"
+            f"🎯 <b>Среда единомышленников</b> — находите партнеров, клиентов и друзей среди участников\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"👥 <b>Кому это необходимо:</b>\n\n"
+            f"💼 <b>Бизнесмену</b> — чтобы улучшить навыки нетворкинга\n"
+            f"👔 <b>Руководителю</b> — чтобы быстро и детально распаковывать людей и информацию\n"
+            f"💼 <b>Продажнику</b> — чтобы отточить искусство диалога и продавать больше\n"
+            f"📚 <b>Преподавателю</b> — чтобы использовать вопросы как инструмент для достижения лучших результатов\n"
+            f"📱 <b>Блогеру и журналисту</b> — чтобы начать вести интервью\n"
+            f"🚀 <b>Профессионалу</b> — чтобы активнее расти и развиваться через правильные вопросы\n"
+            f"💫 <b>Любому человеку</b> — желающему сделать свои диалоги, а значит и жизнь, более насыщенными и интересными\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"📅 <b>Как это будет проходить:</b>\n\n"
+            f"🔹 <b>Закрытая группа в Telegram</b> — уютное пространство для роста\n"
+            f"🔹 <b>Ежедневные посты</b> — краткая теория + практическое задание\n"
+            f"🔹 <b>Короткие задания на 5-10 минут</b> — легко встроить в любой график\n"
+            f"🔹 <b>Ответы от мастера</b> — персональные комментарии к вашим вопросам и работам\n"
+            f"🔹 <b>Поддержка сообщества</b> — обмен опытом с единомышленниками\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"👨‍🏫 <b>Об авторе:</b>\n\n"
+            f"<b>Артём Никитин</b> — журналист, телеведущий, диктор, кинорежиссёр, музыкант, поэт.\n"
+            f"Провёл <b>3000+ интервью</b> с выдающимися людьми.\n"
+            f"Разрабатываю идеи, создаю текстовый, аудио- и видеоконтент с 2000 года.\n\n"
+            f"🌐 <a href='https://sites.google.com/view/nikitinartem'>Официальный сайт Артёма Никитина</a>\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"💎 <b>Это инвестиция в ваш главный актив — умение выстраивать качественные связи.</b>"
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💎 Выбрать тариф",
+                    callback_data="back_to_tariffs"
+                )
+            ]
+        ])
+        
+        await callback.message.answer(course_description, reply_markup=keyboard, disable_web_page_preview=False)
+    
+    async def handle_keyboard_upgrade(self, message: Message):
+        """Handle 'Апгрейд тарифа' button from persistent keyboard."""
+        user_id = message.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user or not user.has_access():
+            await message.answer("❌ У вас нет активного доступа к курсу.\n\nДля обновления тарифа сначала необходимо приобрести доступ к курсу.")
+            return
+        
+        # Используем логику из handle_upgrade_tariff
+        current_tariff = user.tariff
+        current_price = PaymentService.TARIFF_PRICES[current_tariff]
+        
+        # Определяем доступные тарифы для апгрейда
+        available_upgrades = []
+        if current_tariff == Tariff.BASIC:
+            available_upgrades = [
+                (Tariff.FEEDBACK, PaymentService.TARIFF_PRICES[Tariff.FEEDBACK]),
+                (Tariff.PRACTIC, PaymentService.TARIFF_PRICES[Tariff.PRACTIC])
+            ]
+        elif current_tariff == Tariff.FEEDBACK:
+            available_upgrades = [
+                (Tariff.PRACTIC, PaymentService.TARIFF_PRICES[Tariff.PRACTIC])
+            ]
+        elif current_tariff == Tariff.PRACTIC:
+            await message.answer(
+                "✅ У вас уже максимальный доступный тариф!\n\n"
+                "Вы получаете:\n"
+                "• Все материалы курса\n"
+                "• Персональную обратную связь\n"
+                "• 3 онлайн интервью с разбором\n"
+                "• Видеозапись интервью\n"
+                "• Доступ к общему сообществу участников"
+            )
+            return
+        
+        if not available_upgrades:
+            await message.answer("❌ Нет доступных тарифов для апгрейда.")
+            return
+        
+        # Формируем сообщение с доступными тарифами
+        upgrade_text = (
+            f"{create_premium_separator()}\n"
+            f"🔄 <b>СМЕНА ТАРИФА (АПГРЕЙД)</b>\n"
+            f"{create_premium_separator()}\n\n"
+            f"Ваш текущий тариф: <b>{current_tariff.value.upper()}</b> ({current_price:.0f}₽)\n\n"
+            f"Доступные тарифы для апгрейда:\n\n"
+        )
+        
+        # Создаем клавиатуру с доступными тарифами
+        keyboard_buttons = []
+        for tariff, price in available_upgrades:
+            price_diff = price - current_price
+            tariff_name = tariff.value.upper()
+            if tariff == Tariff.FEEDBACK:
+                tariff_name = "С ОБРАТНОЙ СВЯЗЬЮ"
+            elif tariff == Tariff.PRACTIC:
+                tariff_name = "PRACTIC"
+            
+            upgrade_text += (
+                f"• <b>{tariff_name}</b> — {price:.0f}₽\n"
+                f"  (доплата: {price_diff:.0f}₽)\n\n"
+            )
+            
+            keyboard_buttons.append([
+                InlineKeyboardButton(
+                    text=f"⬆️ {tariff_name} (+{price_diff:.0f}₽)",
+                    callback_data=f"upgrade:{tariff.value}"
+                )
+            ])
+        
+        keyboard_buttons.append([
+            InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data="cancel"
+            )
+        ])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+        
+        await message.answer(upgrade_text + "Выберите тариф для апгрейда:", reply_markup=keyboard)
+    
+    async def handle_keyboard_go_to_course(self, message: Message):
+        """Handle 'Перейти в курс' button from persistent keyboard."""
+        user_id = message.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user or not user.has_access():
+            await message.answer(
+                "❌ У вас нет активного доступа к курсу.\n\n"
+                "Используйте кнопку '📋 Выбор тарифа' для приобретения доступа."
+            )
+            return
+        
+        await message.answer(
+            "🚀 <b>Переход в курс</b>\n\n"
+            "Нажмите на ссылку ниже, чтобы перейти в курс-бот:\n\n"
+            "🤖 <a href='https://t.me/StartNowAI_bot?start=course'>@StartNowAI_bot</a>",
+            disable_web_page_preview=False
+        )
+    
+    async def handle_keyboard_select_tariff(self, message: Message):
+        """Handle 'Выбор тарифа' button from persistent keyboard - show only tariff descriptions."""
+        # Показываем только описание тарифов
+        tariff_message = (
+            f"{create_premium_separator()}\n"
+            f"💎 <b>ВЫБОР ТАРИФА</b>\n"
+            f"{create_premium_separator()}\n\n"
+            f"Выберите тариф, который подходит вам:\n\n"
+        )
+        
+        # Добавляем описание каждого тарифа
+        tariff_message += format_tariff_description(Tariff.BASIC) + "\n\n"
+        tariff_message += format_tariff_description(Tariff.FEEDBACK) + "\n\n"
+        tariff_message += format_tariff_description(Tariff.PRACTIC) + "\n\n"
+        
+        tariff_message += (
+            f"{create_premium_separator()}\n\n"
+            f"💳 <b>Выберите тариф для оплаты:</b>"
+        )
+        
+        keyboard = create_tariff_keyboard()
+        await message.answer(tariff_message, reply_markup=keyboard)
+    
+    async def handle_keyboard_about_course(self, message: Message):
+        """Handle 'О курсе' button from persistent keyboard."""
+        # Используем логику из handle_about_course
+        await send_typing_action(self.bot, message.chat.id, 0.5)
+        
+        course_description = (
+            f"{create_premium_separator()}\n"
+            f"✨ <b>ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ</b> ✨\n"
+            f"{create_premium_separator()}\n\n"
+            f"📱 <b>Телеграм-практикум</b>\n\n"
+            f"💭 <b>Знакомо ли вам, когда...</b>\n\n"
+            f"• Собеседник отвечает односложно, а вы не знаете, как разговорить?\n"
+            f"• На мероприятии хочется подойти к интересному человеку, но не знаете, с чего начать?\n"
+            f"• Коллеги и клиенты не раскрывают свой настоящий потенциал в общении с вами?\n"
+            f"• Хочется строить глубокие связи, но вместо этого — только поверхностные контакты?\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"🎯 <b>Что если через 30 дней вы сможете:</b>\n\n"
+            f"✨ С первого вопроса создавать атмосферу доверия, где люди сами хотят раскрываться\n\n"
+            f"✨ Превращать случайные знакомства в ценные связи для бизнеса и жизни\n\n"
+            f"✨ Находить подход к любому человеку — от замкнутого подростка до важного клиента\n\n"
+            f"✨ Строить личный бренд через искреннюю коммуникацию, привлекающую нужных людей\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"💎 <b>Что делает этот практикум особенным:</b>\n\n"
+            f"🎯 <b>Не теория, а пошаговая инструкция</b> — конкретные инструменты для раскрытия собеседника, которые работают сразу\n\n"
+            f"🎯 <b>Система нетворкинга</b> — учитесь выстраивать связи, которые приведут к новым возможностям и проектам\n\n"
+            f"🎯 <b>Практика с обратной связью</b> — применяете знания сразу, получаете фидбек и корректируете подход\n\n"
+            f"🎯 <b>Среда единомышленников</b> — находите партнеров, клиентов и друзей среди участников\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"👥 <b>Кому это необходимо:</b>\n\n"
+            f"💼 <b>Бизнесмену</b> — чтобы улучшить навыки нетворкинга\n"
+            f"👔 <b>Руководителю</b> — чтобы быстро и детально распаковывать людей и информацию\n"
+            f"💼 <b>Продажнику</b> — чтобы отточить искусство диалога и продавать больше\n"
+            f"📚 <b>Преподавателю</b> — чтобы использовать вопросы как инструмент для достижения лучших результатов\n"
+            f"📱 <b>Блогеру и журналисту</b> — чтобы начать вести интервью\n"
+            f"🚀 <b>Профессионалу</b> — чтобы активнее расти и развиваться через правильные вопросы\n"
+            f"💫 <b>Любому человеку</b> — желающему сделать свои диалоги, а значит и жизнь, более насыщенными и интересными\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"📅 <b>Как это будет проходить:</b>\n\n"
+            f"🔹 <b>Закрытая группа в Telegram</b> — уютное пространство для роста\n"
+            f"🔹 <b>Ежедневные посты</b> — краткая теория + практическое задание\n"
+            f"🔹 <b>Короткие задания на 5-10 минут</b> — легко встроить в любой график\n"
+            f"🔹 <b>Ответы от мастера</b> — персональные комментарии к вашим вопросам и работам\n"
+            f"🔹 <b>Поддержка сообщества</b> — обмен опытом с единомышленниками\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"👨‍🏫 <b>Об авторе:</b>\n\n"
+            f"<b>Артём Никитин</b> — журналист, телеведущий, диктор, кинорежиссёр, музыкант, поэт.\n"
+            f"Провёл <b>3000+ интервью</b> с выдающимися людьми.\n"
+            f"Разрабатываю идеи, создаю текстовый, аудио- и видеоконтент с 2000 года.\n\n"
+            f"🌐 <a href='https://sites.google.com/view/nikitinartem'>Официальный сайт Артёма Никитина</a>\n\n"
+            f"{create_premium_separator()}\n\n"
+            f"💎 <b>Это инвестиция в ваш главный актив — умение выстраивать качественные связи.</b>"
+        )
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💎 Выбрать тариф",
+                    callback_data="back_to_tariffs"
+                )
+            ]
+        ])
+        
+        await message.answer(course_description, reply_markup=keyboard, disable_web_page_preview=False)
+    
+    async def handle_question_from_sales(self, message: Message):
+        """Handle question text from sales bot (when user clicked 'Talk to human')."""
+        user_id = message.from_user.id
+        
+        # Проверяем, ожидаем ли мы вопрос от этого пользователя
+        if not hasattr(self, '_user_question_context') or user_id not in self._user_question_context:
+            # Не ожидаем вопрос, пропускаем
+            return
+        
+        context = self._user_question_context[user_id]
+        if not context.get('waiting_for_question'):
+            return
+        
+        # Удаляем контекст после обработки
+        del self._user_question_context[user_id]
+        
+        # Создаем вопрос
+        question_data = await self.question_service.create_question(
+            user_id=user_id,
+            lesson_id=None,
+            question_text=message.text,
+            context="Вопрос из бота оплаты (sales bot)"
+        )
+        
+        # Форматируем вопрос для кураторов
+        curator_message = await self.question_service.format_question_for_admin(question_data)
+        curator_message += "\n\n📍 <b>Источник:</b> Бот оплаты (sales bot)"
+        
+        # Отправляем в группу кураторов (если настроена), иначе в админ-чат
+        target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
+        
+        if target_chat_id:
+            try:
+                # Отправляем вопрос в группу кураторов с кнопкой для ответа
+                await self.bot.send_message(
+                    target_chat_id,
+                    curator_message,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="💬 Ответить",
+                                callback_data=f"curator_reply:{user_id}:0"
+                            )
+                        ]
+                    ])
+                )
+                logger.info(f"✅ Question from sales bot sent to curator group from user {user_id}")
+            except Exception as e:
+                logger.error(f"❌ Error sending question to curator group: {e}")
+                # Fallback: отправляем в админ-чат
+                if Config.ADMIN_CHAT_ID:
+                    await self.bot.send_message(
+                        Config.ADMIN_CHAT_ID,
+                        curator_message,
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="💬 Ответить",
+                                    callback_data=f"curator_reply:{user_id}:0"
+                                )
+                            ]
+                        ])
+                    )
+        else:
+            logger.warning("⚠️ No curator group or admin chat configured!")
+        
+        await message.answer(
+            "✅ <b>Вопрос отправлен!</b>\n\n"
+            "📤 Ваш вопрос отправлен куратору 👥.\n"
+            "⏳ Мы ответим вам как можно скорее 💬.\n\n"
+            "💎 <i>Пока ждёте ответа, можете выбрать тариф и начать обучение!</i>"
+        )
     
     async def handle_payment_check(self, callback: CallbackQuery):
         """Handle payment status check callback."""

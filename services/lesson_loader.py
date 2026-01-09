@@ -17,28 +17,38 @@ logger = logging.getLogger(__name__)
 class LessonLoader:
     """Загрузчик уроков из JSON файла."""
     
-    def __init__(self, lessons_file: str = "data/lessons.json"):
+    def __init__(self, lessons_file: str = None):
         """
         Инициализация загрузчика.
         
         Args:
-            lessons_file: Путь к JSON файлу с уроками
+            lessons_file: Путь к JSON файлу с уроками (если None, используется data/lessons.json)
         """
+        if lessons_file is None:
+            # Используем абсолютный путь относительно корня проекта
+            project_root = Path(__file__).parent.parent
+            lessons_file = project_root / "data" / "lessons.json"
         self.lessons_file = Path(lessons_file)
         self._lessons_cache: Optional[Dict[str, Any]] = None
         self._load_lessons()
     
     def _load_lessons(self):
         """Загружает уроки из JSON файла."""
+        logger.info(f"Загрузка уроков из: {self.lessons_file.absolute()}")
+        
         if not self.lessons_file.exists():
-            logger.warning(f"Файл уроков {self.lessons_file} не найден. Создайте его через scripts/parse_channel.py")
+            logger.error(f"❌ Файл уроков {self.lessons_file.absolute()} не найден!")
+            logger.error(f"   Текущая рабочая директория: {Path.cwd()}")
             self._lessons_cache = {}
             return
         
         try:
             with open(self.lessons_file, "r", encoding="utf-8") as f:
                 self._lessons_cache = json.load(f)
-            logger.info(f"✅ Загружено {len(self._lessons_cache)} уроков из {self.lessons_file}")
+            logger.info(f"✅ Загружено {len(self._lessons_cache)} уроков из {self.lessons_file.absolute()}")
+            if self._lessons_cache:
+                available_days = sorted([int(k) for k in self._lessons_cache.keys() if k.isdigit()])
+                logger.info(f"   Доступные дни: {available_days[:20]}...")
         except Exception as e:
             logger.error(f"❌ Ошибка при загрузке уроков: {e}", exc_info=True)
             self._lessons_cache = {}
@@ -52,15 +62,24 @@ class LessonLoader:
         Получает урок по номеру дня.
         
         Args:
-            day: Номер дня курса (1-30)
+            day: Номер дня курса (0-30)
         
         Returns:
             Словарь с данными урока или None
         """
         if not self._lessons_cache:
+            logger.warning(f"Lessons cache is empty when trying to get lesson for day {day}")
             return None
         
-        return self._lessons_cache.get(str(day))
+        day_key = str(day)
+        lesson = self._lessons_cache.get(day_key)
+        
+        if lesson is None:
+            logger.warning(f"Lesson not found for day {day} (key: '{day_key}'). Available keys: {sorted([k for k in self._lessons_cache.keys() if k.isdigit()])[:20]}")
+        else:
+            logger.debug(f"Lesson found for day {day}: {lesson.get('title', 'No title')}")
+        
+        return lesson
     
     def get_task_for_tariff(self, day: int, tariff: Tariff) -> str:
         """
@@ -71,17 +90,39 @@ class LessonLoader:
             tariff: Тариф пользователя
         
         Returns:
-            Текст задания
+            Текст задания (с учетом тарифа: для BASIC убирается текст про обратную связь,
+            для FEEDBACK убирается префикс "💡 Для тарифа с обратной связью:")
         """
         lesson = self.get_lesson(day)
         if not lesson:
             return ""
         
-        # Приоритет: task_feedback -> task_basic -> task
+        # Для тарифа с обратной связью (FEEDBACK, PREMIUM)
         if tariff in [Tariff.FEEDBACK, Tariff.PREMIUM]:
-            return lesson.get("task_feedback") or lesson.get("task", "")
+            task = lesson.get("task_feedback") or lesson.get("task", "")
+            # Убираем префикс "💡 Для тарифа с обратной связью: " если он есть, оставляя содержимое
+            feedback_prefix = "💡 Для тарифа с обратной связью:"
+            if feedback_prefix in task:
+                # Заменяем префикс и следующий за ним пробел/перенос на пустую строку
+                # Сначала заменяем префикс с возможным пробелом после него
+                task = task.replace(feedback_prefix + " ", "").replace(feedback_prefix, "")
+                # Убираем лишние переносы строк и пробелы в начале строк
+                task = task.replace("\n\n\n", "\n\n").strip()
+                # Убираем пробелы в начале каждой строки после переноса
+                lines = task.split("\n")
+                task = "\n".join(line.lstrip() if line.strip() else line for line in lines)
+            return task
         else:
-            return lesson.get("task_basic") or lesson.get("task", "")
+            # Для базового тарифа (BASIC)
+            task = lesson.get("task_basic") or lesson.get("task", "")
+            # Убираем весь текст после "💡 Для тарифа с обратной связью:" если он есть
+            feedback_prefix = "💡 Для тарифа с обратной связью:"
+            if feedback_prefix in task:
+                # Обрезаем все после префикса (включая сам префикс)
+                prefix_pos = task.find(feedback_prefix)
+                if prefix_pos != -1:
+                    task = task[:prefix_pos].strip()
+            return task
     
     def is_silent_day(self, day: int) -> bool:
         """Проверяет, является ли день 'днем тишины'."""

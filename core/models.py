@@ -21,6 +21,7 @@ class Tariff(str, Enum):
     BASIC = "basic"           # Content only, no feedback
     FEEDBACK = "feedback"     # Content + leader feedback
     PREMIUM = "premium"       # Content + feedback + premium community
+    PRACTIC = "practic"       # Content + feedback + 3 online interviews with professional review
 
 
 @dataclass
@@ -43,11 +44,15 @@ class User:
     
     def can_receive_feedback(self) -> bool:
         """Check if user's tariff includes feedback."""
-        return self.tariff in [Tariff.FEEDBACK, Tariff.PREMIUM]
+        return self.tariff in [Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]
     
     def has_premium_access(self) -> bool:
         """Check if user has premium community access."""
         return self.tariff == Tariff.PREMIUM
+    
+    def has_practic_access(self) -> bool:
+        """Check if user has PRACTIC tariff (includes interviews)."""
+        return self.tariff == Tariff.PRACTIC
 
 
 @dataclass

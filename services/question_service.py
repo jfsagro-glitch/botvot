@@ -48,16 +48,16 @@ class QuestionService:
             user_info += f" (@{question_data['username']})"
         
         message = f"❓ <b>Новый вопрос</b>\n\n"
-        message += f"Пользователь: {user_info}\n"
-        message += f"ID: {question_data['user_id']}\n"
+        message += f"👤 Пользователь: {user_info}\n"
+        message += f"🆔 ID: {question_data['user_id']}\n"
         
         if question_data.get('lesson_id'):
-            message += f"Урок: День {question_data['lesson_id']}\n"
+            message += f"📚 Урок: День {question_data['lesson_id']}\n"
         
         if question_data.get('context'):
-            message += f"Контекст: {question_data['context']}\n"
+            message += f"📍 Контекст: {question_data['context']}\n"
         
-        message += f"\n<b>Вопрос:</b>\n{question_data.get('question_text', 'Нет текста')}"
+        message += f"\n💭 <b>Вопрос:</b>\n{question_data.get('question_text', 'Нет текста')}"
         
         return message
 

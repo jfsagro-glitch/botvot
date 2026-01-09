@@ -11,8 +11,27 @@ from core.models import Tariff, Lesson
 from core.config import Config
 
 
+def create_persistent_keyboard() -> ReplyKeyboardMarkup:
+    """Create persistent keyboard for sales bot with main buttons."""
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="⬆️ Апгрейд тарифа"),
+                KeyboardButton(text="📚 Перейти в курс")
+            ],
+            [
+                KeyboardButton(text="📋 Выбор тарифа"),
+                KeyboardButton(text="📖 О курсе")
+            ]
+        ],
+        resize_keyboard=True,
+        persistent=True
+    )
+    return keyboard
+
+
 def create_tariff_keyboard() -> InlineKeyboardMarkup:
-    """Create keyboard for tariff selection."""
+    """Create keyboard for tariff selection with additional buttons."""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -28,8 +47,39 @@ def create_tariff_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                text="⭐ ПРЕМИУМ - 8000₽",
-                callback_data="tariff:premium"
+                text="🎯 PRACTIC - 20000₽",
+                callback_data="tariff:practic"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="💬 Поговорить с человеком",
+                callback_data="sales:talk_to_human"
+            ),
+            InlineKeyboardButton(
+                text="📖 О курсе",
+                callback_data="sales:about_course"
+            )
+        ]
+    ])
+    return keyboard
+
+
+def create_upgrade_tariff_keyboard(sales_bot_username: str = "StartNowQ_bot") -> InlineKeyboardMarkup:
+    """
+    Create keyboard with button to upgrade tariff.
+    
+    Args:
+        sales_bot_username: Username of the sales bot (without @)
+    
+    Returns:
+        InlineKeyboardMarkup with upgrade button
+    """
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="⬆️ Обновить тариф",
+                url=f"https://t.me/{sales_bot_username}?start=upgrade"
             )
         ]
     ])
@@ -58,12 +108,21 @@ def create_lesson_keyboard_from_json(lesson_data: dict, user, general_group_id: 
             )
         ])
     
-    # Кнопка "Задать вопрос"
-    day = lesson_data.get("day_number", 1)
+    # Кнопка "Задать вопрос" - только для тарифа FEEDBACK, PREMIUM, PRACTIC
+    if user and user.tariff in [Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]:
+        day = lesson_data.get("day_number", 1)
+        buttons.append([
+            InlineKeyboardButton(
+                text="❓ Задать вопрос",
+                callback_data=f"question:ask:lesson_{day}"
+            )
+        ])
+    
+    # Кнопка "Навигатор курса"
     buttons.append([
         InlineKeyboardButton(
-            text="❓ Задать вопрос",
-            callback_data=f"question:ask:lesson_{day}"
+            text="🧭 Навигатор курса",
+            callback_data="navigator:open"
         )
     ])
     
@@ -80,14 +139,19 @@ def create_lesson_keyboard_from_json(lesson_data: dict, user, general_group_id: 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def create_lesson_keyboard(lesson: Lesson, general_group_id: str) -> InlineKeyboardMarkup:
+def create_lesson_keyboard(lesson: Lesson, general_group_id: str, user=None) -> InlineKeyboardMarkup:
     """
     Create keyboard for lesson interactions.
     
     Includes buttons for:
     - Submit assignment (if lesson has assignment)
-    - Ask a question
+    - Ask a question (only for FEEDBACK tariff)
     - Go to discussion
+    
+    Args:
+        lesson: Lesson object
+        general_group_id: ID общей группы
+        user: User object (optional, for tariff check)
     """
     buttons = []
     
@@ -99,12 +163,14 @@ def create_lesson_keyboard(lesson: Lesson, general_group_id: str) -> InlineKeybo
             )
         ])
     
-    buttons.append([
-        InlineKeyboardButton(
-            text="❓ Задать вопрос",
-            callback_data=f"question:ask:{lesson.lesson_id}"
-        )
-    ])
+    # Кнопка "Задать вопрос" - только для тарифа FEEDBACK, PREMIUM, PRACTIC
+    if user and user.tariff in [Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]:
+        buttons.append([
+            InlineKeyboardButton(
+                text="❓ Задать вопрос",
+                callback_data=f"question:ask:{lesson.lesson_id}"
+            )
+        ])
     
     if general_group_id:
         # Используем правильный формат для группы Telegram
@@ -145,7 +211,7 @@ def format_lesson_message(lesson: Lesson) -> str:
 
 def format_tariff_description(tariff: Tariff) -> str:
     """Format tariff description for display with premium styling."""
-    separator = "━━━━━━━━━━━━━━━━━━━━"
+    separator = "━━━━━━━━━━━━"
     descriptions = {
         Tariff.BASIC: (
             f"{separator}\n"
@@ -201,6 +267,28 @@ def format_tariff_description(tariff: Tariff) -> str:
             f"{separator}\n\n"
             f"<b>👤 Для кого:</b>\n"
             f"Для тех, кто хочет максимальный результат: обратная связь + среда единомышленников, где можно обсуждать, делиться опытом и расти вместе."
+        ),
+        Tariff.PRACTIC: (
+            f"{separator}\n"
+            f"🎯 <b>PRACTIC</b> - 20000₽\n"
+            f"{separator}\n\n"
+            f"<b>✨ Что включено:</b>\n"
+            f"  ✅ Всё из тарифов Basic + Feedback\n"
+            f"  ✅ Организация 3-х интервью онлайн\n"
+            f"  ✅ Подбор собеседника\n"
+            f"  ✅ Каждое интервью до 15 мин\n"
+            f"  ✅ Видеозапись 3-х интервью\n"
+            f"  ✅ Профессиональный разбор 3-х интервью от лидера или куратора\n\n"
+            f"{separator}\n\n"
+            f"<b>🎯 Особенности:</b>\n"
+            f"  • Полный доступ ко всему контенту курса\n"
+            f"  • Персональная обратная связь от лидера\n"
+            f"  • Практика интервью в реальных условиях\n"
+            f"  • Профессиональный разбор ваших интервью\n"
+            f"  • Видеозапись для самостоятельного анализа\n\n"
+            f"{separator}\n\n"
+            f"<b>👤 Для кого:</b>\n"
+            f"Для тех, кто хочет не только изучить теорию, но и применить знания на практике с профессиональной поддержкой и разбором."
         )
     }
     return descriptions.get(tariff, "")

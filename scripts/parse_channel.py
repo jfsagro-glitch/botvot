@@ -76,8 +76,9 @@ async def parse_channel(
                 break
             
             for msg in history.messages:
-                # Получаем текст сообщения
-                text = msg.message or ""
+                # Получаем текст сообщения с сохранением форматирования
+                # Используем raw_text для сохранения эмодзи и форматирования
+                text = msg.raw_text or msg.message or ""
                 
                 # Проверяем наличие медиа
                 has_photo = bool(msg.photo)

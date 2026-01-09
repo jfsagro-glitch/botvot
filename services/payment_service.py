@@ -21,6 +21,7 @@ class PaymentService:
         Tariff.BASIC: 3000.0,      # Базовый тариф - только задания без обратной связи
         Tariff.FEEDBACK: 5000.0,   # С обратной связью от лидера
         Tariff.PREMIUM: 8000.0,    # Обратная связь + премиум сообщество
+        Tariff.PRACTIC: 20000.0,   # Всё из Basic + Feedback + 3 онлайн интервью с разбором
     }
     
     def __init__(self, db: Database, payment_processor: PaymentProcessor):

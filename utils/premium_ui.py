@@ -57,12 +57,13 @@ def format_premium_header(title: str) -> str:
 
 def format_premium_section(title: str, content: str) -> str:
     """Format premium section with title and content."""
-    return f"━━━━━━━━━━━━━━━━━━━━\n<b>{title}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n{content}"
+    separator = "━━━━━━━━━━━━"
+    return f"{separator}\n<b>{title}</b>\n{separator}\n\n{content}"
 
 
 def create_premium_separator() -> str:
-    """Create a decorative separator."""
-    return "━━━━━━━━━━━━━━━━━━━━"
+    """Create a decorative separator optimized for mobile devices."""
+    return "━━━━━━━━━━━━"
 
 
 def format_tariff_card(tariff_name: str, price: float, features: list, emoji: str = "⭐") -> str:
