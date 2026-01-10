@@ -17,11 +17,15 @@ class Config:
     """Application configuration."""
     
     # Telegram Bot Tokens
-    SALES_BOT_TOKEN: str = os.getenv("SALES_BOT_TOKEN", "")
-    COURSE_BOT_TOKEN: str = os.getenv("COURSE_BOT_TOKEN", "")
+    # Используем os.environ напрямую для надежного чтения переменных окружения
+    SALES_BOT_TOKEN: str = os.environ.get("SALES_BOT_TOKEN", os.getenv("SALES_BOT_TOKEN", ""))
+    COURSE_BOT_TOKEN: str = os.environ.get("COURSE_BOT_TOKEN", os.getenv("COURSE_BOT_TOKEN", ""))
     
     # Admin Chat ID (for assignment feedback)
     ADMIN_CHAT_ID: int = int(os.getenv("ADMIN_CHAT_ID", "0"))
+    
+    # Curator Group ID (for questions from users)
+    CURATOR_GROUP_ID: str = os.getenv("CURATOR_GROUP_ID", "")
     
     # Telegram Group Chat IDs
     GENERAL_GROUP_ID: str = os.getenv("GENERAL_GROUP_ID", "")
@@ -48,11 +52,19 @@ class Config:
     @classmethod
     def validate(cls) -> bool:
         """Validate that required configuration is present."""
+        # Перечитываем переменные окружения для надежности
+        sales_token = os.environ.get("SALES_BOT_TOKEN", "") or cls.SALES_BOT_TOKEN
+        course_token = os.environ.get("COURSE_BOT_TOKEN", "") or cls.COURSE_BOT_TOKEN
+        
+        # Обновляем значения в классе
+        cls.SALES_BOT_TOKEN = sales_token
+        cls.COURSE_BOT_TOKEN = course_token
+        
         required = [
-            cls.SALES_BOT_TOKEN,
-            cls.COURSE_BOT_TOKEN,
+            sales_token,
+            course_token,
         ]
-        return all(required)
+        return all(required) and bool(sales_token) and bool(course_token)
     
     @classmethod
     def ensure_data_directory(cls):
