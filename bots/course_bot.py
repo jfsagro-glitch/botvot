@@ -532,15 +532,48 @@ class CourseBot:
         
         logger.info(f"🔍 Test lesson {day} requested by user {user_id}")
         
+        # Проверяем, что lesson_loader инициализирован
+        if not self.lesson_loader:
+            logger.error("❌ LessonLoader не инициализирован!")
+            await callback.message.answer(
+                "❌ Ошибка: загрузчик уроков не инициализирован. Обратитесь в поддержку.",
+                reply_markup=persistent_keyboard
+            )
+            return
+        
+        # Проверяем, что уроки загружены
+        lesson_count = self.lesson_loader.get_lesson_count()
+        if lesson_count == 0:
+            logger.error(f"❌ Уроки не загружены! Всего уроков: {lesson_count}")
+            await callback.message.answer(
+                "❌ Ошибка: уроки не загружены. Обратитесь в поддержку.",
+                reply_markup=persistent_keyboard
+            )
+            return
+        
+        logger.info(f"   📚 Загружено уроков: {lesson_count}, ищу урок {day}")
+        
         # Загружаем урок из JSON
         lesson_data = self.lesson_loader.get_lesson(day)
         
         if not lesson_data:
+            # Получаем список доступных уроков безопасным способом
+            available_lessons = []
+            try:
+                all_lessons = self.lesson_loader.get_all_lessons()
+                available_lessons = sorted([int(k) for k in all_lessons.keys() if k.isdigit()])
+            except Exception as e:
+                logger.error(f"Ошибка при получении списка уроков: {e}")
+            
+            logger.error(f"❌ Урок {day} не найден в JSON файле. Доступные уроки: {available_lessons}")
             await callback.message.answer(
-                f"❌ Урок для дня {day} не найден в базе данных.",
+                f"❌ Урок для дня {day} не найден.\n\n"
+                f"Доступные уроки: {', '.join(map(str, available_lessons[:10]))}{'...' if len(available_lessons) > 10 else ''}" if available_lessons else f"Доступные уроки: 0-{lesson_count-1}",
                 reply_markup=persistent_keyboard
             )
             return
+        
+        logger.info(f"   ✅ Урок {day} найден: {lesson_data.get('title', 'No title')}")
         
         # Временно меняем current_day пользователя для корректного отображения
         original_day = user.current_day
@@ -1270,15 +1303,48 @@ class CourseBot:
         
         logger.info(f"🧭 Navigator: lesson {day} selected by user {user_id}")
         
+        # Проверяем, что lesson_loader инициализирован
+        if not self.lesson_loader:
+            logger.error("❌ LessonLoader не инициализирован!")
+            await callback.message.answer(
+                "❌ Ошибка: загрузчик уроков не инициализирован. Обратитесь в поддержку.",
+                reply_markup=persistent_keyboard
+            )
+            return
+        
+        # Проверяем, что уроки загружены
+        lesson_count = self.lesson_loader.get_lesson_count()
+        if lesson_count == 0:
+            logger.error(f"❌ Уроки не загружены! Всего уроков: {lesson_count}")
+            await callback.message.answer(
+                "❌ Ошибка: уроки не загружены. Обратитесь в поддержку.",
+                reply_markup=persistent_keyboard
+            )
+            return
+        
+        logger.info(f"   📚 Загружено уроков: {lesson_count}, ищу урок {day}")
+        
         # Загружаем урок из JSON
         lesson_data = self.lesson_loader.get_lesson(day)
         
         if not lesson_data:
+            # Получаем список доступных уроков безопасным способом
+            available_lessons = []
+            try:
+                all_lessons = self.lesson_loader.get_all_lessons()
+                available_lessons = sorted([int(k) for k in all_lessons.keys() if k.isdigit()])
+            except Exception as e:
+                logger.error(f"Ошибка при получении списка уроков: {e}")
+            
+            logger.error(f"❌ Урок {day} не найден в JSON файле. Доступные уроки: {available_lessons}")
             await callback.message.answer(
-                f"❌ Урок для дня {day} не найден в базе данных.",
+                f"❌ Урок для дня {day} не найден.\n\n"
+                f"Доступные уроки: {', '.join(map(str, available_lessons[:10]))}{'...' if len(available_lessons) > 10 else ''}" if available_lessons else f"Доступные уроки: 0-{lesson_count-1}",
                 reply_markup=persistent_keyboard
             )
             return
+        
+        logger.info(f"   ✅ Урок {day} найден: {lesson_data.get('title', 'No title')}")
         
         # Отправляем урок БЕЗ intro_text и about_me_text (только основной контент)
         await send_typing_action(self.bot, user_id, 0.8)
