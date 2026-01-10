@@ -35,13 +35,13 @@ def create_tariff_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="📚 БАЗОВЫЙ - 3000₽",
+                text="📚 БАЗОВЫЙ - 5000₽",
                 callback_data="tariff:basic"
             )
         ],
         [
             InlineKeyboardButton(
-                text="💬 С ОБРАТНОЙ СВЯЗЬЮ - 5000₽",
+                text="💬 С ОБРАТНОЙ СВЯЗЬЮ - 10000₽",
                 callback_data="tariff:feedback"
             )
         ],
@@ -95,12 +95,36 @@ def create_lesson_keyboard_from_json(lesson_data: dict, user, general_group_id: 
         user: Пользователь (для проверки тарифа)
         general_group_id: ID общей группы
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     buttons = []
+    
+    # Получаем номер дня (может быть int или str)
+    day = lesson_data.get("day_number", 1)
+    # Преобразуем в int для надежного сравнения
+    try:
+        day = int(day) if day is not None else 1
+    except (ValueError, TypeError):
+        day = 1
+    
+    logger.debug(f"create_lesson_keyboard_from_json: day={day} (type={type(day).__name__})")
+    
+    # Для урока 30 добавляем кнопку "ФИНАЛЬНОЕ СООБЩЕНИЕ" перед кнопкой "Отправить задание"
+    if day == 30:
+        logger.info(f"   ✅ Adding FINAL MESSAGE button for day 30")
+        buttons.append([
+            InlineKeyboardButton(
+                text="🎊 ФИНАЛЬНОЕ СООБЩЕНИЕ",
+                callback_data="lesson30_final_message"
+            )
+        ])
+    else:
+        logger.debug(f"   ⏭️ Skipping final message button (day={day}, not 30)")
     
     # Кнопка "Сдать задание" (если есть задание)
     task = lesson_data.get("task") or lesson_data.get("task_basic") or lesson_data.get("task_feedback")
     if task:
-        day = lesson_data.get("day_number", 1)
         buttons.append([
             InlineKeyboardButton(
                 text="📝 Отправить задание",
@@ -108,35 +132,13 @@ def create_lesson_keyboard_from_json(lesson_data: dict, user, general_group_id: 
             )
         ])
     
-    # Кнопка "Задать вопрос" - только для тарифа FEEDBACK, PREMIUM, PRACTIC
-    if user and user.tariff in [Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]:
-        day = lesson_data.get("day_number", 1)
-        buttons.append([
-            InlineKeyboardButton(
-                text="❓ Задать вопрос",
-                callback_data=f"question:ask:lesson_{day}"
-            )
-        ])
+    # Остальные кнопки удалены, так как они теперь в постоянной клавиатуре внизу
     
-    # Кнопка "Навигатор курса"
-    buttons.append([
-        InlineKeyboardButton(
-            text="🧭 Навигатор курса",
-            callback_data="navigator:open"
-        )
-    ])
-    
-    # Кнопка "Перейти в обсуждение" (если есть группа)
-    if general_group_id:
-        group_id_clean = str(general_group_id).replace('-100', '').replace('-', '')
-        buttons.append([
-            InlineKeyboardButton(
-                text="💬 Перейти в обсуждение",
-                url=f"https://t.me/c/{group_id_clean}"
-            )
-        ])
-    
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    if buttons:
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+    else:
+        # Если нет кнопок, возвращаем пустую клавиатуру
+        return InlineKeyboardMarkup(inline_keyboard=[])
 
 
 def create_lesson_keyboard(lesson: Lesson, general_group_id: str, user=None) -> InlineKeyboardMarkup:
@@ -145,13 +147,11 @@ def create_lesson_keyboard(lesson: Lesson, general_group_id: str, user=None) -> 
     
     Includes buttons for:
     - Submit assignment (if lesson has assignment)
-    - Ask a question (only for FEEDBACK tariff)
-    - Go to discussion
     
     Args:
         lesson: Lesson object
-        general_group_id: ID общей группы
-        user: User object (optional, for tariff check)
+        general_group_id: ID общей группы (не используется, оставлен для совместимости)
+        user: User object (optional, не используется, оставлен для совместимости)
     """
     buttons = []
     
@@ -163,27 +163,13 @@ def create_lesson_keyboard(lesson: Lesson, general_group_id: str, user=None) -> 
             )
         ])
     
-    # Кнопка "Задать вопрос" - только для тарифа FEEDBACK, PREMIUM, PRACTIC
-    if user and user.tariff in [Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]:
-        buttons.append([
-            InlineKeyboardButton(
-                text="❓ Задать вопрос",
-                callback_data=f"question:ask:{lesson.lesson_id}"
-            )
-        ])
+    # Остальные кнопки удалены, так как они теперь в постоянной клавиатуре внизу
     
-    if general_group_id:
-        # Используем правильный формат для группы Telegram
-        # Для групп формат: https://t.me/c/CHAT_ID (без -100)
-        group_id_clean = str(general_group_id).replace('-100', '').replace('-', '')
-        buttons.append([
-            InlineKeyboardButton(
-                text="💬 Перейти в пространство участников",
-                url=f"https://t.me/c/{group_id_clean}"
-            )
-        ])
-    
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    if buttons:
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+    else:
+        # Если нет кнопок, возвращаем пустую клавиатуру
+        return InlineKeyboardMarkup(inline_keyboard=[])
 
 
 def format_lesson_message(lesson: Lesson) -> str:
@@ -211,27 +197,26 @@ def format_lesson_message(lesson: Lesson) -> str:
 
 def format_tariff_description(tariff: Tariff) -> str:
     """Format tariff description for display with premium styling."""
-    separator = "━━━━━━━━━━━━"
+    separator = "━━━━━━━━━━━━━━"  # 14 символов для мобильных
     descriptions = {
         Tariff.BASIC: (
             f"{separator}\n"
-            f"📚 <b>БАЗОВЫЙ ТАРИФ</b> - 3000₽\n"
+            f"📚 <b>БАЗОВЫЙ ТАРИФ</b> - 5000₽\n"
             f"{separator}\n\n"
             f"<b>✨ Что включено:</b>\n"
-            f"  ✅ 30 дней автоматических уроков\n"
-            f"  ✅ Ежедневные материалы: текст, картинки, видео, ссылки\n"
+            f"  ✅ 30 занятий\n"
+            f"  ✅ Ежедневные материалы (тексты, фото, видео, ссылки)\n"
             f"  ✅ Практические задания к каждому уроку\n"
-            f"  ✅ Выполняйте задания в своем темпе\n\n"
+            f"  ✅ Доступ к сообществу\n\n"
             f"{separator}\n\n"
             f"<b>🎯 Особенности:</b>\n"
-            f"  • Полный доступ ко всему контенту курса\n"
-            f"  • Задания можно выполнять как удобно\n"
-            f"  • Без обратной связи от лидера\n"
-            f"  • Доступ к общему сообществу участников"
+            f"  • Полный доступ ко всему контенту\n"
+            f"  • Выполняйте задания в своем темпе\n"
+            f"  • Без обратной связи от лидера"
         ),
         Tariff.FEEDBACK: (
             f"{separator}\n"
-            f"💬 <b>С ОБРАТНОЙ СВЯЗЬЮ</b> - 5000₽\n"
+            f"💬 <b>С ОБРАТНОЙ СВЯЗЬЮ</b> - 10000₽\n"
             f"{separator}\n\n"
             f"<b>✨ Что включено:</b>\n"
             f"  ✅ Всё из Базового тарифа\n"
@@ -241,12 +226,8 @@ def format_tariff_description(tariff: Tariff) -> str:
             f"{separator}\n\n"
             f"<b>🎯 Особенности:</b>\n"
             f"  • Лидер проверяет ваши задания\n"
-            f"  • Получаете персональные комментарии\n"
-            f"  • Можете задавать вопросы и получать ответы\n"
-            f"  • Доступ к общему сообществу участников\n\n"
-            f"{separator}\n\n"
-            f"<b>👤 Для кого:</b>\n"
-            f"Для тех, кто хочет не просто пройти курс, а получить персональную поддержку и обратную связь."
+            f"  • Персональные комментарии\n"
+            f"  • Можно задавать вопросы и получать ответы"
         ),
         Tariff.PREMIUM: (
             f"{separator}\n"
@@ -275,20 +256,13 @@ def format_tariff_description(tariff: Tariff) -> str:
             f"<b>✨ Что включено:</b>\n"
             f"  ✅ Всё из тарифов Basic + Feedback\n"
             f"  ✅ Организация 3-х интервью онлайн\n"
-            f"  ✅ Подбор собеседника\n"
-            f"  ✅ Каждое интервью до 15 мин\n"
             f"  ✅ Видеозапись 3-х интервью\n"
             f"  ✅ Профессиональный разбор 3-х интервью от лидера или куратора\n\n"
             f"{separator}\n\n"
             f"<b>🎯 Особенности:</b>\n"
-            f"  • Полный доступ ко всему контенту курса\n"
-            f"  • Персональная обратная связь от лидера\n"
-            f"  • Практика интервью в реальных условиях\n"
-            f"  • Профессиональный разбор ваших интервью\n"
-            f"  • Видеозапись для самостоятельного анализа\n\n"
-            f"{separator}\n\n"
-            f"<b>👤 Для кого:</b>\n"
-            f"Для тех, кто хочет не только изучить теорию, но и применить знания на практике с профессиональной поддержкой и разбором."
+            f"  • Каждое интервью до 15 мин\n"
+            f"  • Подбор собеседника\n"
+            f"  • Профессиональный формат"
         )
     }
     return descriptions.get(tariff, "")
