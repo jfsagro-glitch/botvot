@@ -2184,7 +2184,11 @@ class CourseBot:
                 # Передаем day в lesson_data для создания клавиатуры
                 lesson_data_with_day = lesson_data.copy()
                 lesson_data_with_day["day_number"] = day
+                logger.info(f"   📝 Creating keyboard for task message, day={day} (type={type(day).__name__})")
                 keyboard = create_lesson_keyboard_from_json(lesson_data_with_day, user, Config.GENERAL_GROUP_ID)
+                logger.info(f"   ✅ Keyboard created: {len(keyboard.inline_keyboard) if keyboard and hasattr(keyboard, 'inline_keyboard') else 0} button rows")
+                if day == 30:
+                    logger.info(f"   🎊 Lesson 30: Keyboard should contain FINAL MESSAGE button")
                 
                 # Для урока 21 добавляем кнопку "Скачать карточки"
                 if day == 21 or str(day) == "21":
@@ -2244,7 +2248,11 @@ class CourseBot:
                 # Если задания нет, отправляем только клавиатуру
                 lesson_data_with_day = lesson_data.copy()
                 lesson_data_with_day["day_number"] = day
+                logger.info(f"   📝 Creating keyboard (no task), day={day} (type={type(day).__name__})")
                 keyboard = create_lesson_keyboard_from_json(lesson_data_with_day, user, Config.GENERAL_GROUP_ID)
+                logger.info(f"   ✅ Keyboard created: {len(keyboard.inline_keyboard) if keyboard and hasattr(keyboard, 'inline_keyboard') else 0} button rows")
+                if day == 30:
+                    logger.info(f"   🎊 Lesson 30: Keyboard should contain FINAL MESSAGE button")
                 
                 # Для урока 21 добавляем кнопку "Скачать карточки"
                 cards = []
