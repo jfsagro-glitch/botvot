@@ -7,10 +7,17 @@ env/
 venv/
 .venv
 .env
+# Базы данных (исключаем, но оставляем JSON файлы!)
+data/*.db
+data/*.sqlite
+data/*.sqlite3
 *.db
 *.sqlite
 *.sqlite3
-data/
+# Резервные копии
+data/*.backup*
+data/*.example
+data/lessons_manual.json
 *.log
 .git/
 .gitignore
