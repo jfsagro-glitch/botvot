@@ -56,12 +56,19 @@ def run_http_server(port):
 def start_http_server():
     """Запуск HTTP сервера в отдельном потоке."""
     # Получаем порт из переменной окружения (Railway автоматически устанавливает PORT)
-    port_str = os.environ.get('PORT', '8080')
-    try:
-        port = int(port_str)
-    except (ValueError, TypeError):
-        logger.warning(f"⚠️ Неверный формат PORT: {port_str}, используем 8080")
+    # В Railway переменная PORT устанавливается автоматически
+    port_str = os.environ.get('PORT')
+    if not port_str:
+        # Если PORT не установлен, используем значение по умолчанию
+        logger.warning("⚠️ Переменная PORT не установлена, используем 8080")
         port = 8080
+    else:
+        try:
+            port = int(port_str)
+            logger.info(f"📌 Используется порт из переменной окружения: {port}")
+        except (ValueError, TypeError):
+            logger.warning(f"⚠️ Неверный формат PORT: {port_str}, используем 8080")
+            port = 8080
     
     # Запускаем HTTP сервер в отдельном потоке
     http_thread = threading.Thread(target=run_http_server, args=(port,), daemon=True)
