@@ -75,13 +75,51 @@ class CourseBot:
                 [
                     KeyboardButton(text="🧭"),
                     KeyboardButton(text="❓"),
-                    KeyboardButton(text="💎 Тарифы"),
-                    KeyboardButton(text="🔍")
+                    KeyboardButton(text="💎"),
+                    KeyboardButton(text="🔍"),
+                    KeyboardButton(text="💬")
                 ]
             ],
             resize_keyboard=True,
             persistent=True
         )
+        return keyboard
+    
+    def _create_cards_keyboard(self, cards: list) -> InlineKeyboardMarkup:
+        """Create inline keyboard with card buttons for lesson 21."""
+        buttons = []
+        row = []
+        
+        logger.info(f"   🔍 Creating keyboard for {len(cards)} cards")
+        
+        # Создаем кнопки для каждой карточки (6 кнопок в ряд, 3 ряда)
+        for card in cards:
+            card_number = card.get("number", 0)
+            if card_number == 0:
+                logger.warning(f"   ⚠️ Card with invalid number: {card}")
+                continue
+            row.append(InlineKeyboardButton(
+                text=f"🎴 {card_number}",
+                callback_data=f"lesson21_card:{card_number}"
+            ))
+            
+            # По 6 кнопок в ряд
+            if len(row) == 6:
+                buttons.append(row)
+                row = []
+        
+        # Добавляем оставшиеся кнопки
+        if row:
+            buttons.append(row)
+        
+        # Добавляем кнопку "Рандом" в отдельный ряд
+        buttons.append([InlineKeyboardButton(
+            text="🎲 Рандом",
+            callback_data="lesson21_card:random"
+        )])
+        
+        logger.info(f"   🔍 Created keyboard with {len(buttons)} rows")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
         return keyboard
     
     async def _ensure_persistent_keyboard(self, user_id: int):
@@ -92,6 +130,49 @@ class CourseBot:
             await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
         except Exception as e:
             logger.debug(f"Could not send persistent keyboard to {user_id}: {e}")
+    
+    async def _send_video_with_retry(self, user_id: int, video, caption: str = None, 
+                                     width: int = None, height: int = None, 
+                                     supports_streaming: bool = True, max_retries: int = 3):
+        """
+        Отправляет видео с повторными попытками и оптимизированными параметрами.
+        
+        Args:
+            user_id: ID пользователя
+            video: file_id или FSInputFile
+            caption: Подпись к видео
+            width: Ширина видео
+            height: Высота видео
+            supports_streaming: Поддержка стриминга
+            max_retries: Максимальное количество попыток
+        """
+        for attempt in range(max_retries):
+            try:
+                # Увеличиваем таймаут для больших файлов
+                request_timeout = 300 if attempt == 0 else 600  # 5 минут, затем 10 минут
+                
+                await self.bot.send_video(
+                    user_id,
+                    video,
+                    caption=caption,
+                    width=width,
+                    height=height,
+                    supports_streaming=supports_streaming,
+                    request_timeout=request_timeout
+                )
+                logger.info(f"   ✅ Видео успешно отправлено (попытка {attempt + 1})")
+                return
+            except Exception as e:
+                error_msg = str(e).lower()
+                if attempt < max_retries - 1:
+                    # Увеличиваем задержку между попытками
+                    delay = (attempt + 1) * 5  # 5, 10, 15 секунд
+                    logger.warning(f"   ⚠️ Ошибка при отправке видео (попытка {attempt + 1}/{max_retries}): {e}")
+                    logger.info(f"   🔄 Повторная попытка через {delay} секунд...")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"   ❌ Не удалось отправить видео после {max_retries} попыток: {e}")
+                    raise
     
     def _register_handlers(self):
         """Register all bot handlers."""
@@ -120,13 +201,18 @@ class CourseBot:
         self.dp.callback_query.register(self.handle_ask_question, F.data.startswith("question:ask:"))
         self.dp.callback_query.register(self.handle_admin_reply, F.data.startswith("admin_reply:"))
         self.dp.callback_query.register(self.handle_curator_reply, F.data.startswith("curator_reply:"))
+        self.dp.callback_query.register(self.handle_lesson21_card, F.data.startswith("lesson21_card:"))
+        self.dp.callback_query.register(self.handle_lesson21_download_cards, F.data == "lesson21_download_cards")
+        self.dp.callback_query.register(self.handle_lesson19_show_levels, F.data == "lesson19_show_levels")
+        self.dp.callback_query.register(self.handle_final_message, F.data == "lesson30_final_message")
         
         # Обработчики для постоянных кнопок клавиатуры
         # ВАЖНО: Регистрируем ПЕРЕД общими обработчиками текста, чтобы они имели приоритет
         self.dp.message.register(self.handle_keyboard_navigator, F.text == "🧭")
         self.dp.message.register(self.handle_keyboard_ask_question, F.text == "❓")
-        self.dp.message.register(self.handle_keyboard_tariffs, F.text == "💎 Тарифы")
+        self.dp.message.register(self.handle_keyboard_tariffs, F.text == "💎")
         self.dp.message.register(self.handle_keyboard_test, F.text == "🔍")
+        self.dp.message.register(self.handle_keyboard_discussion, F.text == "💬")
         
         # Общие обработчики сообщений (после команд!)
         # ВАЖНО: Используем F.text & ~F.command чтобы НЕ перехватывать команды
@@ -324,8 +410,8 @@ class CourseBot:
                 )
                 return
             
-            # Проверяем день тишины
-            if self.lesson_loader.is_silent_day(user.current_day):
+            # Проверяем день тишины (но для урока 21 все равно отправляем урок с карточками)
+            if self.lesson_loader.is_silent_day(user.current_day) and user.current_day != 21:
                 logger.info(f"   Day {user.current_day} is silent day for user {user_id}")
                 persistent_keyboard = self._create_persistent_keyboard()
                 await self.bot.send_message(
@@ -466,11 +552,645 @@ class CourseBot:
             # Убеждаемся, что постоянная клавиатура видна после отправки урока
             await self._ensure_persistent_keyboard(user_id)
         except Exception as e:
-            logger.error(f"❌ Error sending test lesson {day}: {e}", exc_info=True)
-            await callback.message.answer(f"❌ Ошибка при отправке урока {day}: {str(e)}", reply_markup=persistent_keyboard)
+            error_msg = str(e)
+            # Фильтруем технические ошибки Telegram API, которые не нужно показывать пользователю
+            if "text must be non-empty" in error_msg or "message text is empty" in error_msg:
+                logger.warning(f"⚠️ Empty message error for lesson {day} (suppressed): {error_msg}")
+            else:
+                logger.error(f"❌ Error sending test lesson {day}: {e}", exc_info=True)
+                # Показываем пользователю только понятные ошибки
+                if "Bad Request" not in error_msg or "text must be non-empty" not in error_msg:
+                    try:
+                        await callback.message.answer(f"❌ Ошибка при отправке урока {day}. Попробуйте позже.", reply_markup=persistent_keyboard)
+                    except:
+                        pass
         finally:
             # Восстанавливаем original_day (не сохраняем в БД, это только для отображения)
             user.current_day = original_day
+    
+    async def handle_lesson21_card(self, callback: CallbackQuery):
+        """Обработчик для отображения карточки из урока 21."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user:
+            await callback.message.answer("❌ У вас нет доступа.")
+            return
+        
+        # Загружаем урок 21
+        lesson_data = self.lesson_loader.get_lesson(21)
+        if not lesson_data:
+            await callback.message.answer("❌ Урок 21 не найден.")
+            return
+        
+        cards = lesson_data.get("cards", [])
+        if not cards:
+            await callback.message.answer("❌ Карточки не найдены.")
+            return
+        
+        # Парсим данные из callback
+        callback_data = callback.data.split(":")[1]
+        
+        # Если выбрана случайная карточка
+        if callback_data == "random":
+            import random
+            card = random.choice(cards)
+            card_number = card.get("number", 0)
+            logger.info(f"   🎲 Random card {card_number} selected for lesson 21 to user {user_id}")
+        else:
+            # Парсим номер карточки из callback
+            try:
+                card_number = int(callback_data)
+            except (ValueError, IndexError):
+                await callback.message.answer("❌ Ошибка: неверный номер карточки.")
+                return
+            
+            # Находим карточку
+            card = None
+            for c in cards:
+                if c.get("number") == card_number:
+                    card = c
+                    break
+            
+            if not card:
+                await callback.message.answer(f"❌ Карточка {card_number} не найдена.")
+                return
+        
+        # Отправляем карточку
+        try:
+            # Анимация перед отправкой карточки
+            await send_typing_action(self.bot, user_id, 0.3)
+            file_id = card.get("file_id")
+            centered_caption = "━━━━━━━━━━━━━━"
+            if file_id:
+                await self.bot.send_photo(user_id, file_id, caption=centered_caption)
+                logger.info(f"   ✅ Sent card {card_number} for lesson 21 to user {user_id}")
+            else:
+                # Fallback: загрузка с диска
+                from pathlib import Path
+                from aiogram.types import FSInputFile
+                import os
+                
+                file_path = card.get("path", "")
+                if file_path:
+                    normalized_path = file_path.replace('/', os.sep)
+                    project_root = Path.cwd()
+                    card_file = project_root / normalized_path
+                    
+                    if card_file.exists():
+                        photo_file = FSInputFile(card_file)
+                        centered_caption = "━━━━━━━━━━━━━━"
+                        await self.bot.send_photo(user_id, photo_file, caption=centered_caption)
+                        logger.info(f"   ✅ Sent card {card_number} (from file) for lesson 21 to user {user_id}")
+                    else:
+                        await callback.message.answer(f"❌ Файл карточки {card_number} не найден.")
+                else:
+                    await callback.message.answer(f"❌ Не удалось загрузить карточку {card_number}.")
+        except Exception as e:
+            logger.error(f"   ❌ Ошибка при отправке карточки {card_number}: {e}", exc_info=True)
+            await callback.message.answer(f"❌ Ошибка при отправке карточки {card_number}.")
+    
+    async def handle_lesson21_download_cards(self, callback: CallbackQuery):
+        """Обработчик для скачивания всех карточек урока 21."""
+        try:
+            await callback.answer("📥 Загружаю карточки...")
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user:
+            await callback.message.answer("❌ У вас нет доступа.")
+            return
+        
+        # Загружаем урок 21
+        lesson_data = self.lesson_loader.get_lesson(21)
+        if not lesson_data:
+            await callback.message.answer("❌ Урок 21 не найден.")
+            return
+        
+        cards = lesson_data.get("cards", [])
+        if not cards:
+            await callback.message.answer("❌ Карточки не найдены.")
+            return
+        
+        # Сортируем карточки по номеру
+        cards = sorted(cards, key=lambda x: x.get("number", 0))
+        
+        try:
+            from aiogram.types import InputMediaPhoto
+            
+            # Telegram позволяет отправлять до 10 медиа в одной группе
+            # Разбиваем на группы по 10 карточек
+            MAX_MEDIA_PER_GROUP = 10
+            
+            for group_start in range(0, len(cards), MAX_MEDIA_PER_GROUP):
+                group_cards = cards[group_start:group_start + MAX_MEDIA_PER_GROUP]
+                media_group = []
+                
+                for card in group_cards:
+                    card_number = card.get("number", 0)
+                    file_id = card.get("file_id")
+                    
+                    if file_id:
+                        media_group.append(
+                            InputMediaPhoto(
+                                media=file_id
+                            )
+                        )
+                    else:
+                        # Fallback: загрузка с диска
+                        from pathlib import Path
+                        from aiogram.types import FSInputFile
+                        import os
+                        
+                        file_path = card.get("path", "")
+                        if file_path:
+                            normalized_path = file_path.replace('/', os.sep)
+                            project_root = Path.cwd()
+                            card_file = project_root / normalized_path
+                            
+                            if card_file.exists():
+                                photo_file = FSInputFile(card_file)
+                                media_group.append(
+                                    InputMediaPhoto(
+                                        media=photo_file
+                                    )
+                                )
+                
+                if media_group:
+                    # Отправляем медиа-группу
+                    await self.bot.send_media_group(user_id, media_group)
+                    logger.info(f"   ✅ Sent media group {group_start // MAX_MEDIA_PER_GROUP + 1} with {len(media_group)} cards to user {user_id}")
+                    
+                    # Небольшая пауза между группами
+                    if group_start + MAX_MEDIA_PER_GROUP < len(cards):
+                        await asyncio.sleep(0.5)
+            
+            logger.info(f"   ✅ All {len(cards)} cards sent to user {user_id}")
+            
+        except Exception as e:
+            logger.error(f"   ❌ Ошибка при отправке карточек: {e}", exc_info=True)
+            await callback.message.answer("❌ Произошла ошибка при отправке карточек. Попробуйте позже.")
+    
+    async def handle_lesson19_show_levels(self, callback: CallbackQuery):
+        """Обработчик для показа всех уровней урока 19."""
+        try:
+            await callback.answer("📊 Загружаю уровни...")
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user:
+            await callback.message.answer("❌ У вас нет доступа.")
+            return
+        
+        # Загружаем урок 19
+        lesson_data = self.lesson_loader.get_lesson(19)
+        if not lesson_data:
+            await callback.message.answer("❌ Урок 19 не найден.")
+            return
+        
+        levels_images = lesson_data.get("levels_images", [])
+        if not levels_images:
+            await callback.message.answer("❌ Изображения уровней не найдены.")
+            return
+        
+        # Сортируем изображения по номеру
+        levels_images = sorted(levels_images, key=lambda x: x.get("number", 0))
+        
+        try:
+            from aiogram.types import InputMediaPhoto, InputMediaGroup
+            from pathlib import Path
+            from aiogram.types import FSInputFile
+            import os
+            
+            logger.info(f"   📊 Начинаю оптимизированную отправку {len(levels_images)} изображений для урока 19")
+            
+            # Убираем дубликаты по file_id и path
+            seen_file_ids = set()
+            seen_paths = set()
+            unique_images = []
+            
+            for image in levels_images:
+                file_id = image.get("file_id")
+                file_path = image.get("path", "")
+                
+                # Проверяем дубликаты
+                is_duplicate = False
+                if file_id and file_id in seen_file_ids:
+                    is_duplicate = True
+                    logger.debug(f"   ⏭️ Пропускаю дубликат по file_id: {image.get('number', '?')}")
+                elif file_path and file_path in seen_paths:
+                    is_duplicate = True
+                    logger.debug(f"   ⏭️ Пропускаю дубликат по path: {image.get('number', '?')}")
+                
+                if not is_duplicate:
+                    if file_id:
+                        seen_file_ids.add(file_id)
+                    if file_path:
+                        seen_paths.add(file_path)
+                    unique_images.append(image)
+            
+            logger.info(f"   📊 После удаления дубликатов: {len(unique_images)} уникальных изображений")
+            
+            # Сортируем по номеру
+            unique_images = sorted(unique_images, key=lambda x: x.get("number", 0))
+            
+            # Определяем корень проекта
+            project_root = None
+            possible_roots = [Path.cwd(), Path(__file__).parent.parent]
+            for root in possible_roots:
+                if (root / "Photo" / "video_pic").exists() or (root / "Photo" / "video_pic_optimized").exists():
+                    project_root = root
+                    break
+            if not project_root:
+                project_root = Path.cwd()
+            
+            # Создаем медиа-группу для быстрой отправки (максимум 10 в группе)
+            media_groups = []
+            current_group = []
+            
+            for image in unique_images:
+                image_number = image.get("number", 0)
+                file_id = image.get("file_id")
+                file_path = image.get("path", "")
+                
+                try:
+                    if file_id:
+                        # Используем file_id (самый быстрый способ)
+                        media_item = InputMediaPhoto(media=file_id)
+                        current_group.append(media_item)
+                    elif file_path:
+                        # Загрузка с диска
+                        normalized_path = file_path.replace('/', os.sep)
+                        image_file = project_root / normalized_path
+                        
+                        if not image_file.exists():
+                            original_path = file_path.replace('video_pic_optimized', 'video_pic')
+                            image_file = project_root / original_path.replace('/', os.sep)
+                        
+                        if image_file.exists() and image_file.is_file():
+                            photo_file = FSInputFile(image_file)
+                            media_item = InputMediaPhoto(media=photo_file)
+                            current_group.append(media_item)
+                        else:
+                            logger.warning(f"   ⚠️ Файл не найден: {file_path}")
+                            continue
+                    
+                    # Telegram ограничение: максимум 10 медиа в группе
+                    if len(current_group) >= 10:
+                        media_groups.append(current_group)
+                        current_group = []
+                        
+                except Exception as img_error:
+                    logger.error(f"   ❌ Ошибка при подготовке изображения {image_number}: {img_error}")
+                    continue
+            
+            # Добавляем последнюю группу, если она не пустая
+            if current_group:
+                media_groups.append(current_group)
+            
+            # Отправляем медиа-группы
+            total_sent = 0
+            for i, media_group in enumerate(media_groups):
+                try:
+                    if len(media_group) == 1:
+                        # Одно изображение отправляем отдельно
+                        media_item = media_group[0]
+                        if isinstance(media_item.media, str):
+                            # file_id
+                            await self.bot.send_photo(user_id, media_item.media)
+                        else:
+                            # FSInputFile
+                            await self.bot.send_photo(user_id, media_item.media)
+                        total_sent += 1
+                    else:
+                        # Медиа-группа (2-10 изображений)
+                        await self.bot.send_media_group(user_id, media_group)
+                        total_sent += len(media_group)
+                    
+                    # Минимальная пауза между группами для стабильности API
+                    if i < len(media_groups) - 1:
+                        await asyncio.sleep(0.1)
+                        
+                except Exception as group_error:
+                    logger.error(f"   ❌ Ошибка при отправке медиа-группы {i+1}: {group_error}")
+                    # Пробуем отправить по одному
+                    for media_item in media_group:
+                        try:
+                            if isinstance(media_item.media, str):
+                                await self.bot.send_photo(user_id, media_item.media)
+                            else:
+                                await self.bot.send_photo(user_id, media_item.media)
+                            total_sent += 1
+                            await asyncio.sleep(0.1)
+                        except:
+                            continue
+            
+            if total_sent > 0:
+                logger.info(f"   ✅ Отправлено {total_sent} уникальных изображений")
+                if total_sent < len(unique_images):
+                    await callback.message.answer(f"✅ Отправлено {total_sent} из {len(unique_images)} изображений.")
+            else:
+                raise Exception(f"Не удалось отправить ни одного изображения из {len(unique_images)}")
+            
+        except Exception as e:
+            logger.error(f"   ❌ Ошибка при отправке уровней: {e}", exc_info=True)
+            logger.error(f"   📊 Debug info: total_images={len(levels_images)}, user_id={user_id}")
+            
+            # Пробуем отправить изображения по одному, если медиа-группа не работает
+            try:
+                logger.info(f"   🔄 Пробую отправить изображения по одному...")
+                sent_count = 0
+                
+                for image in levels_images:
+                    file_id = image.get("file_id")
+                    file_path = image.get("path", "")
+                    
+                    try:
+                        if file_id:
+                            await self.bot.send_photo(user_id, file_id)
+                            sent_count += 1
+                            await asyncio.sleep(0.3)
+                        elif file_path:
+                            from pathlib import Path
+                            from aiogram.types import FSInputFile
+                            import os
+                            
+                            normalized_path = file_path.replace('/', os.sep)
+                            project_root = Path.cwd()
+                            image_file = project_root / normalized_path
+                            
+                            # Если оптимизированный файл не найден, пробуем оригинальный
+                            if not image_file.exists():
+                                original_path = file_path.replace('video_pic_optimized', 'video_pic')
+                                original_file = project_root / original_path.replace('/', os.sep)
+                                if original_file.exists():
+                                    image_file = original_file
+                            
+                            if image_file.exists():
+                                photo_file = FSInputFile(image_file)
+                                await self.bot.send_photo(user_id, photo_file)
+                                sent_count += 1
+                                await asyncio.sleep(0.3)
+                            else:
+                                logger.warning(f"   ⚠️ Файл не найден: {file_path}")
+                    except Exception as single_error:
+                        logger.error(f"   ❌ Ошибка при отправке одного изображения: {single_error}")
+                
+                if sent_count > 0:
+                    await callback.message.answer(f"✅ Отправлено {sent_count} из {len(levels_images)} изображений.")
+                else:
+                    await callback.message.answer("❌ Не удалось отправить изображения. Проверьте логи.")
+            except Exception as fallback_error:
+                logger.error(f"   ❌ Ошибка в fallback режиме: {fallback_error}", exc_info=True)
+                await callback.message.answer("❌ Произошла ошибка при отправке уровней. Попробуйте позже.")
+    
+    async def handle_final_message(self, callback: CallbackQuery):
+        """Обработчик для финального сообщения урока 30."""
+        try:
+            await callback.answer("🎊 Загружаю финальное сообщение...")
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user:
+            await callback.message.answer("❌ У вас нет доступа.")
+            return
+        
+        # Загружаем урок 30
+        lesson_data = self.lesson_loader.get_lesson(30)
+        if not lesson_data:
+            await callback.message.answer("❌ Урок 30 не найден.")
+            return
+        
+        try:
+            follow_up_text = lesson_data.get("follow_up_text", "")
+            follow_up_photo_path = lesson_data.get("follow_up_photo_path", "")
+            follow_up_photo_file_id = lesson_data.get("follow_up_photo_file_id", "")
+            
+            persistent_keyboard = self._create_persistent_keyboard()
+            
+            # Отправляем фото с текстом в caption, если есть фото
+            # Telegram ограничение: caption максимум 1024 символа
+            photo_sent = False
+            if follow_up_photo_file_id:
+                try:
+                    # Анимация перед отправкой фото
+                    await send_typing_action(self.bot, user_id, 0.6)
+                    # Разделяем текст на части, если он длиннее 1024 символов
+                    # Важно: не делим слова при разбиении
+                    if follow_up_text and follow_up_text.strip():
+                            if len(follow_up_text) > 1024:
+                                # Ищем оптимальную точку разбиения - не делим слова
+                                split_point = 1024
+                                
+                                # Проверяем, не попадает ли слово "Отснятый" на границу разбиения
+                                # Слово начинается на позиции 1023, нужно переместить его полностью во второй блок
+                                word_to_check = "Отснятый"
+                                word_index = follow_up_text.find(word_to_check, split_point - 30, split_point + 10)
+                                if word_index != -1:
+                                    # Найдено слово "Отснятый" в области границы разбиения
+                                    if word_index <= split_point:
+                                        # Слово начинается до или на границе - сдвигаем границу перед началом слова
+                                        # Ищем последний перенос строки перед началом слова
+                                        optimal_split = follow_up_text.rfind('\n', 0, word_index)
+                                        if optimal_split != -1 and optimal_split > split_point - 50:
+                                            split_point = optimal_split
+                                        else:
+                                            # Если переноса строки нет, ищем пробел
+                                            optimal_split = follow_up_text.rfind(' ', 0, word_index)
+                                            if optimal_split != -1 and optimal_split > split_point - 50:
+                                                split_point = optimal_split
+                                            else:
+                                                # Если пробела нет, разбиваем прямо перед словом
+                                                split_point = word_index
+                                    elif word_index < split_point + len(word_to_check):
+                                        # Слово пересекает границу разбиения - сдвигаем границу перед началом слова
+                                        optimal_split = follow_up_text.rfind('\n', 0, word_index)
+                                        if optimal_split != -1 and optimal_split > split_point - 50:
+                                            split_point = optimal_split
+                                        else:
+                                            optimal_split = follow_up_text.rfind(' ', 0, word_index)
+                                            if optimal_split != -1 and optimal_split > split_point - 50:
+                                                split_point = optimal_split
+                                            else:
+                                                split_point = word_index
+                                
+                                # Если не нашли слово "Отснятый", используем стандартную логику
+                                if word_index == -1 or split_point == 1024:
+                                    # Ищем последний пробел или перенос строки перед 1024-м символом
+                                    # Но не раньше, чем за 50 символов от 1024
+                                    search_start = max(0, split_point - 50)
+                                    optimal_split = follow_up_text.rfind('\n', search_start, split_point)
+                                    if optimal_split == -1:
+                                        optimal_split = follow_up_text.rfind(' ', search_start, split_point)
+                                    if optimal_split != -1 and optimal_split > split_point - 100:
+                                        split_point = optimal_split
+                                
+                                caption_text = follow_up_text[:split_point].rstrip()
+                                remaining_text = follow_up_text[split_point:].lstrip()
+                            else:
+                                caption_text = follow_up_text
+                                remaining_text = None
+                    else:
+                        caption_text = "━━━━━━━━━━━━━━"
+                        remaining_text = None
+                    
+                    await self.bot.send_photo(user_id, follow_up_photo_file_id, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None)
+                    logger.info(f"   ✅ Sent final message photo with text (file_id) for lesson 30")
+                    photo_sent = True
+                    
+                    # Если есть остаток текста, отправляем его отдельным сообщением
+                    if remaining_text:
+                        await asyncio.sleep(0.5)
+                        await self.bot.send_message(user_id, remaining_text, reply_markup=persistent_keyboard)
+                        logger.info(f"   ✅ Sent remaining final message text for lesson 30")
+                    
+                    await asyncio.sleep(0.8)
+                except Exception as photo_error:
+                    logger.error(f"   ❌ Не удалось отправить финальное фото (file_id) для урока 30: {photo_error}", exc_info=True)
+            
+            if not photo_sent and follow_up_photo_path:
+                try:
+                    from pathlib import Path
+                    from aiogram.types import FSInputFile
+                    import os
+                    
+                    # Нормализуем путь
+                    normalized_path = follow_up_photo_path.replace('/', os.sep)
+                    photo_path = Path(normalized_path)
+                    if not photo_path.exists():
+                        project_root = Path.cwd()
+                        photo_path = project_root / normalized_path
+                    
+                    # Пробуем альтернативные пути
+                    if not photo_path.exists():
+                        possible_paths = [
+                            Path("Photo/30/photo_5377557667917794132_y.jpg"),
+                            Path("Photo/30/photo_5404715149857328372_y.jpg"),
+                            Path.cwd() / "Photo" / "30" / "photo_5377557667917794132_y.jpg",
+                            Path.cwd() / "Photo" / "30" / "photo_5404715149857328372_y.jpg",
+                        ]
+                        for possible_path in possible_paths:
+                            if possible_path.exists():
+                                photo_path = possible_path
+                                logger.info(f"   🔍 Found photo at alternative path: {photo_path.absolute()}")
+                                break
+                    
+                    if photo_path.exists():
+                        # Анимация перед отправкой фото
+                        await send_typing_action(self.bot, user_id, 0.6)
+                        photo_file = FSInputFile(photo_path)
+                        # Разделяем текст на части, если он длиннее 1024 символов
+                        # Важно: не делим слова при разбиении
+                        if follow_up_text and follow_up_text.strip():
+                            if len(follow_up_text) > 1024:
+                                # Ищем оптимальную точку разбиения - не делим слова
+                                split_point = 1024
+                                
+                                # Проверяем, не попадает ли слово "Отснятый" на границу разбиения
+                                # Слово начинается на позиции 1023, нужно переместить его полностью во второй блок
+                                word_to_check = "Отснятый"
+                                word_index = follow_up_text.find(word_to_check, split_point - 30, split_point + 10)
+                                if word_index != -1:
+                                    # Найдено слово "Отснятый" в области границы разбиения
+                                    if word_index <= split_point:
+                                        # Слово начинается до или на границе - сдвигаем границу перед началом слова
+                                        # Ищем последний перенос строки перед началом слова
+                                        optimal_split = follow_up_text.rfind('\n', 0, word_index)
+                                        if optimal_split != -1 and optimal_split > split_point - 50:
+                                            split_point = optimal_split
+                                        else:
+                                            # Если переноса строки нет, ищем пробел
+                                            optimal_split = follow_up_text.rfind(' ', 0, word_index)
+                                            if optimal_split != -1 and optimal_split > split_point - 50:
+                                                split_point = optimal_split
+                                            else:
+                                                # Если пробела нет, разбиваем прямо перед словом
+                                                split_point = word_index
+                                    elif word_index < split_point + len(word_to_check):
+                                        # Слово пересекает границу разбиения - сдвигаем границу перед началом слова
+                                        optimal_split = follow_up_text.rfind('\n', 0, word_index)
+                                        if optimal_split != -1 and optimal_split > split_point - 50:
+                                            split_point = optimal_split
+                                        else:
+                                            optimal_split = follow_up_text.rfind(' ', 0, word_index)
+                                            if optimal_split != -1 and optimal_split > split_point - 50:
+                                                split_point = optimal_split
+                                            else:
+                                                split_point = word_index
+                                
+                                # Если не нашли слово "Отснятый", используем стандартную логику
+                                if word_index == -1 or split_point == 1024:
+                                    # Ищем последний пробел или перенос строки перед 1024-м символом
+                                    # Но не раньше, чем за 50 символов от 1024
+                                    search_start = max(0, split_point - 50)
+                                    optimal_split = follow_up_text.rfind('\n', search_start, split_point)
+                                    if optimal_split == -1:
+                                        optimal_split = follow_up_text.rfind(' ', search_start, split_point)
+                                    if optimal_split != -1 and optimal_split > split_point - 100:
+                                        split_point = optimal_split
+                                
+                                caption_text = follow_up_text[:split_point].rstrip()
+                                remaining_text = follow_up_text[split_point:].lstrip()
+                            else:
+                                caption_text = follow_up_text
+                                remaining_text = None
+                        else:
+                            caption_text = "━━━━━━━━━━━━━━"
+                            remaining_text = None
+                        
+                        await self.bot.send_photo(user_id, photo_file, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None)
+                        logger.info(f"   ✅ Sent final message photo with text (file path: {photo_path}) for lesson 30")
+                        photo_sent = True
+                        
+                        # Если есть остаток текста, отправляем его отдельным сообщением
+                        if remaining_text:
+                            await asyncio.sleep(0.5)
+                            await self.bot.send_message(user_id, remaining_text, reply_markup=persistent_keyboard)
+                            logger.info(f"   ✅ Sent remaining final message text for lesson 30")
+                        
+                        await asyncio.sleep(0.8)
+                    else:
+                        logger.error(f"   ❌ Final message photo not found: {photo_path.absolute()}")
+                except Exception as photo_error:
+                    logger.error(f"   ❌ Не удалось отправить финальное фото (file path) для урока 30: {photo_error}", exc_info=True)
+            
+            # Отправляем только текст, если фото нет
+            if not photo_sent and follow_up_text and follow_up_text.strip():
+                try:
+                    # Анимация перед отправкой текста
+                    await send_typing_action(self.bot, user_id, 0.8)
+                    await self.bot.send_message(user_id, follow_up_text, reply_markup=persistent_keyboard)
+                    logger.info(f"   ✅ Sent final message text (no photo) for lesson 30")
+                except Exception as text_error:
+                    error_msg = str(text_error)
+                    logger.error(f"   ❌ Error sending final message text for lesson 30: {error_msg}", exc_info=True)
+                    # Пробуем отправить еще раз без клавиатуры
+                    try:
+                        await self.bot.send_message(user_id, follow_up_text)
+                        logger.info(f"   ✅ Sent final message text without keyboard for lesson 30")
+                    except Exception as retry_error:
+                        logger.error(f"   ❌ Retry also failed for lesson 30: {retry_error}")
+                        await callback.message.answer("❌ Произошла ошибка при отправке финального сообщения. Попробуйте позже.")
+            elif not photo_sent:
+                await callback.message.answer("❌ Текст финального сообщения не найден.")
+                
+        except Exception as e:
+            logger.error(f"   ❌ Ошибка при отправке финального сообщения: {e}", exc_info=True)
+            await callback.message.answer("❌ Произошла ошибка при отправке финального сообщения. Попробуйте позже.")
     
     async def _show_navigator(self, user_id: int, message_or_callback):
         """Показывает навигатор курса (вспомогательный метод)."""
@@ -681,6 +1401,93 @@ class CourseBot:
             f"💡 <i>Совет: Чем конкретнее вопрос, тем быстрее вы получите ответ! 🎯</i>"
         )
     
+    async def _send_media_item(self, user_id: int, media_item: dict, day: int) -> bool:
+        """
+        Отправляет один медиа-файл (фото или видео) с анимацией и центрированием.
+        
+        Args:
+            user_id: ID пользователя
+            media_item: Словарь с данными медиа (type, file_id, path)
+            day: Номер урока (для логирования)
+        
+        Returns:
+            True если медиа успешно отправлено, False в противном случае
+        """
+        try:
+            media_type = media_item.get("type", "photo")
+            file_id = media_item.get("file_id")
+            file_path = media_item.get("path")
+            
+            # Анимация: показываем, что бот работает (уменьшено для скорости)
+            await send_typing_action(self.bot, user_id, 0.2)
+            
+            # Центрированная подпись с эмодзи-разделителями для визуального центрирования
+            centered_caption = "━━━━━━━━━━━━━━"
+            
+            # Используем file_id если есть (самый быстрый способ)
+            if file_id:
+                if media_type == "photo":
+                    await self.bot.send_photo(user_id, file_id, caption=centered_caption)
+                elif media_type == "video":
+                    # Для видео не указываем width/height, чтобы сохранить родные пропорции
+                    # Урок 1 имеет специальную обработку в _send_lesson_from_json (не доходит до сюда)
+                    # Для всех остальных видео (включая уроки 11 и 30) сохраняем пропорции
+                    await self.bot.send_video(user_id, file_id, caption=centered_caption, supports_streaming=True)
+                await asyncio.sleep(0.2)  # Минимальная пауза для стабильности
+                return True
+            
+            # Fallback: загрузка с диска (только если нет file_id)
+            if file_path:
+                from pathlib import Path
+                from aiogram.types import FSInputFile
+                import os
+                
+                # Определяем корень проекта (кэшируем)
+                if not hasattr(self, '_project_root_cache'):
+                    possible_roots = [
+                        Path.cwd(),
+                        Path(__file__).parent.parent,
+                    ]
+                    self._project_root_cache = None
+                    for root in possible_roots:
+                        if (root / "Photo" / "video_pic").exists() or (root / "Photo" / "video_pic_optimized").exists():
+                            self._project_root_cache = root
+                            break
+                    if not self._project_root_cache:
+                        self._project_root_cache = Path.cwd()
+                
+                project_root = self._project_root_cache
+                normalized_path = file_path.replace('/', os.sep).replace('\\', os.sep)
+                
+                # Пробуем сначала оптимизированную версию, потом оригинальную
+                possible_paths = [
+                    project_root / normalized_path,  # Указанный путь
+                    project_root / normalized_path.replace('video_pic', 'video_pic_optimized'),  # Оптимизированная версия
+                ]
+                
+                media_file = None
+                for test_path in possible_paths:
+                    if test_path.exists() and test_path.is_file():
+                        media_file = FSInputFile(test_path)
+                        break
+                
+                if media_file:
+                    if media_type == "photo":
+                        await self.bot.send_photo(user_id, media_file, caption=centered_caption)
+                    elif media_type == "video":
+                        # Для видео не указываем width/height, чтобы сохранить родные пропорции
+                        # Урок 1 имеет специальную обработку в _send_lesson_from_json (не доходит до сюда)
+                        # Для всех остальных видео (включая уроки 11 и 30) сохраняем пропорции
+                        await self.bot.send_video(user_id, media_file, caption=centered_caption, supports_streaming=True)
+                    await asyncio.sleep(0.2)  # Минимальная пауза для стабильности
+                    return True
+        except Exception as e:
+            # Ошибка на одном медиа не прерывает урок
+            logger.debug(f"   ⚠️ Медиа не отправлено для урока {day}: {e}")
+            return False
+        
+        return False
+    
     def _split_long_message(self, text: str, max_length: int = 4000) -> list:
         """
         Разбивает длинное сообщение на части, стараясь разрывать по абзацам.
@@ -748,6 +1555,25 @@ class CourseBot:
         
         return parts if parts else [text]
     
+    async def _safe_send_message(self, chat_id: int, text: str, reply_markup=None, **kwargs):
+        """
+        Безопасная отправка сообщения с проверкой на пустой текст.
+        Фильтрует технические ошибки Telegram API.
+        """
+        if not text or not text.strip():
+            logger.warning(f"⚠️ Attempted to send empty message to {chat_id}, using zero-width space")
+            text = "\u200B"
+        
+        try:
+            await self.bot.send_message(chat_id, text, reply_markup=reply_markup, **kwargs)
+        except Exception as e:
+            error_msg = str(e)
+            # Фильтруем технические ошибки о пустых сообщениях
+            if "text must be non-empty" in error_msg or "message text is empty" in error_msg:
+                logger.warning(f"⚠️ Empty message error suppressed for {chat_id}: {error_msg}")
+            else:
+                raise
+    
     async def _send_lesson_from_json(self, user: User, lesson_data: dict, day: int = None, skip_intro: bool = False, skip_about_me: bool = False):
         """
         Отправляет урок из JSON структуры пользователю.
@@ -784,33 +1610,170 @@ class CourseBot:
             # Отправляем фото в начале урока, если есть (для урока 30)
             if intro_photo_file_id or intro_photo_path:
                 try:
+                    # Анимация перед отправкой фото
+                    await send_typing_action(self.bot, user.user_id, 0.4)
+                    centered_caption = "━━━━━━━━━━━━━━"
+                    
                     if intro_photo_file_id:
-                        await self.bot.send_photo(user.user_id, intro_photo_file_id)
+                        await self.bot.send_photo(user.user_id, intro_photo_file_id, caption=centered_caption)
                         logger.info(f"   ✅ Sent intro photo (file_id) for lesson {day}")
                     elif intro_photo_path:
                         from pathlib import Path
                         from aiogram.types import FSInputFile
                         photo_file = FSInputFile(Path(intro_photo_path))
-                        await self.bot.send_photo(user.user_id, photo_file)
+                        await self.bot.send_photo(user.user_id, photo_file, caption=centered_caption)
                         logger.info(f"   ✅ Sent intro photo (file path) for lesson {day}")
-                    await asyncio.sleep(0.5)  # Небольшая пауза после фото
+                    await asyncio.sleep(0.6)  # Пауза для плавности
                 except Exception as photo_error:
                     logger.warning(f"   ⚠️ Не удалось отправить intro photo для урока {day}: {photo_error}")
             
+            # Получаем список медиа для урока
+            media_list = lesson_data.get("media", [])
+            
+            # Для урока 0: извлекаем видео, чтобы отправить его с intro_text в caption
+            lesson0_video_with_intro = None
+            if (day == 0 or str(day) == "0") and media_list and intro_text:
+                # Ищем первое видео в списке медиа
+                for i, media_item in enumerate(media_list):
+                    if media_item.get("type") == "video":
+                        lesson0_video_with_intro = media_item
+                        # Удаляем его из основного списка медиа
+                        media_list = media_list[:i] + media_list[i+1:]
+                        logger.info(f"   📹 Извлечено видео для урока 0 с intro_text, осталось медиа: {len(media_list)}")
+                        break
+            
+            # Для урока 1: извлекаем видео, чтобы отправить его перед заданием
+            lesson1_video_media = None
+            if (day == 1 or str(day) == "1") and media_list:
+                # Ищем видео в списке медиа
+                for i, media_item in enumerate(media_list):
+                    if media_item.get("type") == "video":
+                        lesson1_video_media = media_item
+                        # Удаляем его из основного списка медиа, чтобы не отправлять дважды
+                        media_list = media_list[:i] + media_list[i+1:]
+                        media_count = len(media_list)  # Обновляем количество медиа
+                        logger.info(f"   📹 Извлечено видео для урока 1, осталось медиа: {len(media_list)}")
+                        break
+            
+            # Для урока 30: извлекаем первое видео, чтобы отправить его перед заданием
+            first_video_before_task = None
+            if (day == 30 or str(day) == "30") and media_list:
+                # Ищем первое видео в списке медиа
+                for i, media_item in enumerate(media_list):
+                    if media_item.get("type") == "video":
+                        first_video_before_task = media_item
+                        # Удаляем его из основного списка медиа
+                        media_list = media_list[:i] + media_list[i+1:]
+                        logger.info(f"   📹 Извлечено первое видео для урока 30, осталось медиа: {len(media_list)}")
+                        break
+            
+            # Инициализируем индекс медиа для распределения
+            # Пересчитываем media_count после возможного извлечения видео для урока 0 или 30
+            media_index = 0
+            media_count = len(media_list) if media_list else 0
+            
+            # Анимация: показываем, что бот работает
+            await send_typing_action(self.bot, user.user_id, 0.6)
+            
+            # Формируем заголовок урока с анимационными эффектами
             lesson_message = (
                 f"{create_premium_separator()}\n"
-                f"📚 <b>{title}</b>\n"
+                f"✨ 📚 <b>{title}</b> 📚 ✨\n"
                 f"{create_premium_separator()}\n\n"
             )
             
+            # Отправляем заголовок урока
+            await self.bot.send_message(user.user_id, lesson_message)
+            await asyncio.sleep(0.5)  # Пауза для плавности
+            
+            # Для урока 0: отправляем видео с intro_text в caption сразу после заголовка
+            lesson0_intro_sent_with_video = False
+            if lesson0_video_with_intro and intro_text and not skip_intro:
+                try:
+                    await send_typing_action(self.bot, user.user_id, 0.4)
+                    video_file_id = lesson0_video_with_intro.get("file_id")
+                    video_file_path = lesson0_video_with_intro.get("path")
+                    
+                    # Центрированная подпись с intro_text
+                    centered_caption = f"━━━━━━━━━━━━━━\n{intro_text}\n━━━━━━━━━━━━━━"
+                    
+                    if video_file_id:
+                        await self.bot.send_video(user.user_id, video_file_id, caption=centered_caption)
+                        logger.info(f"   ✅ Sent lesson 0 video with intro_text (file_id) for lesson {day}")
+                    elif video_file_path:
+                        from pathlib import Path
+                        from aiogram.types import FSInputFile
+                        import os
+                        
+                        # Определяем корень проекта
+                        if not hasattr(self, '_project_root_cache'):
+                            possible_roots = [
+                                Path.cwd(),
+                                Path(__file__).parent.parent,
+                            ]
+                            self._project_root_cache = None
+                            for root in possible_roots:
+                                if (root / "Photo" / "video_pic").exists() or (root / "Photo" / "video_pic_optimized").exists():
+                                    self._project_root_cache = root
+                                    break
+                            if not self._project_root_cache:
+                                self._project_root_cache = Path.cwd()
+                        
+                        normalized_path = video_file_path.replace('/', os.sep)
+                        video_path = self._project_root_cache / normalized_path
+                        if not video_path.exists():
+                            video_path = Path(normalized_path)
+                        
+                        if video_path.exists():
+                            video_file = FSInputFile(video_path)
+                            await self.bot.send_video(user.user_id, video_file, caption=centered_caption)
+                            logger.info(f"   ✅ Sent lesson 0 video with intro_text (file path: {video_path}) for lesson {day}")
+                        else:
+                            logger.error(f"   ❌ Lesson 0 video not found: {video_path.absolute()}")
+                    else:
+                        logger.error(f"   ❌ Lesson 0 video has no file_id or path")
+                    
+                    lesson0_intro_sent_with_video = True
+                    await asyncio.sleep(0.6)
+                except Exception as video_error:
+                    logger.error(f"   ❌ Не удалось отправить видео урока 0 с intro_text: {video_error}", exc_info=True)
+                    lesson0_intro_sent_with_video = False
+            
+            # ЛОГИКА РАЗМЕЩЕНИЯ МЕДИА:
+            # Если медиа одно - размещаем сразу после заголовка
+            # Если медиа несколько - распределяем по структуре урока
+            # Исключение: для урока 0 видео уже отправлено с intro_text
+            if media_count == 1 and not lesson0_video_with_intro:
+                # Одно медиа - сразу после заголовка
+                await self._send_media_item(user.user_id, media_list[0], day)
+                logger.info(f"   ✅ Sent single media item after title for lesson {day}")
+                media_index = 1  # Помечаем, что медиа отправлено
+            elif media_count > 1 and not lesson0_video_with_intro:
+                # Несколько медиа - распределяем по структуре урока
+                # Первое медиа - сразу после заголовка
+                await self._send_media_item(user.user_id, media_list[media_index], day)
+                logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} after title for lesson {day}")
+                media_index += 1
+            
             # Отправляем вводный текст отдельным сообщением, если есть (пропускаем для навигатора)
-            if intro_text and not skip_intro:
+            # Для урока 0 intro_text уже отправлен с видео, поэтому пропускаем
+            if intro_text and not skip_intro and not lesson0_intro_sent_with_video:
+                # Анимация перед отправкой текста
+                await send_typing_action(self.bot, user.user_id, 0.5)
                 intro_message = f"{intro_text}\n\n{create_premium_separator()}\n\n"
                 await self.bot.send_message(user.user_id, intro_message)
                 logger.info(f"   Sent intro_text for lesson {day}")
-                await asyncio.sleep(0.3)  # Небольшая пауза
+                await asyncio.sleep(0.5)  # Пауза для плавности
+                
+                # Второе медиа - после intro_text (если есть несколько медиа)
+                if media_count > 1 and media_index < media_count:
+                    await self._send_media_item(user.user_id, media_list[media_index], day)
+                    logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} after intro_text for lesson {day}")
+                    media_index += 1
             elif intro_text and skip_intro:
                 logger.info(f"   Skipped intro_text for lesson {day} (navigator mode)")
+            elif intro_text and lesson0_intro_sent_with_video:
+                logger.info(f"   Skipped intro_text for lesson {day} (already sent with video)")
             
             # Отправляем "ОБО МНЕ" отдельным сообщением с фото (для урока 1) - сразу после intro_text (пропускаем для навигатора)
             about_me_text = lesson_data.get("about_me_text", "")
@@ -825,13 +1788,18 @@ class CourseBot:
                 # Флаг для отслеживания успешной отправки
                 about_me_sent = False
                 
+                # Анимация перед отправкой фото
+                await send_typing_action(self.bot, user.user_id, 0.4)
+                
                 # Пробуем отправить фото, если есть file_id (приоритет)
                 if about_me_photo_file_id:
                     try:
+                        # Центрированная подпись
+                        centered_caption = f"━━━━━━━━━━━━━━\n{about_me_text}\n━━━━━━━━━━━━━━"
                         await self.bot.send_photo(
                             user.user_id,
                             about_me_photo_file_id,
-                            caption=about_me_text
+                            caption=centered_caption
                         )
                         logger.info(f"   ✅ Sent 'ОБО МНЕ' photo (file_id) for lesson {day}")
                         about_me_sent = True
@@ -843,10 +1811,12 @@ class CourseBot:
                                 from pathlib import Path
                                 from aiogram.types import FSInputFile
                                 photo_file = FSInputFile(Path(about_me_photo_path))
+                                # Центрированная подпись
+                                centered_caption = f"━━━━━━━━━━━━━━\n{about_me_text}\n━━━━━━━━━━━━━━"
                                 await self.bot.send_photo(
                                     user.user_id,
                                     photo_file,
-                                    caption=about_me_text
+                                    caption=centered_caption
                                 )
                                 logger.info(f"   ✅ Sent 'ОБО МНЕ' photo (file path) for lesson {day}")
                                 about_me_sent = True
@@ -864,13 +1834,17 @@ class CourseBot:
                 # Если нет file_id, но есть путь к файлу
                 elif about_me_photo_path and not about_me_sent:
                     try:
+                        # Анимация перед отправкой фото
+                        await send_typing_action(self.bot, user.user_id, 0.4)
                         from pathlib import Path
                         from aiogram.types import FSInputFile
                         photo_file = FSInputFile(Path(about_me_photo_path))
+                        # Центрированная подпись
+                        centered_caption = f"━━━━━━━━━━━━━━\n{about_me_text}\n━━━━━━━━━━━━━━"
                         await self.bot.send_photo(
                             user.user_id,
                             photo_file,
-                            caption=about_me_text
+                            caption=centered_caption
                         )
                         logger.info(f"   ✅ Sent 'ОБО МНЕ' photo (file path) for lesson {day}")
                         about_me_sent = True
@@ -888,154 +1862,529 @@ class CourseBot:
             else:
                 logger.warning(f"   ⚠️ No 'ОБО МНЕ' text found for lesson {day}")
             
-            # Добавляем основной текст
-            lesson_message += f"{text}\n\n"
+            # Определяем, сколько медиа осталось для распределения по основному тексту
+            remaining_media = media_count - media_index if media_count > media_index else 0
             
-            # Добавляем задание, если есть
+            # Если есть медиа для распределения по тексту, разбиваем текст на части
+            if remaining_media > 0 and text:
+                # Для урока 1: специальная логика - видео после текста "Наш корабль берёт курс"
+                lesson1_video_placed = False
+                lesson2_photo_placed = False
+                
+                # Для урока 2: специальная логика - картинка перед текстом "Кирпич нейтральный"
+                if (day == 2 or str(day) == "2") and remaining_media == 1 and media_list:
+                    # Ищем абзац с текстом "🧱 Кирпич\nнейтральный" или "Кирпич\nнейтральный"
+                    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                    target_paragraph_index = None
+                    
+                    for i, paragraph in enumerate(paragraphs):
+                        if ("🧱 Кирпич" in paragraph and "нейтральный" in paragraph) or \
+                           ("Кирпич\nнейтральный" in paragraph) or \
+                           ("🧱 Кирпич\nнейтральный" in paragraph):
+                            target_paragraph_index = i
+                            break
+                    
+                    if target_paragraph_index is not None:
+                        # Отправляем все абзацы до целевого
+                        for i in range(target_paragraph_index):
+                            if paragraphs[i]:
+                                await self.bot.send_message(user.user_id, paragraphs[i])
+                                await asyncio.sleep(0.2)
+                        
+                        # Отправляем картинку перед целевым абзацем
+                        await self._send_media_item(user.user_id, media_list[media_index], day)
+                        logger.info(f"   ✅ Sent lesson 2 photo before target paragraph for lesson {day}")
+                        media_index += 1
+                        lesson2_photo_placed = True
+                        await asyncio.sleep(0.3)
+                        
+                        # Отправляем целевой абзац после картинки
+                        if paragraphs[target_paragraph_index]:
+                            await self.bot.send_message(user.user_id, paragraphs[target_paragraph_index])
+                            await asyncio.sleep(0.2)
+                        
+                        # Отправляем оставшиеся абзацы после целевого
+                        for i in range(target_paragraph_index + 1, len(paragraphs)):
+                            if paragraphs[i]:
+                                await self.bot.send_message(user.user_id, paragraphs[i])
+                                await asyncio.sleep(0.2)
+                
+                # Для урока 1: удаляем текст "Добро пожаловать на корвет" из основного текста, 
+                # так как он будет отправлен с видео перед заданием
+                if (day == 1 or str(day) == "1") and lesson1_video_media:
+                    # Удаляем абзац с текстом "Добро пожаловать на корвет" из текста
+                    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                    text_paragraphs = []
+                    
+                    for i, paragraph in enumerate(paragraphs):
+                        if "Добро пожаловать на корвет" in paragraph:
+                            # Текст будет отправлен с видео перед заданием, пропускаем его здесь
+                            lesson1_video_placed = True
+                            logger.info(f"   ✅ Removed 'Добро пожаловать' text from main text for lesson 1")
+                        else:
+                            text_paragraphs.append(paragraph)
+                    
+                    # Обновляем текст без абзаца "Добро пожаловать"
+                    if text_paragraphs:
+                        text = '\n\n'.join(text_paragraphs)
+                
+                # Если медиа урока 1 или 2 уже размещено, выходим из этой логики
+                if lesson1_video_placed or lesson2_photo_placed:
+                    # Отправляем оставшиеся медиа после последнего абзаца (если есть)
+                    while media_index < media_count:
+                        await self._send_media_item(user.user_id, media_list[media_index], day)
+                        logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
+                        media_index += 1
+                        await asyncio.sleep(0.3)
+                else:
+                    # Стандартная логика распределения медиа для всех остальных уроков
+                    # Разбиваем текст на абзацы (по двойным переносам строк)
+                    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                    
+                    if len(paragraphs) > 0:
+                        # Распределяем медиа равномерно по абзацам
+                        # Вычисляем интервалы между медиа
+                        if len(paragraphs) >= remaining_media:
+                            # Если абзацев больше или равно медиа, распределяем равномерно
+                            step = len(paragraphs) // (remaining_media + 1)
+                            media_positions = [step * (i + 1) for i in range(remaining_media)]
+                        else:
+                            # Если абзацев меньше медиа, размещаем медиа после каждого абзаца
+                            media_positions = list(range(1, len(paragraphs) + 1))[:remaining_media]
+                        
+                        # Отправляем абзацы с медиа между ними
+                        for i, paragraph in enumerate(paragraphs):
+                            # Отправляем абзац
+                            if paragraph:
+                                await self.bot.send_message(user.user_id, paragraph)
+                                await asyncio.sleep(0.2)
+                            
+                            # Если наступила позиция для медиа, отправляем его
+                            if (i + 1) in media_positions and media_index < media_count:
+                                await self._send_media_item(user.user_id, media_list[media_index], day)
+                                logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} in text for lesson {day}")
+                                media_index += 1
+                                await asyncio.sleep(0.3)
+                        
+                        # Отправляем оставшиеся медиа после последнего абзаца (если есть)
+                        while media_index < media_count:
+                            await self._send_media_item(user.user_id, media_list[media_index], day)
+                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
+                            media_index += 1
+                            await asyncio.sleep(0.3)
+                    else:
+                        # Если нет абзацев, отправляем весь текст и медиа после него
+                        if text.strip():
+                            await self.bot.send_message(user.user_id, text)
+                            await asyncio.sleep(0.3)
+                        
+                        # Отправляем все оставшиеся медиа
+                        while media_index < media_count:
+                            await self._send_media_item(user.user_id, media_list[media_index], day)
+                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
+                            media_index += 1
+                            await asyncio.sleep(0.3)
+            else:
+                # Если медиа нет или уже все отправлены, отправляем текст как обычно
+                if text.strip():
+                    # Анимация перед отправкой текста
+                    await send_typing_action(self.bot, user.user_id, 0.5)
+                    await self.bot.send_message(user.user_id, text)
+                    await asyncio.sleep(0.5)  # Пауза для плавности
+            
+            # Для урока 19 отправляем кнопку "Показать все уровни" ПЕРЕД заданием
+            if (day == 19 or str(day) == "19"):
+                levels_images = lesson_data.get("levels_images", [])
+                if levels_images:
+                    # Анимация перед отправкой кнопки
+                    await send_typing_action(self.bot, user.user_id, 0.4)
+                    show_levels_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text="📊 Показать все уровни",
+                            callback_data="lesson19_show_levels"
+                        )
+                    ]])
+                    await self.bot.send_message(
+                        user.user_id,
+                        "📊 <b>Эмоциональные уровни</b>\n\nНажмите кнопку ниже, чтобы посмотреть все уровни:",
+                        reply_markup=show_levels_keyboard,
+                        parse_mode="HTML"
+                    )
+                    await asyncio.sleep(0.5)
+                    logger.info(f"   ✅ Sent show levels button before task for lesson 19")
+            
+            # Для урока 1: отправляем видео с текстом ПЕРЕД заданием
+            if (day == 1 or str(day) == "1") and lesson1_video_media:
+                try:
+                    # Анимация перед отправкой видео
+                    await send_typing_action(self.bot, user.user_id, 0.5)
+                    
+                    # Текст для caption видео
+                    video_caption = (
+                        "⛵ Добро пожаловать на корвет, исследователи!\n\n"
+                        "⛵🧭 Наш корабль берёт курс на новые горизонты. 🌊🗺️ "
+                        "Но прежде чем отправиться, я задам вам первый ❓ вопрос. Даже три. ❓❓❓"
+                    )
+                    
+                    # Отправляем видео с текстом
+                    media_type = lesson1_video_media.get("type", "video")
+                    file_id = lesson1_video_media.get("file_id")
+                    file_path = lesson1_video_media.get("path")
+                    
+                    if file_id:
+                        if media_type == "video":
+                            # Отправляем видео с параметрами для растягивания по ширине экрана
+                            # Видео оптимизировано до 1080x606 для мобильных устройств
+                            await self._send_video_with_retry(
+                                user.user_id,
+                                file_id,
+                                caption=video_caption,
+                                width=1080,
+                                height=606,
+                                supports_streaming=True
+                            )
+                        else:
+                            await self.bot.send_photo(user.user_id, file_id, caption=video_caption)
+                    elif file_path:
+                        from pathlib import Path
+                        from aiogram.types import FSInputFile
+                        import os
+                        
+                        # Определяем корень проекта
+                        project_root = None
+                        possible_roots = [
+                            Path.cwd(),
+                            Path(__file__).parent.parent,
+                        ]
+                        for root in possible_roots:
+                            if (root / "Photo" / "video_pic").exists() or (root / "Photo" / "video_pic_optimized").exists():
+                                project_root = root
+                                break
+                        if not project_root:
+                            project_root = Path.cwd()
+                        
+                        # Нормализуем путь
+                        if os.path.isabs(file_path):
+                            media_file = Path(file_path)
+                        else:
+                            media_file = project_root / file_path
+                        
+                        if media_file.exists():
+                            media_input = FSInputFile(media_file)
+                            if media_type == "video":
+                                # Отправляем видео с параметрами для растягивания по ширине экрана
+                                await self._send_video_with_retry(
+                                    user.user_id,
+                                    media_input,
+                                    caption=video_caption,
+                                    width=1080,
+                                    height=606,
+                                    supports_streaming=True
+                                )
+                            else:
+                                await self.bot.send_photo(user.user_id, media_input, caption=video_caption)
+                    
+                    logger.info(f"   ✅ Sent lesson 1 video with text before task")
+                    await asyncio.sleep(0.5)
+                except Exception as video_error:
+                    logger.warning(f"   ⚠️ Не удалось отправить видео урока 1 перед заданием: {video_error}")
+            
+            # Для урока 30 отправляем первое видео ПЕРЕД заданием
+            if first_video_before_task:
+                try:
+                    # Анимация перед отправкой видео
+                    await send_typing_action(self.bot, user.user_id, 0.5)
+                    await self._send_media_item(user.user_id, first_video_before_task, day)
+                    logger.info(f"   ✅ Sent first video before task for lesson 30")
+                    await asyncio.sleep(0.5)
+                except Exception as video_error:
+                    logger.warning(f"   ⚠️ Не удалось отправить первое видео перед заданием для урока 30: {video_error}")
+            
+            # Формируем сообщение с заданием
+            task_message = ""
             if task:
-                lesson_message += (
+                # Анимация перед отправкой задания
+                await send_typing_action(self.bot, user.user_id, 0.6)
+                task_message = (
                     f"{create_premium_separator()}\n\n"
-                    f"📝 <b>Задание:</b>\n"
+                    f"✨ 📝 <b>Задание:</b> 📝 ✨\n"
+                    f"{create_premium_separator()}\n\n"
                     f"{task}\n\n"
                 )
             
-            # Отправляем текст урока
-            # Передаем day в lesson_data для создания клавиатуры
-            lesson_data_with_day = lesson_data.copy()
-            lesson_data_with_day["day_number"] = day
-            keyboard = create_lesson_keyboard_from_json(lesson_data_with_day, user, Config.GENERAL_GROUP_ID)
-            
-            logger.info(f"   Sending lesson message to user {user.user_id}, day {day}")
-            logger.info(f"   Message length: {len(lesson_message)} characters")
-            
-            # Проверяем, что lesson_message не пустой после всех манипуляций
-            if not lesson_message or not lesson_message.strip():
-                logger.error(f"   ❌ Empty lesson_message for day {day}, user {user.user_id}")
-                persistent_keyboard = self._create_persistent_keyboard()
-                await self.bot.send_message(user.user_id, "❌ Ошибка: урок не содержит текста.", reply_markup=persistent_keyboard)
-                return
-            
-            # Разбиваем длинные сообщения на части (лимит Telegram: 4096 символов)
-            MAX_MESSAGE_LENGTH = 4000  # Оставляем запас
-            if len(lesson_message) > MAX_MESSAGE_LENGTH:
-                # Разбиваем сообщение на части
-                message_parts = self._split_long_message(lesson_message, MAX_MESSAGE_LENGTH)
-                logger.info(f"   Message split into {len(message_parts)} parts")
+            # Отправляем задание, если есть
+            if task_message:
+                # Передаем day в lesson_data для создания клавиатуры
+                lesson_data_with_day = lesson_data.copy()
+                lesson_data_with_day["day_number"] = day
+                keyboard = create_lesson_keyboard_from_json(lesson_data_with_day, user, Config.GENERAL_GROUP_ID)
                 
-                # Отправляем все части кроме последней без клавиатуры
-                for i, part in enumerate(message_parts[:-1], 1):
-                    # Пропускаем пустые части
-                    if part and part.strip():
-                        await self.bot.send_message(user.user_id, part)
-                        await asyncio.sleep(0.3)  # Небольшая пауза между сообщениями
-                        logger.info(f"   Sent part {i}/{len(message_parts)}")
+                # Для урока 21 добавляем кнопку "Скачать карточки"
+                if day == 21 or str(day) == "21":
+                    cards = lesson_data.get("cards", [])
+                    logger.info(f"   🔍 Lesson 21 (with task): cards found={len(cards) if cards else 0}")
+                    if cards:
+                        # Создаем кнопку для скачивания карточек
+                        download_button = [
+                            InlineKeyboardButton(
+                                text="📥 Скачать карточки",
+                                callback_data="lesson21_download_cards"
+                            )
+                        ]
+                        
+                        # Добавляем кнопку к существующей клавиатуре
+                        if keyboard and hasattr(keyboard, 'inline_keyboard') and keyboard.inline_keyboard:
+                            keyboard.inline_keyboard.append(download_button)
+                            logger.info(f"   ✅ Added download button to existing keyboard for lesson 21")
+                        else:
+                            # Если клавиатуры нет, создаем новую
+                            keyboard = InlineKeyboardMarkup(inline_keyboard=[download_button])
+                            logger.info(f"   ✅ Created new keyboard with download button for lesson 21")
+                
+                logger.info(f"   Sending task message to user {user.user_id}, day {day}")
+                logger.info(f"   Task message length: {len(task_message)} characters")
+                
+                # Разбиваем длинные сообщения на части (лимит Telegram: 4096 символов)
+                MAX_MESSAGE_LENGTH = 4000  # Оставляем запас
+                if len(task_message) > MAX_MESSAGE_LENGTH:
+                    # Разбиваем сообщение на части
+                    message_parts = self._split_long_message(task_message, MAX_MESSAGE_LENGTH)
+                    logger.info(f"   Task message split into {len(message_parts)} parts")
+                    
+                    # Отправляем все части кроме последней без клавиатуры
+                    for i, part in enumerate(message_parts[:-1], 1):
+                        # Пропускаем пустые части
+                        if part and part.strip():
+                            await self.bot.send_message(user.user_id, part)
+                            await asyncio.sleep(0.3)  # Небольшая пауза между сообщениями
+                            logger.info(f"   Sent task part {i}/{len(message_parts)}")
+                        else:
+                            logger.warning(f"   Skipped empty task part {i}/{len(message_parts)}")
+                    
+                    # Отправляем последнюю часть с клавиатурой (проверяем, что она не пустая)
+                    last_part = message_parts[-1]
+                    if last_part and last_part.strip():
+                        await self.bot.send_message(user.user_id, last_part, reply_markup=keyboard)
+                        logger.info(f"   Sent last task part {len(message_parts)}/{len(message_parts)} with keyboard")
                     else:
-                        logger.warning(f"   Skipped empty part {i}/{len(message_parts)}")
-                
-                # Отправляем последнюю часть с клавиатурой (проверяем, что она не пустая)
-                last_part = message_parts[-1]
-                if last_part and last_part.strip():
-                    await self.bot.send_message(user.user_id, last_part, reply_markup=keyboard)
-                    logger.info(f"   Sent last part {len(message_parts)}/{len(message_parts)} with keyboard")
+                        # Если последняя часть пустая, отправляем только клавиатуру с невидимым символом
+                        logger.warning(f"   Last task part is empty, sending keyboard only")
+                        await self.bot.send_message(user.user_id, "\u200B", reply_markup=keyboard)
                 else:
-                    # Если последняя часть пустая, отправляем только клавиатуру с невидимым символом
-                    logger.warning(f"   Last part is empty, sending keyboard only")
-                    await self.bot.send_message(user.user_id, "\u200B", reply_markup=keyboard)
+                    # Если сообщение короткое, отправляем как есть
+                    await self.bot.send_message(user.user_id, task_message, reply_markup=keyboard)
             else:
-                # Если сообщение короткое, отправляем как есть
-                await self.bot.send_message(user.user_id, lesson_message, reply_markup=keyboard)
+                # Если задания нет, отправляем только клавиатуру
+                lesson_data_with_day = lesson_data.copy()
+                lesson_data_with_day["day_number"] = day
+                keyboard = create_lesson_keyboard_from_json(lesson_data_with_day, user, Config.GENERAL_GROUP_ID)
+                
+                # Для урока 21 добавляем кнопку "Скачать карточки"
+                cards = []
+                if day == 21 or str(day) == "21":
+                    cards = lesson_data.get("cards", [])
+                    logger.info(f"   🔍 Lesson 21 (no task): cards found={len(cards) if cards else 0}, day={day}, type={type(day)}")
+                    if cards:
+                        # Создаем кнопку для скачивания карточек
+                        download_button = [
+                            InlineKeyboardButton(
+                                text="📥 Скачать карточки",
+                                callback_data="lesson21_download_cards"
+                            )
+                        ]
+                        
+                        # Всегда создаем новую клавиатуру для урока 21 с кнопкой скачивания
+                        keyboard = InlineKeyboardMarkup(inline_keyboard=[download_button])
+                        logger.info(f"   ✅ Created keyboard with download button for lesson 21")
+                    else:
+                        logger.warning(f"   ⚠️ No cards found for lesson 21")
+                
+                # Для урока 19 добавляем кнопку "Показать все уровни"
+                levels_images = []
+                if day == 19 or str(day) == "19":
+                    levels_images = lesson_data.get("levels_images", [])
+                    logger.info(f"   🔍 Lesson 19 (no task): levels_images found={len(levels_images) if levels_images else 0}, day={day}, type={type(day)}")
+                    if levels_images:
+                        # Создаем кнопку для показа всех уровней
+                        show_levels_button = [
+                            InlineKeyboardButton(
+                                text="📊 Показать все уровни",
+                                callback_data="lesson19_show_levels"
+                            )
+                        ]
+                        
+                        # Если клавиатуры нет, создаем новую, иначе добавляем к существующей
+                        if keyboard and hasattr(keyboard, 'inline_keyboard') and keyboard.inline_keyboard and len(keyboard.inline_keyboard) > 0:
+                            keyboard.inline_keyboard.append(show_levels_button)
+                            logger.info(f"   ✅ Added show levels button to existing keyboard for lesson 19")
+                        else:
+                            keyboard = InlineKeyboardMarkup(inline_keyboard=[show_levels_button])
+                            logger.info(f"   ✅ Created keyboard with show levels button for lesson 19")
+                    else:
+                        logger.warning(f"   ⚠️ No levels_images found for lesson 19")
+                
+                # Отправляем сообщение с клавиатурой
+                # Для урока 21 всегда отправляем клавиатуру, если есть карточки
+                if (day == 21 or str(day) == "21") and cards:
+                    await self.bot.send_message(
+                        user.user_id, 
+                        "📥 <b>Карточки игры «Телепат»</b>\n\nНажмите кнопку ниже, чтобы скачать все карточки:",
+                        reply_markup=keyboard,
+                        parse_mode="HTML"
+                    )
+                    logger.info(f"   ✅ Sent message with download button for lesson 21")
+                elif (day == 19 or str(day) == "19") and levels_images:
+                    await self.bot.send_message(
+                        user.user_id, 
+                        "📊 <b>Эмоциональные уровни</b>\n\nНажмите кнопку ниже, чтобы посмотреть все уровни:",
+                        reply_markup=keyboard,
+                        parse_mode="HTML"
+                    )
+                    logger.info(f"   ✅ Sent message with show levels button for lesson 19")
+                elif keyboard and hasattr(keyboard, 'inline_keyboard') and keyboard.inline_keyboard and len(keyboard.inline_keyboard) > 0:
+                    await self.bot.send_message(user.user_id, "\u200B", reply_markup=keyboard)
+                    logger.info(f"   ✅ Sent message with keyboard for lesson {day}")
+                else:
+                    # Если клавиатуры нет, отправляем только невидимый символ
+                    await self.bot.send_message(user.user_id, "\u200B")
+                    logger.info(f"   ℹ️ No keyboard to send for lesson {day}")
             
             # Всегда устанавливаем постоянную клавиатуру после отправки урока
             # Используем невидимый символ вместо пустого сообщения
             persistent_keyboard = self._create_persistent_keyboard()
             await self.bot.send_message(user.user_id, "\u200B", reply_markup=persistent_keyboard)
             
-            # Отправляем медиа, если есть
-            media_list = lesson_data.get("media", [])
-            for media_item in media_list[:5]:  # Ограничиваем количество
-                media_type = media_item.get("type", "photo")
-                file_path = media_item.get("path")
-                file_id = media_item.get("file_id")
-                
-                try:
-                    if media_type == "photo":
-                        if file_id:
-                            await self.bot.send_photo(user.user_id, file_id)
-                        elif file_path:
-                            from pathlib import Path
-                            if Path(file_path).exists():
-                                with open(file_path, "rb") as photo:
-                                    await self.bot.send_photo(user.user_id, photo)
-                    elif media_type == "video":
-                        if file_id:
-                            await self.bot.send_video(user.user_id, file_id)
-                        elif file_path:
-                            from pathlib import Path
-                            if Path(file_path).exists():
-                                with open(file_path, "rb") as video:
-                                    await self.bot.send_video(user.user_id, video)
-                except Exception as media_error:
-                    logger.warning(f"Не удалось отправить медиа для урока {day}: {media_error}")
-            
             # Отправляем follow_up_text в конце урока, если есть (для урока 30)
+            # ВАЖНО: Для дня 30 это ОБЯЗАТЕЛЬНО должно быть отправлено
+            logger.info(f"   🔍 [FOLLOW_UP] Starting follow_up check for lesson {day}")
             follow_up_text = lesson_data.get("follow_up_text", "")
             follow_up_photo_path = lesson_data.get("follow_up_photo_path", "")
             follow_up_photo_file_id = lesson_data.get("follow_up_photo_file_id", "")
             
-            logger.info(f"   Checking follow_up for lesson {day}: text={bool(follow_up_text)}, photo_path={follow_up_photo_path}, photo_file_id={bool(follow_up_photo_file_id)}")
+            logger.info(f"   🔍 [FOLLOW_UP] Checking follow_up for lesson {day}:")
+            logger.info(f"      - follow_up_text exists: {bool(follow_up_text)} (length: {len(follow_up_text) if follow_up_text else 0})")
+            logger.info(f"      - follow_up_text preview: '{follow_up_text[:100] if follow_up_text else 'None'}...'")
+            logger.info(f"      - follow_up_photo_path: '{follow_up_photo_path}'")
+            logger.info(f"      - follow_up_photo_file_id exists: {bool(follow_up_photo_file_id)}")
             
-            if follow_up_text or follow_up_photo_path or follow_up_photo_file_id:
+            # Для урока 30 follow_up отправляется ПОСЛЕ задания, а не здесь
+            # Явная проверка для дня 30 или если есть любой из компонентов (но не для дня 30)
+            should_send_follow_up = (day != 30) and (follow_up_text or follow_up_photo_path or follow_up_photo_file_id)
+            
+            logger.info(f"   🔍 [FOLLOW_UP] should_send_follow_up = {should_send_follow_up} (day={day}, day==30={day==30})")
+            
+            if should_send_follow_up:
+                logger.info(f"   ✅ Will send follow_up for lesson {day}")
                 await asyncio.sleep(1)  # Небольшая пауза перед отправкой
                 persistent_keyboard = self._create_persistent_keyboard()
                 
                 # Отправляем фото перед текстом, если есть
-                if follow_up_photo_file_id or follow_up_photo_path:
+                photo_sent = False
+                if follow_up_photo_file_id:
                     try:
-                        if follow_up_photo_file_id:
-                            await self.bot.send_photo(user.user_id, follow_up_photo_file_id)
-                            logger.info(f"   ✅ Sent follow_up photo (file_id) for lesson {day}")
-                        elif follow_up_photo_path:
-                            from pathlib import Path
-                            from aiogram.types import FSInputFile
-                            import os
-                            
-                            # Нормализуем путь (заменяем прямые слеши на обратные для Windows)
-                            normalized_path = follow_up_photo_path.replace('/', os.sep)
-                            
-                            # Пробуем относительный путь от текущей рабочей директории
-                            photo_path = Path(normalized_path)
-                            if not photo_path.exists():
-                                # Пробуем от корня проекта (где находится run_all_bots.py)
-                                project_root = Path.cwd()
-                                photo_path = project_root / normalized_path
-                            
-                            logger.info(f"   Trying to send follow_up photo from: {photo_path} (exists: {photo_path.exists()})")
-                            
-                            if photo_path.exists():
-                                photo_file = FSInputFile(photo_path)
-                                await self.bot.send_photo(user.user_id, photo_file)
-                                logger.info(f"   ✅ Sent follow_up photo (file path: {photo_path}) for lesson {day}")
-                            else:
-                                logger.error(f"   ❌ Follow-up photo not found: {photo_path} (original path: {follow_up_photo_path})")
-                        await asyncio.sleep(0.5)  # Небольшая пауза после фото
+                        # Анимация перед отправкой фото
+                        await send_typing_action(self.bot, user.user_id, 0.5)
+                        centered_caption = "━━━━━━━━━━━━━━"
+                        await self.bot.send_photo(user.user_id, follow_up_photo_file_id, caption=centered_caption)
+                        logger.info(f"   ✅ Sent follow_up photo (file_id) for lesson {day}")
+                        photo_sent = True
+                        await asyncio.sleep(0.7)  # Пауза для плавности
                     except Exception as photo_error:
-                        logger.error(f"   ❌ Не удалось отправить follow_up photo для урока {day}: {photo_error}", exc_info=True)
+                        logger.error(f"   ❌ Не удалось отправить follow_up photo (file_id) для урока {day}: {photo_error}", exc_info=True)
                 
-                # Отправляем текст после фото
-                if follow_up_text:
+                elif follow_up_photo_path:
                     try:
+                        from pathlib import Path
+                        from aiogram.types import FSInputFile
+                        import os
+                        
+                        # Нормализуем путь (заменяем прямые слеши на обратные для Windows)
+                        normalized_path = follow_up_photo_path.replace('/', os.sep)
+                        
+                        # Пробуем относительный путь от текущей рабочей директории
+                        photo_path = Path(normalized_path)
+                        if not photo_path.exists():
+                            # Пробуем от корня проекта (где находится run_all_bots.py)
+                            project_root = Path.cwd()
+                            photo_path = project_root / normalized_path
+                        
+                        logger.info(f"   📷 Trying to send follow_up photo from: {photo_path.absolute()} (exists: {photo_path.exists()})")
+                        
+                        if photo_path.exists():
+                            # Анимация перед отправкой фото
+                            await send_typing_action(self.bot, user.user_id, 0.5)
+                            photo_file = FSInputFile(photo_path)
+                            centered_caption = "━━━━━━━━━━━━━━"
+                            await self.bot.send_photo(user.user_id, photo_file, caption=centered_caption)
+                            logger.info(f"   ✅ Sent follow_up photo (file path: {photo_path}) for lesson {day}")
+                            photo_sent = True
+                            await asyncio.sleep(0.7)  # Пауза для плавности
+                        else:
+                            logger.error(f"   ❌ Follow-up photo not found: {photo_path.absolute()} (original path: {follow_up_photo_path})")
+                            # Пробуем найти файл в других местах
+                            possible_paths = [
+                                Path("Photo/30/photo_5377557667917794132_y.jpg"),
+                                Path("Photo/30/photo_5404715149857328372_y.jpg"),
+                                Path("Photo/photo_5377557667917794132_y.jpg"),
+                                Path("Photo/photo_5404715149857328372_y.jpg"),
+                                Path.cwd() / "Photo" / "30" / "photo_5377557667917794132_y.jpg",
+                                Path.cwd() / "Photo" / "30" / "photo_5404715149857328372_y.jpg",
+                                Path.cwd() / "Photo" / "photo_5377557667917794132_y.jpg",
+                                Path.cwd() / "Photo" / "photo_5404715149857328372_y.jpg",
+                            ]
+                            for possible_path in possible_paths:
+                                if possible_path.exists():
+                                    logger.info(f"   🔍 Found photo at alternative path: {possible_path.absolute()}")
+                                    # Анимация перед отправкой фото
+                                    await send_typing_action(self.bot, user.user_id, 0.5)
+                                    photo_file = FSInputFile(possible_path)
+                                    centered_caption = "━━━━━━━━━━━━━━"
+                                    await self.bot.send_photo(user.user_id, photo_file, caption=centered_caption)
+                                    logger.info(f"   ✅ Sent follow_up photo from alternative path for lesson {day}")
+                                    photo_sent = True
+                                    await asyncio.sleep(0.7)
+                                    break
+                    except Exception as photo_error:
+                        logger.error(f"   ❌ Не удалось отправить follow_up photo (file path) для урока {day}: {photo_error}", exc_info=True)
+                
+                # Отправляем текст после фото (или без фото, если фото нет)
+                if follow_up_text and follow_up_text.strip():
+                    try:
+                        # Анимация перед отправкой текста
+                        await send_typing_action(self.bot, user.user_id, 0.7)
+                        logger.info(f"   📤 Sending follow_up_text for lesson {day} (length: {len(follow_up_text)} chars)")
                         await self.bot.send_message(user.user_id, follow_up_text, reply_markup=persistent_keyboard)
-                        logger.info(f"   ✅ Sent follow_up_text for lesson {day}")
+                        logger.info(f"   ✅ Successfully sent follow_up_text for lesson {day}")
                     except Exception as text_error:
-                        logger.error(f"   ❌ Не удалось отправить follow_up_text для урока {day}: {text_error}", exc_info=True)
+                        error_msg = str(text_error)
+                        logger.error(f"   ❌ Error sending follow_up_text for lesson {day}: {error_msg}", exc_info=True)
+                        # Фильтруем технические ошибки о пустых сообщениях
+                        if "text must be non-empty" in error_msg or "message text is empty" in error_msg:
+                            logger.warning(f"   ⚠️ Empty follow_up_text for lesson {day} (suppressed)")
+                        else:
+                            # Пробуем отправить еще раз без клавиатуры
+                            try:
+                                await self.bot.send_message(user.user_id, follow_up_text)
+                                logger.info(f"   ✅ Sent follow_up_text without keyboard for lesson {day}")
+                            except Exception as retry_error:
+                                logger.error(f"   ❌ Retry also failed for lesson {day}: {retry_error}")
+                elif not photo_sent:
+                    # Если нет ни текста, ни фото, но мы должны что-то отправить
+                    logger.warning(f"   ⚠️ No follow_up_text or photo to send for lesson {day}")
             else:
+                # Для дня 30 финальное сообщение отправляется по кнопке, не автоматически
                 logger.info(f"   ⚠️ No follow_up content for lesson {day}")
             
             logger.info(f"✅ Урок {day} отправлен пользователю {user.user_id}")
             
         except Exception as e:
-            logger.error(f"❌ Ошибка при отправке урока пользователю {user.user_id}: {e}", exc_info=True)
-            raise
+            error_msg = str(e)
+            # Фильтруем технические ошибки Telegram API о пустых сообщениях
+            if "text must be non-empty" in error_msg or "message text is empty" in error_msg:
+                logger.warning(f"⚠️ Empty message error for lesson {day}, user {user.user_id} (suppressed): {error_msg}")
+            else:
+                logger.error(f"❌ Ошибка при отправке урока пользователю {user.user_id}: {e}", exc_info=True)
+                # Не пробрасываем ошибку дальше, чтобы не прерывать работу бота
     
     async def handle_assignment_text(self, message: Message):
         """Handle assignment text submission."""
@@ -1137,6 +2486,8 @@ class CourseBot:
             if lesson_data and lesson_data.get("follow_up_text"):
                 await asyncio.sleep(1)  # Небольшая пауза перед отправкой
                 await message.answer(lesson_data["follow_up_text"], reply_markup=persistent_keyboard)
+        
+        # Для урока 30 финальное сообщение теперь отправляется по кнопке "ФИНАЛЬНОЕ СООБЩЕНИЕ", а не автоматически
     
     async def handle_assignment_media(self, message: Message):
         """Handle assignment media submission (photos, videos, documents)."""
@@ -1574,7 +2925,12 @@ class CourseBot:
             logger.info(f"✅ Урок {user.current_day} отправлен пользователю {user.user_id}")
             
         except Exception as e:
-            logger.error(f"❌ Ошибка при отправке урока пользователю {user.user_id}: {e}", exc_info=True)
+            error_msg = str(e)
+            # Фильтруем технические ошибки Telegram API о пустых сообщениях
+            if "text must be non-empty" in error_msg or "message text is empty" in error_msg:
+                logger.warning(f"⚠️ Empty message error for user {user.user_id} (suppressed): {error_msg}")
+            else:
+                logger.error(f"❌ Ошибка при отправке урока пользователю {user.user_id}: {e}", exc_info=True)
     
     async def handle_keyboard_navigator(self, message: Message):
         """Handle 'Навигатор' button from persistent keyboard."""
@@ -1642,6 +2998,32 @@ class CourseBot:
     async def handle_keyboard_test(self, message: Message):
         """Handle 'Тест' button from persistent keyboard - show test lessons menu."""
         await self.handle_test_lessons(message)
+    
+    async def handle_keyboard_discussion(self, message: Message):
+        """Handle 'Обсуждение' button from persistent keyboard - redirect to discussion group."""
+        persistent_keyboard = self._create_persistent_keyboard()
+        
+        # Получаем ID группы из конфига
+        general_group_id = Config.GENERAL_GROUP_ID
+        
+        if general_group_id:
+            # Формируем ссылку на группу
+            group_id_clean = str(general_group_id).replace('-100', '').replace('-', '')
+            group_link = f"https://t.me/c/{group_id_clean}"
+            
+            await message.answer(
+                "💬 <b>Перейти к обсуждению</b>\n\n"
+                "📚 Обсудите задания и вопросы с другими участниками курса:\n\n"
+                f"👥 <a href='{group_link}'>Перейти в обсуждение</a>\n\n"
+                f"💡 <i>Нажмите на ссылку выше, чтобы открыть группу 👆</i>",
+                disable_web_page_preview=False,
+                reply_markup=persistent_keyboard
+            )
+        else:
+            await message.answer(
+                "❌ Группа обсуждения не настроена. Обратитесь в поддержку.",
+                reply_markup=persistent_keyboard
+            )
     
     async def start(self):
         """Start the bot and scheduler."""
