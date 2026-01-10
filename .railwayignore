@@ -1,0 +1,61 @@
+# Игнорируем для деплоя на Railway
+
+# Медиа файлы (слишком большие, не нужны в деплое)
+Photo/
+*.mp4
+*.jpg
+*.jpeg
+*.png
+*.gif
+
+# Локальные данные
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Логи
+*.log
+bot_logs.txt
+
+# Скрипты для разработки
+scripts/
+*.ps1
+*.bat
+test_*.py
+check_*.py
+simple_test_*.py
+diagnose_*.py
+run_bots_debug.py
+quick_start_*.py
+
+# Резервные копии
+*.backup
+*.backup_*
+*_backup.*
+
+# Временные файлы
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Среды разработки
+env/
+venv/
+ENV/
+.venv
+.vscode/
+.idea/
+
+# Секреты
+.env
+*.key
+*.pem
+*.secret
+secrets/
+credentials/

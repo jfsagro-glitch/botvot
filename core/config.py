@@ -70,5 +70,15 @@ class Config:
     def ensure_data_directory(cls):
         """Ensure data directory exists for database."""
         db_path = Path(cls.DATABASE_PATH)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Создаем директорию для базы данных
+        # На Railway используется постоянное хранилище, но нужно убедиться, что директория существует
+        try:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            # Логируем ошибку, но продолжаем работу
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"⚠️ Не удалось создать директорию для БД: {e}")
+            # Пытаемся использовать текущую директорию
+            cls.DATABASE_PATH = "course_platform.db"
 
