@@ -39,8 +39,23 @@ class LessonLoader:
         if not self.lessons_file.exists():
             logger.error(f"❌ Файл уроков {self.lessons_file.absolute()} не найден!")
             logger.error(f"   Текущая рабочая директория: {Path.cwd()}")
-            self._lessons_cache = {}
-            return
+            # Пробуем альтернативные пути
+            alternative_paths = [
+                Path.cwd() / "data" / "lessons.json",
+                Path(__file__).parent.parent / "data" / "lessons.json",
+                Path("data/lessons.json"),
+            ]
+            for alt_path in alternative_paths:
+                logger.info(f"   Пробую альтернативный путь: {alt_path.absolute()}")
+                if alt_path.exists():
+                    logger.info(f"   ✅ Найден по альтернативному пути: {alt_path.absolute()}")
+                    self.lessons_file = alt_path
+                    break
+            else:
+                logger.error(f"   ❌ Файл не найден ни по одному из путей")
+                logger.error(f"   Список файлов в data/: {list((Path(__file__).parent.parent / 'data').glob('*.json')) if (Path(__file__).parent.parent / 'data').exists() else 'директория data не существует'}")
+                self._lessons_cache = {}
+                return
         
         try:
             with open(self.lessons_file, "r", encoding="utf-8") as f:
