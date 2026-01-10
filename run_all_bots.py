@@ -94,20 +94,39 @@ async def main():
     
     # Диагностика переменных окружения при старте
     logger.info("🔍 Проверка переменных окружения...")
+    
+    # Проверяем все возможные способы получения переменных
     sales_token_raw = os.environ.get("SALES_BOT_TOKEN", "")
     course_token_raw = os.environ.get("COURSE_BOT_TOKEN", "")
+    
+    # Также проверяем через os.getenv для надежности
+    if not sales_token_raw:
+        sales_token_raw = os.getenv("SALES_BOT_TOKEN", "")
+    if not course_token_raw:
+        course_token_raw = os.getenv("COURSE_BOT_TOKEN", "")
+    
     logger.info(f"   SALES_BOT_TOKEN из os.environ: {'✅ есть' if sales_token_raw else '❌ нет'} (длина: {len(sales_token_raw)})")
     logger.info(f"   COURSE_BOT_TOKEN из os.environ: {'✅ есть' if course_token_raw else '❌ нет'} (длина: {len(course_token_raw)})")
     
+    # Проверяем все переменные окружения (для полной диагностики)
+    all_env_vars = dict(os.environ)
+    logger.info(f"   Всего переменных окружения: {len(all_env_vars)}")
+    
     # Проверяем все релевантные переменные
-    relevant_vars = {k: v for k, v in os.environ.items() if any(prefix in k.upper() for prefix in ['BOT', 'SALES', 'COURSE', 'TOKEN'])}
+    relevant_vars = {k: v for k, v in all_env_vars.items() if any(prefix in k.upper() for prefix in ['BOT', 'SALES', 'COURSE', 'TOKEN', 'ADMIN', 'GROUP', 'DATABASE'])}
     if relevant_vars:
-        logger.info(f"   Найдено {len(relevant_vars)} релевантных переменных окружения")
+        logger.info(f"   Найдено {len(relevant_vars)} релевантных переменных окружения:")
         for key in sorted(relevant_vars.keys()):
             val = relevant_vars[key]
-            logger.info(f"   - {key}: длина={len(val)}, начало={val[:15]}..." if len(val) > 15 else f"   - {key}: {val}")
+            if 'TOKEN' in key.upper() or 'SECRET' in key.upper() or 'KEY' in key.upper():
+                # Маскируем секретные значения
+                masked = val[:10] + "..." if len(val) > 10 else val
+                logger.info(f"   - {key}: длина={len(val)}, начало={masked}")
+            else:
+                logger.info(f"   - {key}: {val}")
     else:
         logger.warning("   ⚠️ Не найдено переменных окружения с ключевыми словами BOT/SALES/COURSE/TOKEN")
+        logger.warning("   ⚠️ Убедитесь, что переменные добавлены в Railway Variables и привязаны к сервису")
     
     # КРИТИЧЕСКИ ВАЖНО: Запускаем HTTP сервер ПЕРВЫМ и в отдельном потоке
     # Railway проверяет healthcheck сразу, даже если боты еще не готовы
