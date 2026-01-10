@@ -3076,13 +3076,18 @@ async def main():
 if __name__ == "__main__":
     # Локальный запуск отключен. Используйте run_all_bots.py для запуска ботов.
     # Это предотвращает конфликты getUpdates при одновременном запуске на Railway и локально.
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except (AttributeError, ValueError):
+        pass  # Python < 3.7 или уже настроено
+    
     print("=" * 60)
-    print("⚠️  ЛОКАЛЬНЫЙ ЗАПУСК ОТКЛЮЧЕН")
+    print("WARNING: LOCAL STARTUP DISABLED")
     print("=" * 60)
-    print("Боты должны запускаться через run_all_bots.py")
-    print("Это предотвращает конфликты при работе на Railway.")
+    print("Bots must be started via run_all_bots.py")
+    print("This prevents getUpdates conflicts when running on Railway.")
     print("")
-    print("Для запуска используйте:")
+    print("To start bots, use:")
     print("  python run_all_bots.py")
     print("=" * 60)
     sys.exit(1)
