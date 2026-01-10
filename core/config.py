@@ -13,13 +13,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _get_env_value(key: str, default: str = "") -> str:
+    """Получает переменную окружения с очисткой пробелов."""
+    value = os.environ.get(key, "")
+    if not value:
+        value = os.getenv(key, default)
+    # Удаляем пробелы в начале и конце (частая ошибка при копировании)
+    return value.strip() if value else default
+
+
 class Config:
     """Application configuration."""
     
     # Telegram Bot Tokens
     # Используем os.environ напрямую для надежного чтения переменных окружения
-    SALES_BOT_TOKEN: str = os.environ.get("SALES_BOT_TOKEN", os.getenv("SALES_BOT_TOKEN", ""))
-    COURSE_BOT_TOKEN: str = os.environ.get("COURSE_BOT_TOKEN", os.getenv("COURSE_BOT_TOKEN", ""))
+    # Railway устанавливает переменные в os.environ
+    SALES_BOT_TOKEN: str = _get_env_value("SALES_BOT_TOKEN", "")
+    COURSE_BOT_TOKEN: str = _get_env_value("COURSE_BOT_TOKEN", "")
     
     # Admin Chat ID (for assignment feedback)
     ADMIN_CHAT_ID: int = int(os.getenv("ADMIN_CHAT_ID", "0"))
@@ -52,19 +62,19 @@ class Config:
     @classmethod
     def validate(cls) -> bool:
         """Validate that required configuration is present."""
-        # Перечитываем переменные окружения для надежности
-        sales_token = os.environ.get("SALES_BOT_TOKEN", "") or cls.SALES_BOT_TOKEN
-        course_token = os.environ.get("COURSE_BOT_TOKEN", "") or cls.COURSE_BOT_TOKEN
+        # Перечитываем переменные окружения для надежности с очисткой пробелов
+        sales_token = _get_env_value("SALES_BOT_TOKEN", "") or cls.SALES_BOT_TOKEN
+        course_token = _get_env_value("COURSE_BOT_TOKEN", "") or cls.COURSE_BOT_TOKEN
         
         # Обновляем значения в классе
-        cls.SALES_BOT_TOKEN = sales_token
-        cls.COURSE_BOT_TOKEN = course_token
+        cls.SALES_BOT_TOKEN = sales_token.strip() if sales_token else ""
+        cls.COURSE_BOT_TOKEN = course_token.strip() if course_token else ""
         
-        required = [
-            sales_token,
-            course_token,
-        ]
-        return all(required) and bool(sales_token) and bool(course_token)
+        # Проверяем, что токены не пустые (после очистки пробелов)
+        sales_valid = bool(sales_token and sales_token.strip())
+        course_valid = bool(course_token and course_token.strip())
+        
+        return sales_valid and course_valid
     
     @classmethod
     def ensure_data_directory(cls):
