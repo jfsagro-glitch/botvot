@@ -50,10 +50,15 @@ class LessonLoader:
                 if alt_path.exists():
                     logger.info(f"   ✅ Найден по альтернативному пути: {alt_path.absolute()}")
                     self.lessons_file = alt_path
+                    # Продолжаем загрузку после исправления пути
                     break
             else:
                 logger.error(f"   ❌ Файл не найден ни по одному из путей")
                 logger.error(f"   Список файлов в data/: {list((Path(__file__).parent.parent / 'data').glob('*.json')) if (Path(__file__).parent.parent / 'data').exists() else 'директория data не существует'}")
+                # Пробуем также проверить текущую директорию
+                cwd_data = Path.cwd() / "data"
+                if cwd_data.exists():
+                    logger.info(f"   Содержимое {cwd_data}: {list(cwd_data.glob('*.json'))}")
                 self._lessons_cache = {}
                 return
         
