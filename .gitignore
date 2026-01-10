@@ -11,7 +11,16 @@ ENV/
 *.db
 *.sqlite
 *.sqlite3
-data/
+# Базы данных (исключаем, но оставляем JSON файлы с уроками!)
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+# Резервные копии
+data/*.backup*
+# Примеры конфигурации
+data/*.example
+# Временные файлы
+data/lessons_manual.json
 *.log
 .DS_Store
 .vscode/

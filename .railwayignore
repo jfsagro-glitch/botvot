@@ -8,8 +8,10 @@ Photo/
 *.png
 *.gif
 
-# Локальные данные
-data/
+# Базы данных (создаются автоматически на Railway)
+data/*.db
+data/*.sqlite
+data/*.sqlite3
 *.db
 *.sqlite
 *.sqlite3
@@ -59,3 +61,6 @@ ENV/
 *.secret
 secrets/
 credentials/
+
+# ВАЖНО: data/lessons.json и data/lesson19_images.json НУЖНЫ и НЕ должны быть исключены!
+# Поэтому мы исключаем только конкретные типы файлов в data/, а не всю директорию
