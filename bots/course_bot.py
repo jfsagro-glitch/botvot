@@ -11,6 +11,7 @@ Handles:
 
 import asyncio
 import logging
+import sys
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
@@ -3073,4 +3074,15 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Локальный запуск отключен. Используйте run_all_bots.py для запуска ботов.
+    # Это предотвращает конфликты getUpdates при одновременном запуске на Railway и локально.
+    print("=" * 60)
+    print("⚠️  ЛОКАЛЬНЫЙ ЗАПУСК ОТКЛЮЧЕН")
+    print("=" * 60)
+    print("Боты должны запускаться через run_all_bots.py")
+    print("Это предотвращает конфликты при работе на Railway.")
+    print("")
+    print("Для запуска используйте:")
+    print("  python run_all_bots.py")
+    print("=" * 60)
+    sys.exit(1)
