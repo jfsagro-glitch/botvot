@@ -32,14 +32,15 @@ class Config:
     COURSE_BOT_TOKEN: str = _get_env_value("COURSE_BOT_TOKEN", "")
     
     # Admin Chat ID (for assignment feedback)
-    ADMIN_CHAT_ID: int = int(os.getenv("ADMIN_CHAT_ID", "0"))
+    ADMIN_CHAT_ID: int = int(_get_env_value("ADMIN_CHAT_ID", "0") or "0")
     
     # Curator Group ID (for questions from users)
-    CURATOR_GROUP_ID: str = os.getenv("CURATOR_GROUP_ID", "")
+    CURATOR_GROUP_ID: str = _get_env_value("CURATOR_GROUP_ID", "")
     
     # Telegram Group Chat IDs
-    GENERAL_GROUP_ID: str = os.getenv("GENERAL_GROUP_ID", "")
-    PREMIUM_GROUP_ID: str = os.getenv("PREMIUM_GROUP_ID", "")
+    # Note: use _get_env_value to strip spaces (common copy/paste issue in Railway Variables)
+    GENERAL_GROUP_ID: str = _get_env_value("GENERAL_GROUP_ID", "")
+    PREMIUM_GROUP_ID: str = _get_env_value("PREMIUM_GROUP_ID", "")
     
     # Telegram Group Invite Links (preferred over IDs for opening chats)
     # Example: https://t.me/+AbCdEfGhIjk or https://t.me/joinchat/AbCdEfGhIjk

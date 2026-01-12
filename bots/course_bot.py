@@ -3319,14 +3319,16 @@ class CourseBot:
         """Handle 'Обсуждение' button from persistent keyboard - redirect to discussion group."""
         persistent_keyboard = self._create_persistent_keyboard()
         
-        # Предпочитаем invite link (он корректно открывает чат)
-        group_link = (Config.GENERAL_GROUP_INVITE_LINK or "").strip()
+        # Prefer configured invite link; fallback to group id/username heuristics.
+        group_link = (self.community_service.get_group_invite_link(Config.GENERAL_GROUP_ID) or "").strip()
         if not group_link:
-            # Fallback на web link по ID (работает только если чат публичный/доступен пользователю)
+            # Additional fallback for numeric chat IDs (private groups): try `t.me/c/<id>/1`
+            # Note: this opens the chat only if the user already has access; invite link is still preferred.
             general_group_id = (Config.GENERAL_GROUP_ID or "").strip()
-            if general_group_id:
+            if general_group_id and (general_group_id.startswith("-") or general_group_id.lstrip("-").isdigit()):
                 group_id_clean = str(general_group_id).replace("-100", "").replace("-", "")
-                group_link = f"https://t.me/c/{group_id_clean}"
+                if group_id_clean.isdigit():
+                    group_link = f"https://t.me/c/{group_id_clean}/1"
         
         if group_link:
             await message.answer(

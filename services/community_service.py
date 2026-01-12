@@ -60,8 +60,16 @@ class CommunityService:
         # (This keeps backwards compatibility if someone stored an invite link in *_GROUP_ID.)
         if isinstance(group_id, str) and group_id.startswith("https://t.me/"):
             return group_id
+        if isinstance(group_id, str) and group_id.startswith("https://web.telegram.org/"):
+            return group_id
         if isinstance(group_id, str) and (group_id.startswith("+") or group_id.startswith("joinchat/")):
             return f"https://t.me/{group_id.lstrip('/')}"
+        # Public groups/channels can be opened by username
+        if isinstance(group_id, str) and group_id.startswith("@") and len(group_id) > 1:
+            return f"https://t.me/{group_id[1:]}"
+        if isinstance(group_id, str) and group_id and group_id.lstrip("@").isalnum() and not group_id.startswith("-"):
+            # if user passed 'mygroup' without '@'
+            return f"https://t.me/{group_id.lstrip('@')}"
         
         # Not configured
         return ""
