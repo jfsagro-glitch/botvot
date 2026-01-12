@@ -137,6 +137,10 @@ class Database:
     # User operations
     async def get_user(self, user_id: int) -> Optional[User]:
         """Get user by ID."""
+        # Убеждаемся, что соединение установлено
+        if not hasattr(self, 'conn') or self.conn is None:
+            await self.connect()
+        
         async with self.conn.execute(
             "SELECT * FROM users WHERE user_id = ?", (user_id,)
         ) as cursor:
@@ -149,6 +153,10 @@ class Database:
                          first_name: Optional[str] = None,
                          last_name: Optional[str] = None) -> User:
         """Create a new user."""
+        # Убеждаемся, что соединение установлено
+        if not hasattr(self, 'conn') or self.conn is None:
+            await self.connect()
+        
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
             INSERT INTO users (user_id, username, first_name, last_name, 

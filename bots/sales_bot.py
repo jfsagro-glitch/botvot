@@ -617,6 +617,21 @@ class SalesBot:
                     logger.info(f"   ⚠️ Database not connected, connecting now...")
                     await self.db.connect()
                     logger.info(f"   ✅ Database connected")
+                else:
+                    # Проверяем, что соединение действительно работает
+                    try:
+                        # Простой тестовый запрос
+                        async with self.db.conn.execute("SELECT 1") as cursor:
+                            await cursor.fetchone()
+                        logger.debug(f"   ✅ Database connection is active")
+                    except Exception as conn_test_error:
+                        logger.warning(f"   ⚠️ Database connection test failed, reconnecting: {conn_test_error}")
+                        try:
+                            await self.db.close()
+                        except:
+                            pass
+                        await self.db.connect()
+                        logger.info(f"   ✅ Database reconnected")
                 
                 user = await self.user_service.get_or_create_user(
                     user_id,
@@ -629,8 +644,11 @@ class SalesBot:
                 logger.error(f"   ❌ Error getting/creating user: {user_error}", exc_info=True)
                 # Пробуем переподключиться к базе данных
                 try:
-                    if hasattr(self.db, 'conn') and self.db.conn:
-                        await self.db.close()
+                    try:
+                        if hasattr(self.db, 'conn') and self.db.conn:
+                            await self.db.close()
+                    except:
+                        pass
                     await self.db.connect()
                     logger.info(f"   ✅ Database reconnected, retrying...")
                     user = await self.user_service.get_or_create_user(
