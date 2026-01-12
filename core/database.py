@@ -372,6 +372,47 @@ class Database:
                 return None
             return self._row_to_assignment(row)
     
+    async def has_assignment_for_day(self, user_id: int, day_number: int) -> bool:
+        """
+        Check if user has submitted an assignment for a specific day.
+        
+        Args:
+            user_id: User ID
+            day_number: Day number
+            
+        Returns:
+            True if assignment exists for this user and day, False otherwise
+        """
+        # Убеждаемся, что соединение установлено и активно
+        try:
+            if not hasattr(self, 'conn') or self.conn is None:
+                await self.connect()
+            # Проверяем, что соединение действительно работает
+            try:
+                async with self.conn.execute("SELECT 1") as cursor:
+                    await cursor.fetchone()
+            except Exception:
+                # Соединение неактивно, переподключаемся
+                try:
+                    await self.close()
+                except:
+                    pass
+                await self.connect()
+        except Exception as conn_error:
+            # Если не удалось подключиться, пробуем еще раз
+            try:
+                await self.connect()
+            except Exception:
+                raise conn_error
+        
+        async with self.conn.execute(
+            "SELECT COUNT(*) FROM assignments WHERE user_id = ? AND day_number = ?",
+            (user_id, day_number)
+        ) as cursor:
+            row = await cursor.fetchone()
+            count = row[0] if row else 0
+            return count > 0
+    
     async def get_pending_assignments(self) -> List[Assignment]:
         """Get all assignments pending admin feedback."""
         async with self.conn.execute("""

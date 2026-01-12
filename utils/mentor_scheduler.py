@@ -90,6 +90,13 @@ class MentorReminderScheduler:
                     # Первое напоминание - отправляем сразу
                     pass
                 
+                # ВАЖНО: Проверяем, не отправлено ли уже задание для текущего дня
+                # Если задание уже отправлено, не отправляем напоминания
+                has_assignment = await self.db.has_assignment_for_day(user.user_id, user.current_day)
+                if has_assignment:
+                    logger.debug(f"   ⏭️ User {user.user_id} already submitted assignment for day {user.current_day}, skipping reminder")
+                    continue
+                
                 # Отправляем напоминание
                 await self.reminder_callback(user)
                 
