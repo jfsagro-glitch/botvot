@@ -65,7 +65,15 @@ class SalesBot:
         self.user_service = UserService(self.db)
         self.community_service = CommunityService()
         self.question_service = QuestionService(self.db)
-        self.lesson_loader = LessonLoader()  # For sending lesson 0
+        
+        # Initialize lesson loader with error handling
+        try:
+            self.lesson_loader = LessonLoader()  # For sending lesson 0
+            logger.info("✅ LessonLoader initialized in SalesBot")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize LessonLoader in SalesBot: {e}", exc_info=True)
+            logger.warning("⚠️ SalesBot will work, but lesson 0 won't be sent automatically")
+            self.lesson_loader = None
         
         # Register handlers
         self._register_handlers()
@@ -1443,10 +1451,13 @@ class SalesBot:
         
         # Send lesson 0 immediately via course bot
         if not is_upgrade:
-            try:
-                await self._send_lesson_0_to_user(user.user_id)
-            except Exception as e:
-                logger.error(f"Error sending lesson 0 to user {user.user_id}: {e}", exc_info=True)
+            if self.lesson_loader:
+                try:
+                    await self._send_lesson_0_to_user(user.user_id)
+                except Exception as e:
+                    logger.error(f"Error sending lesson 0 to user {user.user_id}: {e}", exc_info=True)
+            else:
+                logger.warning(f"LessonLoader not available, skipping lesson 0 for user {user.user_id}")
         
         # Note: In production, you would:
         # 1. Use bot API to actually invite user to groups
