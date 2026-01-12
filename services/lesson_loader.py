@@ -24,9 +24,13 @@ class LessonLoader:
         Args:
             lessons_file: Путь к JSON файлу с уроками (если None, используется data/lessons.json)
         """
+        # IMPORTANT (Railway Volumes):
+        # Many Railway setups mount a Volume to /app/data to persist SQLite.
+        # That mount shadows the repository `data/` directory inside the container,
+        # so `data/lessons.json` becomes invisible and LessonLoader ends up with 0 lessons.
+        # To make deployments robust, we support a "seed" directory outside the mount.
+        project_root = Path(__file__).parent.parent
         if lessons_file is None:
-            # Используем абсолютный путь относительно корня проекта
-            project_root = Path(__file__).parent.parent
             lessons_file = project_root / "data" / "lessons.json"
         self.lessons_file = Path(lessons_file)
         self._lessons_cache: Optional[Dict[str, Any]] = None
@@ -40,10 +44,15 @@ class LessonLoader:
             logger.error(f"❌ Файл уроков {self.lessons_file.absolute()} не найден!")
             logger.error(f"   Текущая рабочая директория: {Path.cwd()}")
             # Пробуем альтернативные пути
+            project_root = Path(__file__).parent.parent
             alternative_paths = [
                 Path.cwd() / "data" / "lessons.json",
                 Path(__file__).parent.parent / "data" / "lessons.json",
                 Path("data/lessons.json"),
+                # Seed paths (outside /app/data volume mount)
+                project_root / "seed_data" / "lessons.json",
+                Path.cwd() / "seed_data" / "lessons.json",
+                Path("seed_data/lessons.json"),
             ]
             for alt_path in alternative_paths:
                 logger.info(f"   Пробую альтернативный путь: {alt_path.absolute()}")
@@ -55,10 +64,15 @@ class LessonLoader:
             else:
                 logger.error(f"   ❌ Файл не найден ни по одному из путей")
                 logger.error(f"   Список файлов в data/: {list((Path(__file__).parent.parent / 'data').glob('*.json')) if (Path(__file__).parent.parent / 'data').exists() else 'директория data не существует'}")
+                seed_dir = Path(__file__).parent.parent / "seed_data"
+                logger.error(f"   Список файлов в seed_data/: {list(seed_dir.glob('*.json')) if seed_dir.exists() else 'директория seed_data не существует'}")
                 # Пробуем также проверить текущую директорию
                 cwd_data = Path.cwd() / "data"
                 if cwd_data.exists():
                     logger.info(f"   Содержимое {cwd_data}: {list(cwd_data.glob('*.json'))}")
+                cwd_seed = Path.cwd() / "seed_data"
+                if cwd_seed.exists():
+                    logger.info(f"   Содержимое {cwd_seed}: {list(cwd_seed.glob('*.json'))}")
                 self._lessons_cache = {}
                 return
         
