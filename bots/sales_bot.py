@@ -118,15 +118,21 @@ class SalesBot:
         
         # Регистрация обработчиков callback query
         # ВАЖНО: Порядок регистрации важен - более специфичные первыми
-        self.dp.callback_query.register(self.handle_upgrade_tariff, F.data == "upgrade_tariff")
+        # Регистрируем обработчики в порядке от более специфичных к менее специфичным
+        # startswith проверки должны быть ПЕРЕД точными совпадениями
         self.dp.callback_query.register(self.handle_tariff_selection, F.data.startswith("tariff:"))
         self.dp.callback_query.register(self.handle_upgrade_tariff_selection, F.data.startswith("upgrade:"))
-        self.dp.callback_query.register(self.handle_back_to_tariffs, F.data == "back_to_tariffs")
         self.dp.callback_query.register(self.handle_payment_initiate, F.data.startswith("pay:"))
         self.dp.callback_query.register(self.handle_payment_check, F.data.startswith("check_payment:"))
+        # Точные совпадения после startswith
+        self.dp.callback_query.register(self.handle_upgrade_tariff, F.data == "upgrade_tariff")
+        self.dp.callback_query.register(self.handle_back_to_tariffs, F.data == "back_to_tariffs")
         self.dp.callback_query.register(self.handle_cancel, F.data == "cancel")
         self.dp.callback_query.register(self.handle_talk_to_human, F.data == "sales:talk_to_human")
         self.dp.callback_query.register(self.handle_about_course, F.data == "sales:about_course")
+        
+        # Универсальный обработчик для отладки необработанных callback
+        self.dp.callback_query.register(self.handle_unhandled_callback)
         
         # Регистрация обработчиков для постоянных кнопок клавиатуры
         # ВАЖНО: Регистрируем ПЕРЕД общим обработчиком текста, чтобы они имели приоритет
@@ -531,24 +537,46 @@ class SalesBot:
         logger.info(f"   Callback data: '{callback.data}'")
         logger.info(f"   User ID: {callback.from_user.id}")
         logger.info(f"   Username: @{callback.from_user.username}")
+        logger.info(f"   Message ID: {callback.message.message_id if callback.message else 'None'}")
         logger.info("=" * 60)
         
         try:
             # Сначала отвечаем на callback, чтобы убрать индикатор загрузки
             try:
                 await callback.answer()
-                logger.info("   ✅ Callback answered")
+                logger.info("   ✅ Callback answered successfully")
             except Exception as answer_error:
-                logger.warning(f"   Не удалось ответить на callback (возможно устарел): {answer_error}")
+                logger.warning(f"   ⚠️ Не удалось ответить на callback (возможно устарел): {answer_error}")
                 # Продолжаем выполнение, даже если не удалось ответить
             
-            # Парсим тариф из callback data
-            if not callback.data or ":" not in callback.data:
-                logger.error(f"   ❌ Invalid callback data format: '{callback.data}'")
-                await callback.message.answer("❌ Ошибка: неверный формат данных. Попробуйте снова.")
+            # Проверяем наличие callback.data
+            if not callback.data:
+                logger.error(f"   ❌ Callback data is None or empty")
+                try:
+                    await callback.message.answer("❌ Ошибка: данные не получены. Попробуйте снова.")
+                except Exception as send_error:
+                    logger.error(f"   ❌ Failed to send error message: {send_error}")
                 return
             
-            tariff_str = callback.data.split(":")[1].strip().lower()
+            # Парсим тариф из callback data
+            if ":" not in callback.data:
+                logger.error(f"   ❌ Invalid callback data format: '{callback.data}' (no colon found)")
+                try:
+                    await callback.message.answer("❌ Ошибка: неверный формат данных. Попробуйте снова.")
+                except Exception as send_error:
+                    logger.error(f"   ❌ Failed to send error message: {send_error}")
+                return
+            
+            parts = callback.data.split(":", 1)  # Разделяем только на 2 части
+            if len(parts) < 2:
+                logger.error(f"   ❌ Invalid callback data format: '{callback.data}' (split failed)")
+                try:
+                    await callback.message.answer("❌ Ошибка: неверный формат данных. Попробуйте снова.")
+                except Exception as send_error:
+                    logger.error(f"   ❌ Failed to send error message: {send_error}")
+                return
+            
+            tariff_str = parts[1].strip().lower()
             logger.info(f"   Parsed tariff string: '{tariff_str}'")
             
             try:
@@ -556,37 +584,59 @@ class SalesBot:
                 logger.info(f"   ✅ Selected tariff: {tariff.value}")
             except ValueError as e:
                 logger.error(f"   ❌ Invalid tariff value: '{tariff_str}', error: {e}")
+                logger.error(f"   Available tariffs: {[t.value for t in Tariff]}")
                 try:
                     await callback.message.answer(f"❌ Ошибка: неверный тариф '{tariff_str}'. Попробуйте снова.")
+                except Exception as send_error:
+                    logger.error(f"   ❌ Failed to send error message: {send_error}")
+                return
+            
+            # Проверяем, что выбранный тариф доступен
+            available_tariffs = [Tariff.BASIC, Tariff.FEEDBACK, Tariff.PRACTIC]
+            if tariff not in available_tariffs:
+                logger.warning(f"   ⚠️ Tariff {tariff.value} not in available list: {[t.value for t in available_tariffs]}")
+                try:
+                    await callback.message.answer(
+                        "❌ Этот тариф временно недоступен.\n\n"
+                        "Доступные тарифы:\n"
+                        "• 📚 БАЗОВЫЙ - 5000₽\n"
+                        "• 💬 С ОБРАТНОЙ СВЯЗЬЮ - 10000₽\n"
+                        "• 🎯 PRACTIC - 20000₽\n\n"
+                        "Используйте /start для выбора тарифа."
+                    )
+                except Exception as send_error:
+                    logger.error(f"   ❌ Failed to send error message: {send_error}")
+                return
+            
+            # Получаем или создаем пользователя
+            user_id = callback.from_user.id
+            try:
+                user = await self.user_service.get_or_create_user(
+                    user_id,
+                    callback.from_user.username,
+                    callback.from_user.first_name,
+                    callback.from_user.last_name
+                )
+                logger.info(f"   ✅ User retrieved/created: {user_id}")
+            except Exception as user_error:
+                logger.error(f"   ❌ Error getting/creating user: {user_error}", exc_info=True)
+                try:
+                    await callback.message.answer("❌ Ошибка при обработке запроса. Попробуйте позже.")
                 except:
                     pass
                 return
             
-            # Проверяем, что выбранный тариф доступен
-            if tariff not in [Tariff.BASIC, Tariff.FEEDBACK, Tariff.PRACTIC]:
-                await callback.message.answer(
-                    "❌ Этот тариф временно недоступен.\n\n"
-                    "Доступные тарифы:\n"
-                    "• 📚 БАЗОВЫЙ - 3000₽\n"
-                    "• 💬 С ОБРАТНОЙ СВЯЗЬЮ - 5000₽\n"
-                    "• 🎯 PRACTIC - 20000₽\n\n"
-                    "Используйте /start для выбора тарифа."
-                )
-                return
-            
-            user_id = callback.from_user.id
-            user = await self.user_service.get_or_create_user(
-                user_id,
-                callback.from_user.username,
-                callback.from_user.first_name,
-                callback.from_user.last_name
-            )
-            
             # Show tariff details
-            description = format_tariff_description(tariff)
-            await callback.message.edit_text(
-                description + "\n\n💳 Перейти к оплате?",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            try:
+                description = format_tariff_description(tariff)
+                logger.info(f"   ✅ Tariff description generated for {tariff.value}")
+            except Exception as desc_error:
+                logger.error(f"   ❌ Error generating tariff description: {desc_error}", exc_info=True)
+                description = f"📦 <b>Тариф: {tariff.value.upper()}</b>\n\n💳 Перейти к оплате?"
+            
+            # Создаем клавиатуру с кнопками
+            try:
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [
                         InlineKeyboardButton(
                             text="✅ Оплатить",
@@ -606,8 +656,31 @@ class SalesBot:
                         )
                     ]
                 ])
-            )
-            logger.info(f"   Payment button created with callback_data: pay:{tariff.value}")
+                logger.info(f"   ✅ Keyboard created with callback_data: pay:{tariff.value}")
+            except Exception as keyboard_error:
+                logger.error(f"   ❌ Error creating keyboard: {keyboard_error}", exc_info=True)
+                raise
+            
+            # Редактируем сообщение
+            try:
+                await callback.message.edit_text(
+                    description + "\n\n💳 Перейти к оплате?",
+                    reply_markup=keyboard
+                )
+                logger.info(f"   ✅ Message edited successfully for tariff {tariff.value}")
+            except Exception as edit_error:
+                logger.error(f"   ❌ Error editing message: {edit_error}", exc_info=True)
+                # Если не удалось отредактировать, пробуем отправить новое сообщение
+                try:
+                    await callback.message.answer(
+                        description + "\n\n💳 Перейти к оплате?",
+                        reply_markup=keyboard
+                    )
+                    logger.info(f"   ✅ New message sent instead of edit")
+                except Exception as send_error:
+                    logger.error(f"   ❌ Failed to send new message: {send_error}", exc_info=True)
+                    raise
+                    
         except Exception as e:
             logger.error(f"❌ Error in handle_tariff_selection: {e}", exc_info=True)
             try:
@@ -615,9 +688,10 @@ class SalesBot:
             except:
                 # Если не удалось ответить на callback, пробуем отправить сообщение
                 try:
-                    await callback.message.answer("❌ Ошибка при выборе тарифа. Попробуйте снова.")
-                except:
-                    pass
+                    if callback.message:
+                        await callback.message.answer("❌ Ошибка при выборе тарифа. Попробуйте снова.")
+                except Exception as final_error:
+                    logger.error(f"   ❌ Final error handling failed: {final_error}", exc_info=True)
     
     async def handle_back_to_tariffs(self, callback: CallbackQuery):
         """Handle back to tariffs button - show tariff selection again."""
