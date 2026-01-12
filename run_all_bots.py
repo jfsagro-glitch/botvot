@@ -9,6 +9,7 @@ import logging
 import sys
 import os
 import threading
+from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from bots.sales_bot import SalesBot
 from bots.course_bot import CourseBot
@@ -127,6 +128,21 @@ async def main():
     else:
         logger.warning("   ⚠️ Не найдено переменных окружения с ключевыми словами BOT/SALES/COURSE/TOKEN")
         logger.warning("   ⚠️ Убедитесь, что переменные добавлены в Railway Variables и привязаны к сервису")
+
+    # Диагностика БД (частая причина "пропал доступ" на Railway — неперсистентный диск/другой путь)
+    try:
+        db_path = (os.environ.get("DATABASE_PATH") or Config.DATABASE_PATH or "").strip()
+        logger.info(f"🗄️ DATABASE_PATH: '{db_path}'")
+        if db_path:
+            p = Path(db_path)
+            # Для относительных путей показываем абсолютный (в контейнере будет /app/...)
+            logger.info(f"🗄️ DATABASE_PATH resolved: '{p.resolve()}' (exists: {p.exists()})")
+            logger.info(f"🗄️ DB parent dir: '{p.parent.resolve()}' (exists: {p.parent.exists()})")
+            if not p.exists():
+                logger.warning("⚠️ Файл БД не найден. Если это Railway и вы делали redeploy/restart без Volume — доступ пользователей будет 'пропадать'.")
+                logger.warning("⚠️ Решение: подключить Volume и поставить DATABASE_PATH на примонтированный путь (например /app/data/course_platform.db).")
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось выполнить диагностику DATABASE_PATH: {e}")
     
     # КРИТИЧЕСКИ ВАЖНО: Запускаем HTTP сервер ПЕРВЫМ и в отдельном потоке
     # Railway проверяет healthcheck сразу, даже если боты еще не готовы
