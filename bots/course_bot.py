@@ -3120,14 +3120,8 @@ class CourseBot:
             await message.answer("❌ У вас нет доступа к этому курсу.", reply_markup=persistent_keyboard)
             return
         
-        # Импортируем функции для анимации эмодзи
-        from bots.mentor_reminders import get_mentor_emoji_sequence
-        
-        # Анимация эмодзи наставника (последовательно отправляем разные эмодзи)
-        emoji_sequence = get_mentor_emoji_sequence()
-        for emoji in emoji_sequence:
-            await message.answer(emoji)
-            await asyncio.sleep(0.3)
+        # Отправляем один анимированный эмодзи наставника
+        await message.answer("👨‍🏫")
         
         # Создаем клавиатуру с выбором частоты напоминаний
         buttons = []
