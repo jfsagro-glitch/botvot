@@ -685,22 +685,52 @@ class SalesBot:
             
             # Редактируем сообщение
             try:
-                await callback.message.edit_text(
-                    description + "\n\n💳 Перейти к оплате?",
-                    reply_markup=keyboard
-                )
-                logger.info(f"   ✅ Message edited successfully for tariff {tariff.value}")
-            except Exception as edit_error:
-                logger.error(f"   ❌ Error editing message: {edit_error}", exc_info=True)
-                # Если не удалось отредактировать, пробуем отправить новое сообщение
+                # Пробуем отредактировать сообщение
                 try:
-                    await callback.message.answer(
+                    await callback.message.edit_text(
                         description + "\n\n💳 Перейти к оплате?",
                         reply_markup=keyboard
                     )
-                    logger.info(f"   ✅ New message sent instead of edit")
-                except Exception as send_error:
-                    logger.error(f"   ❌ Failed to send new message: {send_error}", exc_info=True)
+                    logger.info(f"   ✅ Message edited successfully for tariff {tariff.value}")
+                except Exception as edit_error:
+                    error_msg = str(edit_error).lower()
+                    # Если сообщение не изменилось или другая ошибка редактирования
+                    if "message is not modified" in error_msg or "message_not_modified" in error_msg:
+                        logger.warning(f"   ⚠️ Message not modified (same content), sending new message")
+                        # Отправляем новое сообщение вместо редактирования
+                        await callback.message.answer(
+                            description + "\n\n💳 Перейти к оплате?",
+                            reply_markup=keyboard
+                        )
+                        logger.info(f"   ✅ New message sent instead of edit (message not modified)")
+                    elif "message can't be edited" in error_msg or "message_to_edit_not_found" in error_msg:
+                        logger.warning(f"   ⚠️ Message can't be edited, sending new message")
+                        # Отправляем новое сообщение
+                        await callback.message.answer(
+                            description + "\n\n💳 Перейти к оплате?",
+                            reply_markup=keyboard
+                        )
+                        logger.info(f"   ✅ New message sent instead of edit (can't edit)")
+                    else:
+                        # Другая ошибка - пробуем отправить новое сообщение
+                        logger.error(f"   ❌ Error editing message: {edit_error}", exc_info=True)
+                        await callback.message.answer(
+                            description + "\n\n💳 Перейти к оплате?",
+                            reply_markup=keyboard
+                        )
+                        logger.info(f"   ✅ New message sent instead of edit (error fallback)")
+            except Exception as send_error:
+                logger.error(f"   ❌ Failed to send/edit message: {send_error}", exc_info=True)
+                # Пробуем отправить простое сообщение без клавиатуры
+                try:
+                    await callback.message.answer(
+                        f"📦 <b>Тариф: {tariff.value.upper()}</b>\n\n"
+                        f"{description}\n\n"
+                        f"💳 Для оплаты используйте кнопку ниже или команду /start"
+                    )
+                    logger.info(f"   ✅ Fallback message sent")
+                except Exception as final_error:
+                    logger.error(f"   ❌ Final fallback failed: {final_error}", exc_info=True)
                     raise
                     
         except Exception as e:
