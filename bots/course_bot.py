@@ -216,7 +216,7 @@ class CourseBot:
         self.dp.message.register(self.handle_keyboard_navigator, F.text == "🧭")
         self.dp.message.register(self.handle_keyboard_ask_question, F.text == "❓")
         self.dp.message.register(self.handle_keyboard_tariffs, F.text == "💎")
-        self.dp.message.register(self.handle_keyboard_test, F.text == "🔍")
+        # Кнопка 🔍 была тестовой и удалена из постоянной клавиатуры
         self.dp.message.register(self.handle_keyboard_discussion, F.text == "💬")
         self.dp.message.register(self.handle_keyboard_mentor, F.text.startswith("👨‍🏫 Наставник"))
         
@@ -1660,9 +1660,12 @@ class CourseBot:
             skip_intro: Пропустить intro_text (для навигатора)
             skip_about_me: Пропустить блок "ОБО МНЕ" (для навигатора)
         """
-        import traceback
+        # Тяжёлое логирование стека сильно замедляет отправку уроков и раздувает логи.
+        # Оставляем подробности только на DEBUG.
         logger.info(f"🔵 _send_lesson_from_json CALLED for day {day}, user {user.user_id}, skip_intro={skip_intro}, skip_about_me={skip_about_me}")
-        logger.info(f"   Call stack: {''.join(traceback.format_stack()[-3:-1])}")
+        if logger.isEnabledFor(logging.DEBUG):
+            import traceback
+            logger.debug(f"Call stack: {''.join(traceback.format_stack()[-3:-1])}")
         
         try:
             if day is None:

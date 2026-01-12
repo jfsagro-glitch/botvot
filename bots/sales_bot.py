@@ -1641,6 +1641,7 @@ class SalesBot:
             logger.warning(f"LessonLoader not available, cannot send lesson 0 to user {user_id}")
             return
         
+        course_bot_instance = None
         try:
             # Импортируем CourseBot для использования его метода отправки урока
             from bots.course_bot import CourseBot
@@ -1673,6 +1674,13 @@ class SalesBot:
         except Exception as e:
             logger.error(f"Error in _send_lesson_0_to_user for user {user_id}: {e}", exc_info=True)
             raise
+        finally:
+            # Важно: закрываем aiohttp-сессию бота, чтобы не копить ресурсы/подключения
+            try:
+                if course_bot_instance and getattr(course_bot_instance, "bot", None):
+                    await course_bot_instance.bot.session.close()
+            except Exception:
+                pass
     
     async def start(self):
         """Start the bot."""
