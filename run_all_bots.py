@@ -133,11 +133,39 @@ async def main():
     try:
         db_path = (os.environ.get("DATABASE_PATH") or Config.DATABASE_PATH or "").strip()
         logger.info(f"🗄️ DATABASE_PATH: '{db_path}'")
+        # Диагностика Volume (на Railway Volume виден как mountpoint в /proc/mounts)
+        try:
+            mounts_file = Path("/proc/mounts")
+            if mounts_file.exists():
+                mounts_text = mounts_file.read_text(encoding="utf-8", errors="ignore")
+                is_app_data_mounted = any(
+                    line.split()[1] == "/app/data"
+                    for line in mounts_text.splitlines()
+                    if line and len(line.split()) >= 2
+                )
+                logger.info(f"🧩 Volume mount check: /app/data mounted = {is_app_data_mounted}")
+                if not is_app_data_mounted:
+                    logger.warning("⚠️ /app/data НЕ является отдельным mountpoint. Если вы ожидаете Railway Volume — он, вероятно, не подключён.")
+                    logger.warning("⚠️ Без Volume SQLite будет храниться на эфемерном диске и доступ пользователей может 'слетать' после restart/redeploy.")
+            else:
+                logger.info("🧩 Volume mount check: /proc/mounts недоступен (не Linux контейнер?)")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось проверить mountpoints (/proc/mounts): {e}")
+
         if db_path:
             p = Path(db_path)
             # Для относительных путей показываем абсолютный (в контейнере будет /app/...)
             logger.info(f"🗄️ DATABASE_PATH resolved: '{p.resolve()}' (exists: {p.exists()})")
             logger.info(f"🗄️ DB parent dir: '{p.parent.resolve()}' (exists: {p.parent.exists()})")
+            # Проверяем возможность записи (если директория не writable — БД не сможет сохраняться/обновляться)
+            try:
+                if p.parent.exists():
+                    test_file = p.parent / ".write_test"
+                    test_file.write_text("ok", encoding="utf-8")
+                    test_file.unlink(missing_ok=True)
+                    logger.info("🗄️ DB directory writable: True")
+            except Exception as e:
+                logger.warning(f"⚠️ DB directory writable: False ({e})")
             if not p.exists():
                 logger.warning("⚠️ Файл БД не найден. Если это Railway и вы делали redeploy/restart без Volume — доступ пользователей будет 'пропадать'.")
                 logger.warning("⚠️ Решение: подключить Volume и поставить DATABASE_PATH на примонтированный путь (например /app/data/course_platform.db).")
