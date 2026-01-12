@@ -416,8 +416,8 @@ class Database:
             current_day=row["current_day"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
-            mentor_reminders=row.get("mentor_reminders", 0) or 0,
-            last_mentor_reminder=datetime.fromisoformat(row["last_mentor_reminder"]) if row.get("last_mentor_reminder") else None
+            mentor_reminders=row["mentor_reminders"] if "mentor_reminders" in row.keys() else 0,
+            last_mentor_reminder=datetime.fromisoformat(row["last_mentor_reminder"]) if ("last_mentor_reminder" in row.keys() and row["last_mentor_reminder"]) else None
         )
     
     def _row_to_lesson(self, row) -> Lesson:
