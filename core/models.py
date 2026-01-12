@@ -35,10 +35,10 @@ class User:
     referral_partner_id: Optional[str]  # Partner who referred this user
     start_date: Optional[datetime]      # When user started the course
     current_day: int                     # Current lesson day (1-30)
-    mentor_reminders: int = 0            # Frequency of mentor reminders (0-5, 0 = disabled)
-    last_mentor_reminder: Optional[datetime] = None  # Last time mentor reminder was sent
     created_at: datetime
     updated_at: datetime
+    mentor_reminders: int = 0            # Frequency of mentor reminders (0-5, 0 = disabled)
+    last_mentor_reminder: Optional[datetime] = None  # Last time mentor reminder was sent
     
     def has_access(self) -> bool:
         """Check if user has active course access."""
