@@ -168,6 +168,10 @@ class Database:
     
     async def update_user(self, user: User):
         """Update user information."""
+        # Убеждаемся, что соединение установлено
+        if not hasattr(self, 'conn') or self.conn is None:
+            await self.connect()
+        
         await self.conn.execute("""
             UPDATE users SET
                 username = ?, first_name = ?, last_name = ?,
