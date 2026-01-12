@@ -92,6 +92,38 @@ async def main():
     logger.info("=" * 60)
     logger.info("🚀 Запуск платформы курсов")
     logger.info("=" * 60)
+
+    # Railway / deploy diagnostics (helps confirm which revision is actually running)
+    try:
+        possible_keys = [
+            "RAILWAY_GIT_COMMIT_SHA",
+            "RAILWAY_GIT_BRANCH",
+            "RAILWAY_DEPLOYMENT_ID",
+            "RAILWAY_SERVICE_ID",
+            "RAILWAY_ENVIRONMENT_ID",
+            "GIT_COMMIT",
+            "COMMIT_SHA",
+        ]
+        found = {k: os.environ.get(k) for k in possible_keys if os.environ.get(k)}
+        if found:
+            logger.info("🧾 Deploy metadata (from env):")
+            for k in sorted(found.keys()):
+                logger.info(f"   - {k}={found[k]}")
+        else:
+            logger.info("🧾 Deploy metadata (from env): not provided by platform")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not read deploy metadata env vars: {e}")
+
+    # Seed data presence diagnostics (lessons JSON should be in image, not in /app/data Volume)
+    try:
+        seed_dir = Path("/app/seed_data")
+        seed_lessons = seed_dir / "lessons.json"
+        logger.info(f"📦 seed_data dir exists: {seed_dir.exists()}")
+        if seed_dir.exists():
+            logger.info(f"📦 seed_data contents: {[p.name for p in sorted(seed_dir.glob('*'))][:30]}")
+        logger.info(f"📦 seed_data/lessons.json exists: {seed_lessons.exists()}")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not check /app/seed_data: {e}")
     
     # Диагностика переменных окружения при старте
     logger.info("🔍 Проверка переменных окружения...")
