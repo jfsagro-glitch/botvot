@@ -1450,7 +1450,93 @@ class SalesBot:
         
         # Note: In production, you would:
         # 1. Use bot API to actually invite user to groups
-        # 3. Set up webhook or polling to course bot to trigger first lesson
+    
+    async def _send_lesson_0_to_user(self, user_id: int):
+        """
+        Send lesson 0 to user immediately after subscription purchase.
+        
+        Args:
+            user_id: Telegram user ID
+        """
+        try:
+            # Import course bot components
+            from aiogram import Bot
+            from aiogram.client.default import DefaultBotProperties
+            from aiogram.enums import ParseMode
+            from utils.premium_ui import send_typing_action, create_premium_separator
+            
+            # Create course bot instance for sending lesson
+            course_bot = Bot(token=Config.COURSE_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+            
+            # Get lesson 0 data
+            lesson_data = self.lesson_loader.get_lesson(0)
+            if not lesson_data:
+                logger.warning(f"Lesson 0 not found for user {user_id}")
+                await course_bot.session.close()
+                return
+            
+            # Get user from database
+            user = await self.user_service.get_user(user_id)
+            if not user:
+                logger.error(f"User {user_id} not found")
+                await course_bot.session.close()
+                return
+            
+            # Send lesson 0 using the same method as course bot
+            await send_typing_action(course_bot, user_id, 0.8)
+            
+            # Send intro text if exists
+            intro_text = lesson_data.get("intro_text", "")
+            if intro_text:
+                intro_message = f"{intro_text}\n\n{create_premium_separator()}\n\n"
+                await course_bot.send_message(user_id, intro_message)
+                await asyncio.sleep(0.5)
+            
+            # Send video if exists (lesson 0 has video with intro_text in caption)
+            media = lesson_data.get("media", [])
+            lesson0_video_media = None
+            for item in media:
+                if item.get("type") == "video" and item.get("file_id"):
+                    lesson0_video_media = item
+                    break
+            
+            if lesson0_video_media:
+                video_file_id = lesson0_video_media.get("file_id")
+                video_caption = intro_text if intro_text else None
+                
+                await course_bot.send_video(
+                    user_id,
+                    video_file_id,
+                    caption=video_caption,
+                    parse_mode="HTML"
+                )
+                await asyncio.sleep(0.5)
+            
+            # Send main text
+            main_text = lesson_data.get("text", "")
+            if main_text:
+                await course_bot.send_message(user_id, main_text, parse_mode="HTML")
+                await asyncio.sleep(0.5)
+            
+            # Send persistent keyboard
+            from utils.telegram_helpers import create_persistent_keyboard
+            persistent_keyboard = create_persistent_keyboard()
+            await course_bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
+            
+            logger.info(f"✅ Lesson 0 sent to user {user_id}")
+            
+            # Close bot session
+            await course_bot.session.close()
+            
+        except Exception as e:
+            logger.error(f"Error in _send_lesson_0_to_user for user {user_id}: {e}", exc_info=True)
+            # Try to close bot session even on error
+            try:
+                if 'course_bot' in locals():
+                    await course_bot.session.close()
+            except:
+                pass
+            raise
     
     async def start(self):
         """Start the bot."""
