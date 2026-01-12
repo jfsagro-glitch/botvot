@@ -611,60 +611,58 @@ class SalesBot:
             
             # Получаем или создаем пользователя
             user_id = callback.from_user.id
-            try:
-                # Убеждаемся, что база данных подключена
-                if not hasattr(self.db, 'conn') or self.db.conn is None:
-                    logger.info(f"   ⚠️ Database not connected, connecting now...")
-                    await self.db.connect()
-                    logger.info(f"   ✅ Database connected")
-                else:
-                    # Проверяем, что соединение действительно работает
-                    try:
-                        # Простой тестовый запрос
-                        async with self.db.conn.execute("SELECT 1") as cursor:
-                            await cursor.fetchone()
-                        logger.debug(f"   ✅ Database connection is active")
-                    except Exception as conn_test_error:
-                        logger.warning(f"   ⚠️ Database connection test failed, reconnecting: {conn_test_error}")
-                        try:
-                            await self.db.close()
-                        except:
-                            pass
-                        await self.db.connect()
-                        logger.info(f"   ✅ Database reconnected")
-                
-                user = await self.user_service.get_or_create_user(
-                    user_id,
-                    callback.from_user.username,
-                    callback.from_user.first_name,
-                    callback.from_user.last_name
-                )
-                logger.info(f"   ✅ User retrieved/created: {user_id}")
-            except Exception as user_error:
-                logger.error(f"   ❌ Error getting/creating user: {user_error}", exc_info=True)
-                # Пробуем переподключиться к базе данных
+            user = None
+            
+            # Убеждаемся, что база данных подключена
+            max_retries = 3
+            for attempt in range(max_retries):
                 try:
-                    try:
-                        if hasattr(self.db, 'conn') and self.db.conn:
-                            await self.db.close()
-                    except:
-                        pass
-                    await self.db.connect()
-                    logger.info(f"   ✅ Database reconnected, retrying...")
+                    # Проверяем подключение
+                    if not hasattr(self.db, 'conn') or self.db.conn is None:
+                        logger.info(f"   ⚠️ Database not connected (attempt {attempt + 1}), connecting...")
+                        await self.db.connect()
+                        logger.info(f"   ✅ Database connected")
+                    
+                    # Пробуем получить/создать пользователя
                     user = await self.user_service.get_or_create_user(
                         user_id,
                         callback.from_user.username,
                         callback.from_user.first_name,
                         callback.from_user.last_name
                     )
-                    logger.info(f"   ✅ User retrieved/created after reconnect: {user_id}")
-                except Exception as retry_error:
-                    logger.error(f"   ❌ Retry failed: {retry_error}", exc_info=True)
-                    try:
-                        await callback.message.answer("❌ Ошибка при обработке запроса. Попробуйте позже.")
-                    except:
-                        pass
-                    return
+                    logger.info(f"   ✅ User retrieved/created: {user_id}")
+                    break  # Успешно, выходим из цикла
+                    
+                except Exception as user_error:
+                    logger.error(f"   ❌ Error getting/creating user (attempt {attempt + 1}): {user_error}", exc_info=True)
+                    if attempt < max_retries - 1:
+                        # Пробуем переподключиться
+                        try:
+                            if hasattr(self.db, 'conn') and self.db.conn:
+                                try:
+                                    await self.db.close()
+                                except:
+                                    pass
+                        except:
+                            pass
+                        await asyncio.sleep(0.5)  # Небольшая задержка перед повтором
+                        continue
+                    else:
+                        # Все попытки исчерпаны
+                        logger.error(f"   ❌ All {max_retries} attempts failed")
+                        try:
+                            await callback.message.answer("❌ Ошибка при обработке запроса. Попробуйте позже.")
+                        except:
+                            pass
+                        return
+            
+            if user is None:
+                logger.error(f"   ❌ Failed to get/create user after {max_retries} attempts")
+                try:
+                    await callback.message.answer("❌ Ошибка при обработке запроса. Попробуйте позже.")
+                except:
+                    pass
+                return
             
             # Show tariff details
             try:
@@ -1713,9 +1711,20 @@ class SalesBot:
     async def start(self):
         """Start the bot."""
         try:
+            # ВАЖНО: Подключаем базу данных ПЕРВЫМ делом
             logger.info("Connecting to database...")
-            await self.db.connect()
-            logger.info("✅ Database connected")
+            try:
+                await self.db.connect()
+                logger.info("✅ Database connected")
+            except Exception as db_error:
+                logger.error(f"❌ Failed to connect to database: {db_error}", exc_info=True)
+                # Пробуем еще раз
+                try:
+                    await self.db.connect()
+                    logger.info("✅ Database connected on retry")
+                except Exception as retry_error:
+                    logger.error(f"❌ Database connection retry failed: {retry_error}", exc_info=True)
+                    raise
             
             logger.info("Starting Sales Bot...")
             me = await self.bot.get_me()
