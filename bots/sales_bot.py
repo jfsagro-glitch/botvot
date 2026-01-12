@@ -1469,6 +1469,10 @@ class SalesBot:
         Args:
             user_id: Telegram user ID
         """
+        if not self.lesson_loader:
+            logger.warning(f"LessonLoader not available, cannot send lesson 0 to user {user_id}")
+            return
+        
         try:
             # Import course bot components
             from aiogram import Bot
