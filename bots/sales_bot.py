@@ -722,6 +722,19 @@ class SalesBot:
                 except:
                     pass
     
+    async def handle_unhandled_callback(self, callback: CallbackQuery):
+        """Handle unhandled callback queries for debugging."""
+        logger.warning("=" * 60)
+        logger.warning("⚠️ UNHANDLED CALLBACK QUERY")
+        logger.warning(f"   Callback data: '{callback.data}'")
+        logger.warning(f"   User ID: {callback.from_user.id}")
+        logger.warning(f"   Username: @{callback.from_user.username}")
+        logger.warning("=" * 60)
+        try:
+            await callback.answer("⚠️ Эта кнопка пока не обрабатывается", show_alert=True)
+        except:
+            pass
+    
     async def handle_upgrade_tariff(self, callback: CallbackQuery):
         """Handle upgrade tariff button click - show available upgrade options."""
         try:
