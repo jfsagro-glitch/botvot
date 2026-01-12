@@ -2315,14 +2315,12 @@ class CourseBot:
                     
                     if file_id:
                         if media_type == "video":
-                            # Отправляем видео с параметрами для растягивания по ширине экрана
-                            # Видео оптимизировано до 1080x606 для мобильных устройств
+                            # Отправляем видео без форсирования width/height:
+                            # Telegram сам возьмёт реальные пропорции из файла и отрисует превью корректно.
                             await self._send_video_with_retry(
                                 user.user_id,
                                 file_id,
                                 caption=video_caption,
-                                width=1080,
-                                height=606,
                                 supports_streaming=True
                             )
                         else:
@@ -2354,13 +2352,11 @@ class CourseBot:
                         if media_file.exists():
                             media_input = FSInputFile(media_file)
                             if media_type == "video":
-                                # Отправляем видео с параметрами для растягивания по ширине экрана
+                                # Отправляем видео без форсирования width/height (см. выше)
                                 await self._send_video_with_retry(
                                     user.user_id,
                                     media_input,
                                     caption=video_caption,
-                                    width=1080,
-                                    height=606,
                                     supports_streaming=True
                                 )
                             else:
