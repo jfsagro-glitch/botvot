@@ -1014,6 +1014,19 @@ class CourseBot:
         if not lesson_data:
             await callback.message.answer("❌ Урок 30 не найден.")
             return
+
+        # Автоматическая/единая отправка финального сообщения (используется также в авто-режиме после задания)
+        try:
+            await self._send_lesson30_final_message_to_user(
+                user_id=user_id,
+                lesson_data=lesson_data,
+                send_keyboard=True
+            )
+            return
+        except Exception as e:
+            logger.error(f"   ❌ Ошибка при отправке финального сообщения (единый метод): {e}", exc_info=True)
+            await callback.message.answer("❌ Произошла ошибка при отправке финального сообщения. Попробуйте позже.")
+            return
         
         try:
             follow_up_text = lesson_data.get("follow_up_text", "")
@@ -1231,6 +1244,199 @@ class CourseBot:
         except Exception as e:
             logger.error(f"   ❌ Ошибка при отправке финального сообщения: {e}", exc_info=True)
             await callback.message.answer("❌ Произошла ошибка при отправке финального сообщения. Попробуйте позже.")
+
+    async def _send_lesson30_final_message_to_user(self, user_id: int, lesson_data: dict, send_keyboard: bool = True):
+        """
+        Единый метод отправки финального сообщения (follow_up) для урока 30.
+        Используется:
+        - по нажатию кнопки "🎊 ФИНАЛЬНОЕ СООБЩЕНИЕ"
+        - автоматически после отправки обратной связи по заданию 30
+        """
+        follow_up_text = (lesson_data.get("follow_up_text", "") or "").strip()
+        follow_up_photo_file_id = (lesson_data.get("follow_up_photo_file_id", "") or "").strip()
+        follow_up_photo_path = (lesson_data.get("follow_up_photo_path", "") or "").strip()
+
+        if not (follow_up_text or follow_up_photo_file_id or follow_up_photo_path):
+            logger.warning("   ⚠️ Lesson 30 final message is empty (no text/photo).")
+            return
+
+        persistent_keyboard = self._create_persistent_keyboard() if send_keyboard else None
+
+        CAPTION_LIMIT = 1024
+        MAX_MESSAGE_LENGTH = 4000
+
+        def _split_caption(text: str):
+            if not text:
+                return "━━━━━━━━━━━━━━", None
+            if len(text) <= CAPTION_LIMIT:
+                return text, None
+            cut = text.rfind("\n", 0, CAPTION_LIMIT)
+            if cut < 900:
+                cut = text.rfind(" ", 0, CAPTION_LIMIT)
+            if cut < 900:
+                cut = CAPTION_LIMIT
+            return text[:cut].rstrip(), text[cut:].lstrip()
+
+        async def _send_text(text: str):
+            if not text or not text.strip():
+                return
+            if len(text) > MAX_MESSAGE_LENGTH:
+                parts = self._split_long_message(text, MAX_MESSAGE_LENGTH)
+                for part in parts[:-1]:
+                    if part and part.strip():
+                        await self.bot.send_message(user_id, part)
+                        await asyncio.sleep(0.3)
+                last_part = parts[-1]
+                if last_part and last_part.strip():
+                    await self.bot.send_message(user_id, last_part, reply_markup=persistent_keyboard)
+                elif persistent_keyboard:
+                    await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
+            else:
+                await self.bot.send_message(user_id, text, reply_markup=persistent_keyboard)
+
+        # 1) Photo by file_id
+        if follow_up_photo_file_id:
+            caption, remaining = _split_caption(follow_up_text)
+            await send_typing_action(self.bot, user_id, 0.6)
+            await self.bot.send_photo(
+                user_id,
+                follow_up_photo_file_id,
+                caption=caption,
+                reply_markup=persistent_keyboard if (send_keyboard and not remaining) else None
+            )
+            if remaining:
+                await asyncio.sleep(0.5)
+                await _send_text(remaining)
+            return
+
+        # 2) Photo by path (optional)
+        if follow_up_photo_path:
+            try:
+                from pathlib import Path
+                from aiogram.types import FSInputFile
+                import os
+
+                normalized_path = follow_up_photo_path.replace("/", os.sep)
+                photo_path = Path(normalized_path)
+                if not photo_path.exists():
+                    photo_path = Path.cwd() / normalized_path
+                if photo_path.exists():
+                    caption, remaining = _split_caption(follow_up_text)
+                    await send_typing_action(self.bot, user_id, 0.6)
+                    await self.bot.send_photo(
+                        user_id,
+                        FSInputFile(photo_path),
+                        caption=caption,
+                        reply_markup=persistent_keyboard if (send_keyboard and not remaining) else None
+                    )
+                    if remaining:
+                        await asyncio.sleep(0.5)
+                        await _send_text(remaining)
+                    return
+            except Exception as e:
+                logger.warning(f"   ⚠️ Failed to send final photo by path: {e}")
+
+        # 3) Text only
+        if follow_up_text:
+            await send_typing_action(self.bot, user_id, 0.6)
+            await _send_text(follow_up_text)
+
+    async def _send_lesson30_final_message_to_user(self, user_id: int, lesson_data: dict, send_keyboard: bool = True):
+        """
+        Отправляет финальное сообщение (follow_up) для урока 30 пользователю.
+        Используется:
+        - по нажатию кнопки "🎊 ФИНАЛЬНОЕ СООБЩЕНИЕ"
+        - автоматически после отправки задания дня 30
+        """
+        follow_up_text = (lesson_data.get("follow_up_text", "") or "").strip()
+        follow_up_photo_path = (lesson_data.get("follow_up_photo_path", "") or "").strip()
+        follow_up_photo_file_id = (lesson_data.get("follow_up_photo_file_id", "") or "").strip()
+
+        if not (follow_up_text or follow_up_photo_path or follow_up_photo_file_id):
+            logger.warning("   ⚠️ Lesson 30 final message is empty (no text/photo).")
+            return
+
+        persistent_keyboard = self._create_persistent_keyboard() if send_keyboard else None
+
+        CAPTION_LIMIT = 1024
+        MAX_MESSAGE_LENGTH = 4000
+
+        def split_caption(text: str):
+            if not text:
+                return "━━━━━━━━━━━━━━", None
+            if len(text) <= CAPTION_LIMIT:
+                return text, None
+            cut = text.rfind("\n", 0, CAPTION_LIMIT)
+            if cut < 900:
+                cut = text.rfind(" ", 0, CAPTION_LIMIT)
+            if cut < 900:
+                cut = CAPTION_LIMIT
+            return text[:cut].rstrip(), text[cut:].lstrip()
+
+        async def send_text_parts(text: str):
+            if not text or not text.strip():
+                return
+            if len(text) > MAX_MESSAGE_LENGTH:
+                parts = self._split_long_message(text, MAX_MESSAGE_LENGTH)
+                for part in parts[:-1]:
+                    if part and part.strip():
+                        await self.bot.send_message(user_id, part)
+                        await asyncio.sleep(0.3)
+                last_part = parts[-1]
+                if last_part and last_part.strip():
+                    await self.bot.send_message(user_id, last_part, reply_markup=persistent_keyboard)
+                elif persistent_keyboard:
+                    await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
+            else:
+                await self.bot.send_message(user_id, text, reply_markup=persistent_keyboard)
+
+        # 1) Photo by file_id
+        if follow_up_photo_file_id:
+            caption, remaining = split_caption(follow_up_text)
+            await send_typing_action(self.bot, user_id, 0.6)
+            await self.bot.send_photo(
+                user_id,
+                follow_up_photo_file_id,
+                caption=caption,
+                reply_markup=persistent_keyboard if (send_keyboard and not remaining) else None
+            )
+            if remaining:
+                await asyncio.sleep(0.5)
+                await send_text_parts(remaining)
+            return
+
+        # 2) Photo by path
+        if follow_up_photo_path:
+            try:
+                from pathlib import Path
+                from aiogram.types import FSInputFile
+                import os
+
+                normalized = follow_up_photo_path.replace("/", os.sep)
+                photo_path = Path(normalized)
+                if not photo_path.exists():
+                    photo_path = Path.cwd() / normalized
+
+                if photo_path.exists():
+                    caption, remaining = split_caption(follow_up_text)
+                    await send_typing_action(self.bot, user_id, 0.6)
+                    await self.bot.send_photo(
+                        user_id,
+                        FSInputFile(photo_path),
+                        caption=caption,
+                        reply_markup=persistent_keyboard if (send_keyboard and not remaining) else None
+                    )
+                    if remaining:
+                        await asyncio.sleep(0.5)
+                        await send_text_parts(remaining)
+                    return
+            except Exception as e:
+                logger.warning(f"   ⚠️ Failed to send final photo by path: {e}")
+
+        # 3) Text only
+        if follow_up_text:
+            await send_typing_action(self.bot, user_id, 0.6)
+            await send_text_parts(follow_up_text)
     
     async def _show_navigator(self, user_id: int, message_or_callback):
         """Показывает навигатор курса (вспомогательный метод)."""
@@ -2901,6 +3107,9 @@ class CourseBot:
         if not assignment:
             await message.answer("❌ Задание не найдено.")
             return
+
+        # Авто-финал: после ответа по заданию 30
+        should_send_final = (assignment.day_number == 30 and assignment.status != "feedback_sent")
         
         # Add feedback
         feedback_text = message.text or message.caption or ""
@@ -2917,6 +3126,16 @@ class CourseBot:
             
             await self.bot.send_message(user.user_id, feedback_message)
             await self.assignment_service.mark_feedback_sent(assignment_id)
+
+            # После обратной связи по дню 30 автоматически отправляем финальное сообщение
+            if should_send_final and self.lesson_loader:
+                try:
+                    lesson30 = self.lesson_loader.get_lesson(30)
+                    if lesson30:
+                        await asyncio.sleep(0.8)
+                        await self._send_lesson30_final_message_to_user(user_id=user.user_id, lesson_data=lesson30, send_keyboard=True)
+                except Exception as e:
+                    logger.error(f"   ❌ Failed to auto-send final message after feedback (user={user.user_id}): {e}", exc_info=True)
             
             await message.answer("✅ Обратная связь отправлена пользователю.")
         else:
@@ -2950,6 +3169,9 @@ class CourseBot:
         if not assignment:
             await message.answer("❌ Задание не найдено.")
             return
+
+        # Авто-финал: после ответа по заданию 30
+        should_send_final = (assignment.day_number == 30 and assignment.status != "feedback_sent")
         
         # Add feedback
         feedback_text = message.text or message.caption or ""
@@ -2966,6 +3188,16 @@ class CourseBot:
             
             await self.bot.send_message(user.user_id, feedback_message)
             await self.assignment_service.mark_feedback_sent(assignment_id)
+
+            # После обратной связи по дню 30 автоматически отправляем финальное сообщение
+            if should_send_final and self.lesson_loader:
+                try:
+                    lesson30 = self.lesson_loader.get_lesson(30)
+                    if lesson30:
+                        await asyncio.sleep(0.8)
+                        await self._send_lesson30_final_message_to_user(user_id=user.user_id, lesson_data=lesson30, send_keyboard=True)
+                except Exception as e:
+                    logger.error(f"   ❌ Failed to auto-send final message after admin feedback (user={user.user_id}): {e}", exc_info=True)
             
             await message.answer("✅ Обратная связь отправлена пользователю.")
         else:
