@@ -7,6 +7,10 @@ env/
 venv/
 .venv
 .env
+# Heavy media (kept in repo for reference; bots use Telegram file_id in production)
+Photo/video_pic/
+Photo/video_pic_optimized/
+Photo/**/*.mp4
 # Базы данных (исключаем, но оставляем JSON файлы!)
 data/*.db
 data/*.sqlite
