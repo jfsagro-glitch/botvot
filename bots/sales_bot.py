@@ -612,6 +612,12 @@ class SalesBot:
             # Получаем или создаем пользователя
             user_id = callback.from_user.id
             try:
+                # Убеждаемся, что база данных подключена
+                if not hasattr(self.db, 'conn') or self.db.conn is None:
+                    logger.info(f"   ⚠️ Database not connected, connecting now...")
+                    await self.db.connect()
+                    logger.info(f"   ✅ Database connected")
+                
                 user = await self.user_service.get_or_create_user(
                     user_id,
                     callback.from_user.username,
@@ -621,11 +627,26 @@ class SalesBot:
                 logger.info(f"   ✅ User retrieved/created: {user_id}")
             except Exception as user_error:
                 logger.error(f"   ❌ Error getting/creating user: {user_error}", exc_info=True)
+                # Пробуем переподключиться к базе данных
                 try:
-                    await callback.message.answer("❌ Ошибка при обработке запроса. Попробуйте позже.")
-                except:
-                    pass
-                return
+                    if hasattr(self.db, 'conn') and self.db.conn:
+                        await self.db.close()
+                    await self.db.connect()
+                    logger.info(f"   ✅ Database reconnected, retrying...")
+                    user = await self.user_service.get_or_create_user(
+                        user_id,
+                        callback.from_user.username,
+                        callback.from_user.first_name,
+                        callback.from_user.last_name
+                    )
+                    logger.info(f"   ✅ User retrieved/created after reconnect: {user_id}")
+                except Exception as retry_error:
+                    logger.error(f"   ❌ Retry failed: {retry_error}", exc_info=True)
+                    try:
+                        await callback.message.answer("❌ Ошибка при обработке запроса. Попробуйте позже.")
+                    except:
+                        pass
+                    return
             
             # Show tariff details
             try:
