@@ -79,7 +79,6 @@ class CourseBot:
                     KeyboardButton(text="🧭"),
                     KeyboardButton(text="❓"),
                     KeyboardButton(text="💎"),
-                    KeyboardButton(text="🔍"),
                     KeyboardButton(text="💬")
                 ],
                 [
@@ -3087,25 +3086,34 @@ class CourseBot:
         """Handle 'Обсуждение' button from persistent keyboard - redirect to discussion group."""
         persistent_keyboard = self._create_persistent_keyboard()
         
-        # Получаем ID группы из конфига
-        general_group_id = Config.GENERAL_GROUP_ID
+        # Предпочитаем invite link (он корректно открывает чат)
+        group_link = (Config.GENERAL_GROUP_INVITE_LINK or "").strip()
+        if not group_link:
+            # Fallback на web link по ID (работает только если чат публичный/доступен пользователю)
+            general_group_id = (Config.GENERAL_GROUP_ID or "").strip()
+            if general_group_id:
+                group_id_clean = str(general_group_id).replace("-100", "").replace("-", "")
+                group_link = f"https://t.me/c/{group_id_clean}"
         
-        if general_group_id:
-            # Формируем ссылку на группу
-            group_id_clean = str(general_group_id).replace('-100', '').replace('-', '')
-            group_link = f"https://t.me/c/{group_id_clean}"
-            
+        if group_link:
             await message.answer(
                 "💬 <b>Перейти к обсуждению</b>\n\n"
                 "📚 Обсудите задания и вопросы с другими участниками курса:\n\n"
                 f"👥 <a href='{group_link}'>Перейти в обсуждение</a>\n\n"
-                f"💡 <i>Нажмите на ссылку выше, чтобы открыть группу 👆</i>",
+                "💡 <i>Если ссылка не открывается — напишите в поддержку, мы добавим вас вручную.</i>",
                 disable_web_page_preview=False,
                 reply_markup=persistent_keyboard
             )
         else:
+            # Нет ссылки — даем понятный CTA, без “ошибки”
             await message.answer(
-                "❌ Группа обсуждения не настроена. Обратитесь в поддержку.",
+                "💬 <b>Обсуждение</b>\n\n"
+                "Ссылка на чат обсуждения пока не настроена в конфигурации.\n\n"
+                "Что можно сделать сейчас:\n"
+                "1) Написать в поддержку / администратору\n"
+                "2) Перейти в бота оплаты и выбрать тариф/апгрейд (если вы ещё не в группе)\n\n"
+                "🤖 <a href='https://t.me/StartNowQ_bot'>@StartNowQ_bot</a>",
+                disable_web_page_preview=False,
                 reply_markup=persistent_keyboard
             )
     

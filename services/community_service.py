@@ -49,6 +49,20 @@ class CommunityService:
         
         For now, returns a placeholder format.
         """
-        # In production, use bot.create_chat_invite_link() or similar
-        return f"https://t.me/+{group_id}"
+        # Prefer explicitly configured invite links, because numeric chat IDs
+        # cannot be converted to valid invite URLs.
+        if group_id == Config.GENERAL_GROUP_ID and Config.GENERAL_GROUP_INVITE_LINK:
+            return Config.GENERAL_GROUP_INVITE_LINK
+        if group_id == Config.PREMIUM_GROUP_ID and Config.PREMIUM_GROUP_INVITE_LINK:
+            return Config.PREMIUM_GROUP_INVITE_LINK
+        
+        # Fallback: if group_id already looks like a URL/invite slug, return as-is.
+        # (This keeps backwards compatibility if someone stored an invite link in *_GROUP_ID.)
+        if isinstance(group_id, str) and group_id.startswith("https://t.me/"):
+            return group_id
+        if isinstance(group_id, str) and (group_id.startswith("+") or group_id.startswith("joinchat/")):
+            return f"https://t.me/{group_id.lstrip('/')}"
+        
+        # Not configured
+        return ""
 

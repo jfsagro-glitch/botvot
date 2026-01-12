@@ -41,6 +41,11 @@ class Config:
     GENERAL_GROUP_ID: str = os.getenv("GENERAL_GROUP_ID", "")
     PREMIUM_GROUP_ID: str = os.getenv("PREMIUM_GROUP_ID", "")
     
+    # Telegram Group Invite Links (preferred over IDs for opening chats)
+    # Example: https://t.me/+AbCdEfGhIjk or https://t.me/joinchat/AbCdEfGhIjk
+    GENERAL_GROUP_INVITE_LINK: str = _get_env_value("GENERAL_GROUP_INVITE_LINK", "")
+    PREMIUM_GROUP_INVITE_LINK: str = _get_env_value("PREMIUM_GROUP_INVITE_LINK", "")
+    
     # Database
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./data/course_platform.db")
     
