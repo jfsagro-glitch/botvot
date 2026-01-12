@@ -28,6 +28,7 @@ from services.user_service import UserService
 from services.payment_service import PaymentService
 from services.community_service import CommunityService
 from services.question_service import QuestionService
+from services.lesson_loader import LessonLoader
 from utils.telegram_helpers import create_tariff_keyboard, format_tariff_description, create_persistent_keyboard
 from utils.premium_ui import (
     send_animated_message, send_typing_action,
