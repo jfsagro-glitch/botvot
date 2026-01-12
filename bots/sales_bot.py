@@ -131,6 +131,9 @@ class SalesBot:
         self.dp.callback_query.register(self.handle_talk_to_human, F.data == "sales:talk_to_human")
         self.dp.callback_query.register(self.handle_about_course, F.data == "sales:about_course")
         
+        # Универсальный обработчик для отладки необработанных callback (должен быть последним)
+        self.dp.callback_query.register(self.handle_unhandled_callback)
+        
         # Регистрация обработчиков для постоянных кнопок клавиатуры
         # ВАЖНО: Регистрируем ПЕРЕД общим обработчиком текста, чтобы они имели приоритет
         self.dp.message.register(self.handle_keyboard_upgrade, F.text == "⬆️ Апгрейд тарифа")
