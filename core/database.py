@@ -348,10 +348,10 @@ class Database:
             referral_partner_id=row["referral_partner_id"],
             start_date=datetime.fromisoformat(row["start_date"]) if row["start_date"] else None,
             current_day=row["current_day"],
-            mentor_reminders=row.get("mentor_reminders", 0) or 0,
-            last_mentor_reminder=datetime.fromisoformat(row["last_mentor_reminder"]) if row.get("last_mentor_reminder") else None,
             created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"])
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            mentor_reminders=row.get("mentor_reminders", 0) or 0,
+            last_mentor_reminder=datetime.fromisoformat(row["last_mentor_reminder"]) if row.get("last_mentor_reminder") else None
         )
     
     def _row_to_lesson(self, row) -> Lesson:
