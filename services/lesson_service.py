@@ -57,22 +57,24 @@ class LessonService:
         """
         Determine if a lesson should be sent to the user.
         
-        Checks if enough time has passed since the last lesson
-        or if it's the first lesson.
+        Logic:
+        - Lesson 0 is sent immediately after purchase (handled separately)
+        - Lesson 1 is sent on start_date at 9:00 (6:00 UTC)
+        - Subsequent lessons are sent daily at 9:00 (6:00 UTC)
         """
         if not user.has_access() or not user.start_date:
             return False
         
-        # First lesson (day 1) should be sent immediately
-        if user.current_day == 1:
-            return True
+        # Lesson 0 is sent immediately after purchase, not by scheduler
+        if user.current_day == 0:
+            return False
         
-        # Calculate when the next lesson should be sent
-        # Day 1 starts at start_date, day 2 at start_date + 24h, etc.
-        expected_lesson_time = user.start_date + timedelta(
-            days=user.current_day - 1,
-            hours=Config.LESSON_INTERVAL_HOURS
-        )
+        # Calculate when the lesson should be sent
+        # start_date is set to tomorrow at 9:00 (6:00 UTC) when access is granted
+        # Lesson 1 should be sent at start_date
+        # Lesson 2 should be sent at start_date + 1 day
+        # etc.
+        expected_lesson_time = user.start_date + timedelta(days=user.current_day - 1)
         
         return datetime.utcnow() >= expected_lesson_time
     

@@ -4,7 +4,7 @@ User service for managing user accounts and access.
 Handles user creation, updates, tariff assignment, and access control.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from core.database import Database
@@ -45,14 +45,25 @@ class UserService:
         tariff: Tariff,
         referral_partner_id: Optional[str] = None
     ) -> User:
-        """Grant course access to a user."""
+        """
+        Grant course access to a user.
+        
+        Sets:
+        - current_day = 0 (lesson 0 will be sent immediately)
+        - start_date = tomorrow at 9:00 (lesson 1 will be sent tomorrow at 9:00)
+        """
         user = await self.get_or_create_user(user_id)
         
         # Only grant access if user doesn't already have it
         if not user.has_access():
             user.tariff = tariff
-            user.start_date = datetime.utcnow()
-            user.current_day = 1
+            # Set start_date to tomorrow at 9:00 (UTC+3 = 6:00 UTC)
+            # For simplicity, we'll use 6:00 UTC (9:00 MSK)
+            now = datetime.utcnow()
+            tomorrow = now + timedelta(days=1)
+            # Set to 6:00 UTC (9:00 MSK)
+            user.start_date = tomorrow.replace(hour=6, minute=0, second=0, microsecond=0)
+            user.current_day = 0  # Lesson 0 will be sent immediately
             user.referral_partner_id = referral_partner_id
             
             # Record referral if partner ID provided

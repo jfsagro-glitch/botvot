@@ -73,6 +73,12 @@ class LessonScheduler:
                 if user.current_day > Config.COURSE_DURATION_DAYS:
                     continue
                 
+                # Пропускаем урок 0 (он отправляется сразу после покупки)
+                if user.current_day == 0:
+                    # Переходим к уроку 1
+                    await self.lesson_service.advance_user_to_next_day(user)
+                    continue
+                
                 # Проверяем день тишины
                 if lesson_loader.is_silent_day(user.current_day):
                     # Пропускаем день тишины, но увеличиваем счетчик

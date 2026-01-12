@@ -1440,9 +1440,15 @@ class SalesBot:
         )
         await message.answer(author_info, disable_web_page_preview=False)
         
+        # Send lesson 0 immediately via course bot
+        if not is_upgrade:
+            try:
+                await self._send_lesson_0_to_user(user.user_id)
+            except Exception as e:
+                logger.error(f"Error sending lesson 0 to user {user.user_id}: {e}", exc_info=True)
+        
         # Note: In production, you would:
         # 1. Use bot API to actually invite user to groups
-        # 2. Send first lesson immediately via course bot
         # 3. Set up webhook or polling to course bot to trigger first lesson
     
     async def start(self):
