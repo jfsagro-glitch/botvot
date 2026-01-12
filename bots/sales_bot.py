@@ -65,6 +65,7 @@ class SalesBot:
         self.user_service = UserService(self.db)
         self.community_service = CommunityService()
         self.question_service = QuestionService(self.db)
+        self.lesson_loader = LessonLoader()  # For sending lesson 0
         
         # Register handlers
         self._register_handlers()
