@@ -1632,6 +1632,7 @@ class SalesBot:
     async def _send_lesson_0_to_user(self, user_id: int):
         """
         Send lesson 0 to user immediately after subscription purchase.
+        Использует тот же метод, что и CourseBot, чтобы урок отправлялся вместе с заданием.
         
         Args:
             user_id: Telegram user ID
@@ -1641,83 +1642,36 @@ class SalesBot:
             return
         
         try:
-            # Import course bot components
+            # Импортируем CourseBot для использования его метода отправки урока
+            from bots.course_bot import CourseBot
             from aiogram import Bot
             from aiogram.client.default import DefaultBotProperties
             from aiogram.enums import ParseMode
-            from utils.premium_ui import send_typing_action, create_premium_separator
             
-            # Create course bot instance for sending lesson
-            course_bot = Bot(token=Config.COURSE_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+            # Создаем временный экземпляр CourseBot для отправки урока
+            # Используем его метод _send_lesson_from_json, который автоматически отправляет задание
+            course_bot_instance = CourseBot()
             
             # Get lesson 0 data
             lesson_data = self.lesson_loader.get_lesson(0)
             if not lesson_data:
                 logger.warning(f"Lesson 0 not found for user {user_id}")
-                await course_bot.session.close()
                 return
             
             # Get user from database
             user = await self.user_service.get_user(user_id)
             if not user:
                 logger.error(f"User {user_id} not found")
-                await course_bot.session.close()
                 return
             
-            # Send lesson 0 using the same method as course bot
-            await send_typing_action(course_bot, user_id, 0.8)
-            
-            # Send intro text if exists
-            intro_text = lesson_data.get("intro_text", "")
-            if intro_text:
-                intro_message = f"{intro_text}\n\n{create_premium_separator()}\n\n"
-                await course_bot.send_message(user_id, intro_message)
-                await asyncio.sleep(0.5)
-            
-            # Send video if exists (lesson 0 has video with intro_text in caption)
-            media = lesson_data.get("media", [])
-            lesson0_video_media = None
-            for item in media:
-                if item.get("type") == "video" and item.get("file_id"):
-                    lesson0_video_media = item
-                    break
-            
-            if lesson0_video_media:
-                video_file_id = lesson0_video_media.get("file_id")
-                video_caption = intro_text if intro_text else None
-                
-                await course_bot.send_video(
-                    user_id,
-                    video_file_id,
-                    caption=video_caption,
-                    parse_mode="HTML"
-                )
-                await asyncio.sleep(0.5)
-            
-            # Send main text
-            main_text = lesson_data.get("text", "")
-            if main_text:
-                await course_bot.send_message(user_id, main_text, parse_mode="HTML")
-                await asyncio.sleep(0.5)
-            
-            # Send persistent keyboard
-            from utils.telegram_helpers import create_persistent_keyboard
-            persistent_keyboard = create_persistent_keyboard()
-            await course_bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
-            
-            logger.info(f"✅ Lesson 0 sent to user {user_id}")
-            
-            # Close bot session
-            await course_bot.session.close()
+            # Используем метод CourseBot для отправки урока с заданием
+            # Этот метод автоматически отправляет задание вместе с уроком
+            logger.info(f"📚 Sending lesson 0 with assignment to user {user_id}")
+            await course_bot_instance._send_lesson_from_json(user, lesson_data, day=0)
+            logger.info(f"✅ Lesson 0 with assignment sent to user {user_id}")
             
         except Exception as e:
             logger.error(f"Error in _send_lesson_0_to_user for user {user_id}: {e}", exc_info=True)
-            # Try to close bot session even on error
-            try:
-                if 'course_bot' in locals():
-                    await course_bot.session.close()
-            except:
-                pass
             raise
     
     async def start(self):
