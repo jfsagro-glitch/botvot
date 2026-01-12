@@ -121,10 +121,19 @@ class SalesBot:
         # ВАЖНО: Порядок регистрации важен - более специфичные первыми
         # Регистрируем обработчики в порядке от более специфичных к менее специфичным
         # startswith проверки должны быть ПЕРЕД точными совпадениями
+        
+        # Обработчик для tariff: (должен быть первым среди startswith)
         self.dp.callback_query.register(self.handle_tariff_selection, F.data.startswith("tariff:"))
+        
+        # Обработчик для upgrade:
         self.dp.callback_query.register(self.handle_upgrade_tariff_selection, F.data.startswith("upgrade:"))
+        
+        # Обработчик для pay:
         self.dp.callback_query.register(self.handle_payment_initiate, F.data.startswith("pay:"))
+        
+        # Обработчик для check_payment:
         self.dp.callback_query.register(self.handle_payment_check, F.data.startswith("check_payment:"))
+        
         # Точные совпадения после startswith
         self.dp.callback_query.register(self.handle_upgrade_tariff, F.data == "upgrade_tariff")
         self.dp.callback_query.register(self.handle_back_to_tariffs, F.data == "back_to_tariffs")
@@ -133,6 +142,7 @@ class SalesBot:
         self.dp.callback_query.register(self.handle_about_course, F.data == "sales:about_course")
         
         # Универсальный обработчик для отладки необработанных callback (должен быть последним)
+        # Регистрируем БЕЗ фильтров, чтобы он ловил все остальное
         self.dp.callback_query.register(self.handle_unhandled_callback)
         
         # Регистрация обработчиков для постоянных кнопок клавиатуры
