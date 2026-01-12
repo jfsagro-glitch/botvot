@@ -79,10 +79,8 @@ class CourseBot:
                     KeyboardButton(text="🧭"),
                     KeyboardButton(text="❓"),
                     KeyboardButton(text="💎"),
-                    KeyboardButton(text="💬")
-                ],
-                [
-                    KeyboardButton(text="👨‍🏫 Наставник")
+                    KeyboardButton(text="💬"),
+                    KeyboardButton(text="👨‍🏫")
                 ]
             ],
             resize_keyboard=True,
@@ -218,7 +216,7 @@ class CourseBot:
         self.dp.message.register(self.handle_keyboard_tariffs, F.text == "💎")
         # Кнопка 🔍 была тестовой и удалена из постоянной клавиатуры
         self.dp.message.register(self.handle_keyboard_discussion, F.text == "💬")
-        self.dp.message.register(self.handle_keyboard_mentor, F.text.startswith("👨‍🏫 Наставник"))
+        self.dp.message.register(self.handle_keyboard_mentor, F.text == "👨‍🏫")
         
         # Обработчики для настройки наставника
         self.dp.callback_query.register(self.handle_mentor_set_frequency, F.data.startswith("mentor:set:"))
