@@ -22,6 +22,7 @@ class Database:
     def __init__(self, db_path: str = None):
         self.db_path = db_path or Config.DATABASE_PATH
         Config.ensure_data_directory()
+        self.conn = None
     
     async def connect(self):
         """Create database connection and initialize schema."""
@@ -31,7 +32,30 @@ class Database:
     
     async def close(self):
         """Close database connection."""
-        await self.conn.close()
+        if getattr(self, "conn", None) is not None:
+            await self.conn.close()
+        self.conn = None
+    
+    async def _ensure_connection(self):
+        """
+        Ensure database connection is established and active.
+        
+        - Connects if not connected
+        - Reconnects if connection is stale/broken
+        """
+        if getattr(self, "conn", None) is None:
+            await self.connect()
+            return
+        
+        try:
+            async with self.conn.execute("SELECT 1") as cursor:
+                await cursor.fetchone()
+        except Exception:
+            try:
+                await self.close()
+            except Exception:
+                pass
+            await self.connect()
     
     async def _init_schema(self):
         """Initialize database schema."""
@@ -137,27 +161,7 @@ class Database:
     # User operations
     async def get_user(self, user_id: int) -> Optional[User]:
         """Get user by ID."""
-        # Убеждаемся, что соединение установлено и активно
-        try:
-            if not hasattr(self, 'conn') or self.conn is None:
-                await self.connect()
-            # Проверяем, что соединение действительно работает
-            try:
-                async with self.conn.execute("SELECT 1") as cursor:
-                    await cursor.fetchone()
-            except Exception:
-                # Соединение неактивно, переподключаемся
-                try:
-                    await self.close()
-                except:
-                    pass
-                await self.connect()
-        except Exception as conn_error:
-            # Если не удалось подключиться, пробуем еще раз
-            try:
-                await self.connect()
-            except Exception:
-                raise conn_error
+        await self._ensure_connection()
         
         async with self.conn.execute(
             "SELECT * FROM users WHERE user_id = ?", (user_id,)
@@ -171,27 +175,7 @@ class Database:
                          first_name: Optional[str] = None,
                          last_name: Optional[str] = None) -> User:
         """Create a new user."""
-        # Убеждаемся, что соединение установлено и активно
-        try:
-            if not hasattr(self, 'conn') or self.conn is None:
-                await self.connect()
-            # Проверяем, что соединение действительно работает
-            try:
-                async with self.conn.execute("SELECT 1") as cursor:
-                    await cursor.fetchone()
-            except Exception:
-                # Соединение неактивно, переподключаемся
-                try:
-                    await self.close()
-                except:
-                    pass
-                await self.connect()
-        except Exception as conn_error:
-            # Если не удалось подключиться, пробуем еще раз
-            try:
-                await self.connect()
-            except Exception:
-                raise conn_error
+        await self._ensure_connection()
         
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
@@ -204,27 +188,7 @@ class Database:
     
     async def update_user(self, user: User):
         """Update user information."""
-        # Убеждаемся, что соединение установлено и активно
-        try:
-            if not hasattr(self, 'conn') or self.conn is None:
-                await self.connect()
-            # Проверяем, что соединение действительно работает
-            try:
-                async with self.conn.execute("SELECT 1") as cursor:
-                    await cursor.fetchone()
-            except Exception:
-                # Соединение неактивно, переподключаемся
-                try:
-                    await self.close()
-                except:
-                    pass
-                await self.connect()
-        except Exception as conn_error:
-            # Если не удалось подключиться, пробуем еще раз
-            try:
-                await self.connect()
-            except Exception:
-                raise conn_error
+        await self._ensure_connection()
         
         await self.conn.execute("""
             UPDATE users SET
@@ -383,27 +347,7 @@ class Database:
         Returns:
             True if assignment exists for this user and day, False otherwise
         """
-        # Убеждаемся, что соединение установлено и активно
-        try:
-            if not hasattr(self, 'conn') or self.conn is None:
-                await self.connect()
-            # Проверяем, что соединение действительно работает
-            try:
-                async with self.conn.execute("SELECT 1") as cursor:
-                    await cursor.fetchone()
-            except Exception:
-                # Соединение неактивно, переподключаемся
-                try:
-                    await self.close()
-                except:
-                    pass
-                await self.connect()
-        except Exception as conn_error:
-            # Если не удалось подключиться, пробуем еще раз
-            try:
-                await self.connect()
-            except Exception:
-                raise conn_error
+        await self._ensure_connection()
         
         async with self.conn.execute(
             "SELECT COUNT(*) FROM assignments WHERE user_id = ? AND day_number = ?",

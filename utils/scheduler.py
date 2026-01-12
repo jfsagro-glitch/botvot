@@ -5,6 +5,7 @@ Handles automatic lesson delivery based on user start dates and day progression.
 """
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import List
 
@@ -48,11 +49,12 @@ class LessonScheduler:
             check_interval_seconds: How often to check for lessons to send (default: 5 minutes)
         """
         self.running = True
+        logger = logging.getLogger(__name__)
         while self.running:
             try:
                 await self._check_and_deliver_lessons()
             except Exception as e:
-                print(f"Error in lesson scheduler: {e}")
+                logger.error(f"Error in lesson scheduler: {e}", exc_info=True)
             
             await asyncio.sleep(check_interval_seconds)
     
