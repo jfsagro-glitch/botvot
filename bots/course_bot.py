@@ -29,6 +29,7 @@ from services.community_service import CommunityService
 from services.question_service import QuestionService
 from utils.telegram_helpers import create_lesson_keyboard, format_lesson_message, create_lesson_keyboard_from_json, create_upgrade_tariff_keyboard
 from utils.scheduler import LessonScheduler
+from utils.mentor_scheduler import MentorReminderScheduler
 from utils.premium_ui import send_typing_action, create_premium_separator
 from utils.navigator import create_navigator_keyboard, format_navigator_message
 
@@ -54,6 +55,7 @@ class CourseBot:
         self.community_service = CommunityService()
         self.question_service = QuestionService(self.db)
         self.scheduler = None
+        self.mentor_scheduler = None
         
         # Проверяем, что уроки загружены
         if self.lesson_loader:
@@ -79,6 +81,9 @@ class CourseBot:
                     KeyboardButton(text="💎"),
                     KeyboardButton(text="🔍"),
                     KeyboardButton(text="💬")
+                ],
+                [
+                    KeyboardButton(text="👨‍🏫 Наставник")
                 ]
             ],
             resize_keyboard=True,
@@ -214,6 +219,10 @@ class CourseBot:
         self.dp.message.register(self.handle_keyboard_tariffs, F.text == "💎")
         self.dp.message.register(self.handle_keyboard_test, F.text == "🔍")
         self.dp.message.register(self.handle_keyboard_discussion, F.text == "💬")
+        self.dp.message.register(self.handle_keyboard_mentor, F.text.startswith("👨‍🏫 Наставник"))
+        
+        # Обработчики для настройки наставника
+        self.dp.callback_query.register(self.handle_mentor_set_frequency, F.data.startswith("mentor:set:"))
         
         # Общие обработчики сообщений (после команд!)
         # ВАЖНО: Используем F.text & ~F.command чтобы НЕ перехватывать команды
@@ -3100,11 +3109,152 @@ class CourseBot:
                 reply_markup=persistent_keyboard
             )
     
+    async def handle_keyboard_mentor(self, message: Message):
+        """Handle 'Наставник' button from persistent keyboard - show mentor menu."""
+        user_id = message.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        persistent_keyboard = self._create_persistent_keyboard()
+        
+        if not user or not user.has_access():
+            await message.answer("❌ У вас нет доступа к этому курсу.", reply_markup=persistent_keyboard)
+            return
+        
+        # Импортируем функции для анимации эмодзи
+        from bots.mentor_reminders import get_mentor_emoji_sequence
+        
+        # Анимация эмодзи наставника (последовательно отправляем разные эмодзи)
+        emoji_sequence = get_mentor_emoji_sequence()
+        for emoji in emoji_sequence:
+            await message.answer(emoji)
+            await asyncio.sleep(0.3)
+        
+        # Создаем клавиатуру с выбором частоты напоминаний
+        buttons = []
+        row = []
+        for i in range(6):  # 0-5
+            text = f"{i}"
+            if i == 0:
+                text = "0 ❌"
+            elif user.mentor_reminders == i:
+                text = f"{i} ✅"
+            
+            row.append(InlineKeyboardButton(
+                text=text,
+                callback_data=f"mentor:set:{i}"
+            ))
+            
+            # По 3 кнопки в ряд
+            if len(row) == 3:
+                buttons.append(row)
+                row = []
+        
+        if row:
+            buttons.append(row)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        
+        # Определяем текущий статус
+        if user.mentor_reminders == 0:
+            status_text = "❌ Наставник уволен (напоминания отключены)"
+        else:
+            status_text = f"✅ Наставник напоминает {user.mentor_reminders} раз(а) в день"
+        
+        await message.answer(
+            f"👨‍🏫 <b>НАСТАВНИК</b>\n\n"
+            f"Текущий статус: {status_text}\n\n"
+            f"Выберите частоту напоминаний:\n"
+            f"• <b>0</b> — напоминания отключены\n"
+            f"• <b>1-5</b> — количество напоминаний в день\n\n"
+            f"Напоминания содержат задание текущего урока.",
+            reply_markup=keyboard
+        )
+    
+    async def handle_mentor_set_frequency(self, callback: CallbackQuery):
+        """Handle mentor frequency selection callback."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user:
+            await callback.message.answer("❌ У вас нет доступа.")
+            return
+        
+        # Парсим выбранную частоту
+        try:
+            frequency = int(callback.data.split(":")[-1])
+            if frequency < 0 or frequency > 5:
+                raise ValueError("Frequency out of range")
+        except (ValueError, IndexError):
+            await callback.message.answer("❌ Ошибка: неверная частота.")
+            return
+        
+        # Обновляем настройку пользователя
+        user.mentor_reminders = frequency
+        await self.db.update_user(user)
+        
+        # Формируем сообщение об изменении
+        if frequency == 0:
+            status_text = "❌ Наставник уволен\n\nНапоминания отключены."
+        else:
+            status_text = f"✅ Наставник настроен на {frequency} напоминание(й) в день\n\nВы будете получать напоминания с заданием текущего урока."
+        
+        persistent_keyboard = self._create_persistent_keyboard()
+        await callback.message.answer(
+            f"👨‍🏫 <b>НАСТАВНИК</b>\n\n{status_text}",
+            reply_markup=persistent_keyboard
+        )
+        
+        logger.info(f"User {user_id} set mentor reminders frequency to {frequency}")
+    
+    async def _send_mentor_reminder(self, user: User):
+        """
+        Отправляет напоминание от наставника пользователю.
+        
+        Args:
+            user: Пользователь, которому нужно отправить напоминание
+        """
+        try:
+            # Получаем задание текущего урока
+            lesson_data = self.lesson_loader.get_lesson(user.current_day)
+            if not lesson_data:
+                logger.warning(f"   ⚠️ No lesson data for day {user.current_day}, skipping reminder")
+                return
+            
+            # Получаем задание в зависимости от тарифа
+            task = self.lesson_loader.get_task_for_tariff(user.current_day, user.tariff)
+            if not task or not task.strip():
+                logger.debug(f"   ⚠️ No task for lesson {user.current_day}, skipping reminder")
+                return
+            
+            # Импортируем функцию для генерации напоминания
+            from bots.mentor_reminders import get_mentor_reminder_text
+            
+            # Генерируем текст напоминания
+            reminder_text = get_mentor_reminder_text(task)
+            
+            # Отправляем напоминание
+            await self.bot.send_message(user.user_id, reminder_text)
+            
+            # Обновляем время последнего напоминания
+            from datetime import datetime
+            user.last_mentor_reminder = datetime.utcnow()
+            await self.db.update_user(user)
+            
+            logger.info(f"   ✅ Mentor reminder sent to user {user.user_id} (day {user.current_day})")
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error sending mentor reminder to user {user.user_id}: {e}", exc_info=True)
+    
     async def start(self):
         """Start the bot and scheduler."""
         await self.db.connect()
         
-        # Initialize and start scheduler
+        # Initialize and start lesson scheduler
         self.scheduler = LessonScheduler(
             self.db,
             self.lesson_service,
@@ -3112,15 +3262,26 @@ class CourseBot:
             self.deliver_lesson
         )
         
-        # Start scheduler in background
+        # Initialize and start mentor reminder scheduler
+        self.mentor_scheduler = MentorReminderScheduler(
+            self.db,
+            self._send_mentor_reminder
+        )
+        
+        # Start schedulers in background
         scheduler_task = asyncio.create_task(self.scheduler.start())
+        mentor_scheduler_task = asyncio.create_task(self.mentor_scheduler.start())
         
         logger.info("Course Bot started")
         try:
             await self.dp.start_polling(self.bot, skip_updates=True)
         finally:
-            self.scheduler.stop()
-            scheduler_task.cancel()
+            if self.scheduler:
+                self.scheduler.stop()
+                scheduler_task.cancel()
+            if self.mentor_scheduler:
+                self.mentor_scheduler.stop()
+                mentor_scheduler_task.cancel()
             await self.db.close()
             await self.bot.session.close()
     

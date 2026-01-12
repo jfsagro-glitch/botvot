@@ -18,8 +18,8 @@ class PaymentService:
     
     # Tariff prices (in your currency - adjust as needed)
     TARIFF_PRICES = {
-        Tariff.BASIC: 3000.0,      # Базовый тариф - только задания без обратной связи
-        Tariff.FEEDBACK: 5000.0,   # С обратной связью от лидера
+        Tariff.BASIC: 5000.0,      # Базовый тариф - 30 занятий, материалы, задания, доступ к сообществу
+        Tariff.FEEDBACK: 10000.0,  # С обратной связью от лидера - проверка заданий, ответы на вопросы
         Tariff.PREMIUM: 8000.0,    # Обратная связь + премиум сообщество
         Tariff.PRACTIC: 20000.0,   # Всё из Basic + Feedback + 3 онлайн интервью с разбором
     }

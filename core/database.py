@@ -46,10 +46,31 @@ class Database:
                 referral_partner_id TEXT,
                 start_date TEXT,
                 current_day INTEGER DEFAULT 1,
+                mentor_reminders INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
         """)
+        
+        # Миграция: добавляем поле mentor_reminders, если его нет
+        try:
+            await self.conn.execute("""
+                ALTER TABLE users ADD COLUMN mentor_reminders INTEGER DEFAULT 0
+            """)
+            await self.conn.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
+        
+        # Миграция: добавляем поле last_mentor_reminder, если его нет
+        try:
+            await self.conn.execute("""
+                ALTER TABLE users ADD COLUMN last_mentor_reminder TEXT
+            """)
+            await self.conn.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
         
         # Lessons table
         await self.conn.execute("""
@@ -131,8 +152,8 @@ class Database:
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
             INSERT INTO users (user_id, username, first_name, last_name, 
-                             created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                             mentor_reminders, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
         """, (user_id, username, first_name, last_name, now, now))
         await self.conn.commit()
         return await self.get_user(user_id)
@@ -143,7 +164,7 @@ class Database:
             UPDATE users SET
                 username = ?, first_name = ?, last_name = ?,
                 tariff = ?, referral_partner_id = ?,
-                start_date = ?, current_day = ?,
+                start_date = ?, current_day = ?, mentor_reminders = ?, last_mentor_reminder = ?,
                 updated_at = ?
             WHERE user_id = ?
         """, (
@@ -151,7 +172,8 @@ class Database:
             user.tariff.value if user.tariff else None,
             user.referral_partner_id,
             user.start_date.isoformat() if user.start_date else None,
-            user.current_day,
+            user.current_day, user.mentor_reminders,
+            user.last_mentor_reminder.isoformat() if user.last_mentor_reminder else None,
             datetime.utcnow().isoformat(),
             user.user_id
         ))
@@ -326,6 +348,8 @@ class Database:
             referral_partner_id=row["referral_partner_id"],
             start_date=datetime.fromisoformat(row["start_date"]) if row["start_date"] else None,
             current_day=row["current_day"],
+            mentor_reminders=row.get("mentor_reminders", 0) or 0,
+            last_mentor_reminder=datetime.fromisoformat(row["last_mentor_reminder"]) if row.get("last_mentor_reminder") else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"])
         )
