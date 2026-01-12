@@ -1739,7 +1739,11 @@ class SalesBot:
             for i, handler in enumerate(self.dp.message.handlers):
                 callback_name = handler.callback.__name__ if hasattr(handler, 'callback') else 'unknown'
                 logger.info(f"   [{i+1}] {callback_name}")
-            logger.info(f"   Callback handlers: {len(self.dp.callback_query.handlers)}")
+            logger.info(f"   Callback query handlers: {len(self.dp.callback_query.handlers)}")
+            for i, handler in enumerate(self.dp.callback_query.handlers):
+                callback_name = handler.callback.__name__ if hasattr(handler, 'callback') else 'unknown'
+                filters_info = str(handler.filters) if hasattr(handler, 'filters') else 'no filters'
+                logger.info(f"   [{i+1}] {callback_name} (filters: {filters_info[:50]})")
             logger.info("=" * 60)
             logger.info("")
             
