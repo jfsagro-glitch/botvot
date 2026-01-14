@@ -138,7 +138,10 @@ class SalesBot:
         self.dp.message.register(self.handle_keyboard_select_tariff, F.text == "📋 Выбор тарифа")
         self.dp.message.register(self.handle_keyboard_about_course, F.text == "📖 О курсе")
         self.dp.message.register(self.handle_keyboard_talk_to_human, F.text == "💬 Поговорить с человеком")
-        self.dp.message.register(self.handle_forget_everything_button, (F.text == "Забыть все") | (F.text == "🧹 Забыть все") | (F.text == "🧹 Забыть всё"))
+        self.dp.message.register(
+            self.handle_forget_everything_button,
+            (F.text == "🕶️ Забыть все") | (F.text == "Забыть все") | (F.text == "🧹 Забыть все") | (F.text == "🧹 Забыть всё")
+        )
 
         # Voice questions in talk-to-human mode
         self.dp.message.register(self.handle_voice_question_from_sales, F.voice)
