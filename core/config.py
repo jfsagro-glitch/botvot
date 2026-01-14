@@ -53,6 +53,13 @@ class Config:
     # Course Settings
     COURSE_DURATION_DAYS: int = int(os.getenv("COURSE_DURATION_DAYS", "30"))
     LESSON_INTERVAL_HOURS: int = int(os.getenv("LESSON_INTERVAL_HOURS", "24"))
+
+    # Scheduling / Timezone
+    # Used for mentor reminder window calculations. Default: Moscow time.
+    SCHEDULE_TIMEZONE: str = _get_env_value("SCHEDULE_TIMEZONE", "Europe/Moscow")
+    # Mentor reminders are allowed only within this local-time window
+    MENTOR_REMINDER_START_LOCAL: str = _get_env_value("MENTOR_REMINDER_START_LOCAL", "09:30")
+    MENTOR_REMINDER_END_LOCAL: str = _get_env_value("MENTOR_REMINDER_END_LOCAL", "22:00")
     
     # Payment Settings
     PAYMENT_PROVIDER: str = os.getenv("PAYMENT_PROVIDER", "mock")  # "mock" or "yookassa"

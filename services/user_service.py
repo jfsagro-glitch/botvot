@@ -4,11 +4,17 @@ User service for managing user accounts and access.
 Handles user creation, updates, tariff assignment, and access control.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Optional
 
 from core.database import Database
 from core.models import User, Tariff
+from core.config import Config
+
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:  # pragma: no cover
+    ZoneInfo = None
 
 
 class UserService:
@@ -57,12 +63,22 @@ class UserService:
         # Only grant access if user doesn't already have it
         if not user.has_access():
             user.tariff = tariff
-            # Set start_date to tomorrow at 9:00 (UTC+3 = 6:00 UTC)
-            # For simplicity, we'll use 6:00 UTC (9:00 MSK)
-            now = datetime.utcnow()
-            tomorrow = now + timedelta(days=1)
-            # Set to 6:00 UTC (9:00 MSK)
-            user.start_date = tomorrow.replace(hour=6, minute=0, second=0, microsecond=0)
+            # Set start_date to tomorrow at 09:00 in configured timezone (default: Europe/Moscow),
+            # stored as naive UTC datetime for backwards compatibility.
+            now_utc = datetime.utcnow()
+            if ZoneInfo is not None:
+                try:
+                    tz = ZoneInfo(Config.SCHEDULE_TIMEZONE)
+                except Exception:
+                    tz = ZoneInfo("UTC")
+                now_local = now_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+                tomorrow_local_date = (now_local + timedelta(days=1)).date()
+                start_local = datetime.combine(tomorrow_local_date, time(9, 0), tzinfo=tz)
+                user.start_date = start_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+            else:
+                # Fallback to previous behavior: 06:00 UTC ≈ 09:00 MSK
+                tomorrow = now_utc + timedelta(days=1)
+                user.start_date = tomorrow.replace(hour=6, minute=0, second=0, microsecond=0)
             user.current_day = 0  # Lesson 0 will be sent immediately
             user.referral_partner_id = referral_partner_id
             
