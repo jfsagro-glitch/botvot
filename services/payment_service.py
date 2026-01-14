@@ -34,6 +34,7 @@ class PaymentService:
         user_id: int,
         tariff: Tariff,
         referral_partner_id: Optional[str] = None,
+        customer_email: Optional[str] = None,
         upgrade_from: Optional[Tariff] = None,
         upgrade_price: Optional[float] = None
     ) -> Dict[str, Any]:
@@ -66,6 +67,9 @@ class PaymentService:
             "user_id": user_id,
             "referral_partner_id": referral_partner_id
         }
+
+        if customer_email:
+            metadata["customer_email"] = customer_email
         
         # Добавляем информацию об апгрейде в метаданные
         if upgrade_from is not None:

@@ -25,6 +25,14 @@ YOOKASSA_RETURN_URL=https://t.me/StartNowQ_bot
 
 # Валюта платежей (RUB, USD, EUR и т.д.)
 PAYMENT_CURRENCY=RUB
+
+# Чек (54‑ФЗ). Многие магазины YooKassa требуют receipt в каждом платеже.
+# Если у вас ошибка "Receipt is missing or illegal" — включите и укажите коды.
+YOOKASSA_RECEIPT_REQUIRED=1
+# 1-6 (часто: 2=УСН доход, 3=УСН доход-расход)
+YOOKASSA_TAX_SYSTEM_CODE=2
+# 1=без НДС, 6=20% (подставьте ваш вариант)
+YOOKASSA_VAT_CODE=1
 ```
 
 ### Шаг 3: Установка библиотеки

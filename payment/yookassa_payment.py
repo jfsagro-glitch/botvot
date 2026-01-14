@@ -79,6 +79,8 @@ class YooKassaPaymentProcessor(PaymentProcessor):
         Returns payment information including payment URL.
         """
         try:
+            from core.config import Config
+
             # Prepare payment data
             payment_data = {
                 "amount": {
@@ -96,6 +98,39 @@ class YooKassaPaymentProcessor(PaymentProcessor):
                     **(metadata or {})
                 }
             }
+
+            # Receipt (54-FZ): some shops require it, otherwise payment creation fails with
+            # "Receipt is missing or illegal" (invalid_request).
+            receipt_required = str(getattr(Config, "YOOKASSA_RECEIPT_REQUIRED", "0")).strip() == "1"
+            customer_email = (metadata or {}).get("customer_email") if metadata else None
+
+            if receipt_required or customer_email:
+                if not customer_email:
+                    raise ValueError("Receipt required but customer_email is missing")
+                try:
+                    tax_system_code = int(getattr(Config, "YOOKASSA_TAX_SYSTEM_CODE", "2") or "2")
+                except Exception:
+                    tax_system_code = 2
+                try:
+                    vat_code = int(getattr(Config, "YOOKASSA_VAT_CODE", "1") or "1")
+                except Exception:
+                    vat_code = 1
+
+                payment_data["receipt"] = {
+                    "customer": {"email": customer_email},
+                    "items": [
+                        {
+                            "description": description[:128],
+                            "quantity": "1.00",
+                            "amount": {"value": f"{amount:.2f}", "currency": currency.upper()},
+                            "vat_code": vat_code,
+                            # Defaults that work for digital services in most cases
+                            "payment_mode": "full_payment",
+                            "payment_subject": "service",
+                        }
+                    ],
+                    "tax_system_code": tax_system_code,
+                }
             
             # Create payment
             payment = Payment.create(payment_data)

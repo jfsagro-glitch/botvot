@@ -13,6 +13,7 @@ Handles:
 import asyncio
 import logging
 import sys
+import re
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
@@ -68,6 +69,9 @@ class SalesBot:
         self.user_service = UserService(self.db)
         self.community_service = CommunityService()
         self.question_service = QuestionService(self.db)
+
+        # In-memory contexts (good enough for sales flow; DB stores the resulting email)
+        self._awaiting_email: dict[int, dict] = {}
         
         # Initialize lesson loader with error handling
         try:
@@ -125,6 +129,9 @@ class SalesBot:
         self.dp.message.register(self.handle_keyboard_go_to_course, F.text == "📚 Перейти в курс")
         self.dp.message.register(self.handle_keyboard_select_tariff, F.text == "📋 Выбор тарифа")
         self.dp.message.register(self.handle_keyboard_about_course, F.text == "📖 О курсе")
+
+        # Email input (receipt requirement)
+        self.dp.message.register(self.handle_email_input, F.text & ~F.command)
 
         # Questions from sales bot (generic text) - should be LAST among text handlers
         self.dp.message.register(self.handle_question_from_sales, F.text & ~F.command)
@@ -197,6 +204,116 @@ class SalesBot:
         if status:
             return f"{name} (HTTP {status}): {msg}" if msg else f"{name} (HTTP {status})"
         return f"{name}: {msg}" if msg else name
+
+    def _receipt_required(self) -> bool:
+        return str(getattr(Config, "YOOKASSA_RECEIPT_REQUIRED", "0")).strip() == "1"
+
+    def _is_valid_email(self, email: str) -> bool:
+        email = (email or "").strip()
+        if len(email) < 5 or len(email) > 254:
+            return False
+        # Pragmatic validation; YooKassa requires a usable email.
+        return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email))
+
+    async def handle_email_input(self, message: Message):
+        """Handle email input for YooKassa receipt."""
+        user_id = message.from_user.id
+        ctx = self._awaiting_email.get(user_id)
+        if not ctx:
+            raise SkipHandler()
+
+        email = (message.text or "").strip()
+        if not self._is_valid_email(email):
+            await message.answer("✉️ Введите корректный email для чека (пример: name@gmail.com)")
+            return
+
+        user = await self.user_service.get_or_create_user(
+            user_id,
+            message.from_user.username,
+            message.from_user.first_name,
+            message.from_user.last_name,
+        )
+        user.email = email
+        await self.db.update_user(user)
+        del self._awaiting_email[user_id]
+
+        await message.answer("✅ Email сохранён. Создаю платёж…")
+
+        kind = ctx.get("kind")
+        if kind == "pay":
+            tariff = Tariff(ctx["tariff"])
+            await self._start_payment_flow(message, user, tariff)
+            return
+        if kind == "upgrade":
+            # For upgrade we stored required fields
+            current_tariff = Tariff(ctx["current_tariff"])
+            new_tariff = Tariff(ctx["new_tariff"])
+            upgrade_price = float(ctx["upgrade_price"])
+            await self._start_upgrade_payment_flow(message, user, current_tariff, new_tariff, upgrade_price)
+            return
+
+        # Unknown context -> ignore
+        raise SkipHandler()
+
+    async def _start_payment_flow(self, message: Message, user, tariff: Tariff):
+        """Create payment and show payment URL (non-upgrade)."""
+        payment_info = await self.payment_service.initiate_payment(
+            user_id=user.user_id,
+            tariff=tariff,
+            referral_partner_id=user.referral_partner_id,
+            customer_email=getattr(user, "email", None),
+        )
+        payment_id = payment_info["payment_id"]
+        payment_url = payment_info["payment_url"]
+
+        payment_note = ""
+        if Config.PAYMENT_PROVIDER.lower() == "mock":
+            payment_note = "\n\n<i>Примечание: Это тестовая система оплаты. Платеж автоматически завершится через 5 секунд.</i>\n\nЧерез 5 секунд нажмите кнопку 'Проверить статус оплаты'."
+        else:
+            payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
+
+        price = PaymentService.TARIFF_PRICES[tariff]
+        currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
+        await message.answer(
+            f"💳 <b>Требуется оплата</b>\n\n"
+            f"Тариф: <b>{tariff.value.upper()}</b>\n"
+            f"Сумма: {price:.0f}{currency_symbol}\n\n"
+            f"Нажмите кнопку ниже для завершения оплаты:{payment_note}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Оплатить", url=payment_url)],
+                [InlineKeyboardButton(text="🔄 Проверить статус оплаты", callback_data=f"check_payment:{payment_id}")],
+            ])
+        )
+
+    async def _start_upgrade_payment_flow(self, message: Message, user, current_tariff: Tariff, new_tariff: Tariff, upgrade_price: float):
+        """Create payment and show payment URL (upgrade)."""
+        payment_info = await self.payment_service.initiate_payment(
+            user_id=user.user_id,
+            tariff=new_tariff,
+            referral_partner_id=user.referral_partner_id,
+            customer_email=getattr(user, "email", None),
+            upgrade_from=current_tariff,
+            upgrade_price=upgrade_price,
+        )
+        payment_id = payment_info["payment_id"]
+        payment_url = payment_info["payment_url"]
+
+        currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
+        payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
+        upgrade_message = (
+            f"{create_premium_separator()}\n"
+            f"💳 <b>ОПЛАТА АПГРЕЙДА ТАРИФА</b>\n"
+            f"{create_premium_separator()}\n\n"
+            f"Текущий тариф: <b>{current_tariff.value.upper()}</b>\n"
+            f"Новый тариф: <b>{new_tariff.value.upper()}</b>\n\n"
+            f"💰 К доплате: <b>{upgrade_price:.0f}{currency_symbol}</b>{payment_note}"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить", url=payment_url)],
+            [InlineKeyboardButton(text="🔄 Проверить статус оплаты", callback_data=f"check_payment:{payment_id}")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+        ])
+        await message.answer(upgrade_message, reply_markup=keyboard)
 
     async def _ensure_legal_consent(self, chat_id: int, user_id: int) -> bool:
         """
@@ -1040,11 +1157,26 @@ class SalesBot:
             logger.info(f"   New: {new_tariff.value} ({new_price}₽)")
             logger.info(f"   Difference: {price_diff}₽")
             
+            # Receipt/email required for some YooKassa shops
+            if self._receipt_required() and not getattr(user, "email", None):
+                self._awaiting_email[user_id] = {
+                    "kind": "upgrade",
+                    "current_tariff": current_tariff.value,
+                    "new_tariff": new_tariff.value,
+                    "upgrade_price": float(price_diff),
+                }
+                await callback.message.answer(
+                    "✉️ Для оплаты нужен email для отправки чека.\n"
+                    "Пожалуйста, отправьте ваш email одним сообщением (пример: name@gmail.com)."
+                )
+                return
+
             # Создаем платеж на разницу
             payment_info = await self.payment_service.initiate_payment(
                 user_id=user_id,
                 tariff=new_tariff,  # Новый тариф
                 referral_partner_id=user.referral_partner_id,
+                customer_email=getattr(user, "email", None),
                 upgrade_from=current_tariff,  # Старый тариф для справки
                 upgrade_price=price_diff  # Цена апгрейда
             )
@@ -1143,12 +1275,22 @@ class SalesBot:
             )
             
             logger.info(f"   Tariff: {tariff.value}, User: {user_id}")
+
+            # Receipt/email required for some YooKassa shops
+            if self._receipt_required() and not getattr(user, "email", None):
+                self._awaiting_email[user_id] = {"kind": "pay", "tariff": tariff.value}
+                await callback.message.answer(
+                    "✉️ Для оплаты нужен email для отправки чека.\n"
+                    "Пожалуйста, отправьте ваш email одним сообщением (пример: name@gmail.com)."
+                )
+                return
             
             # Initiate payment
             payment_info = await self.payment_service.initiate_payment(
                 user_id=user_id,
                 tariff=tariff,
-                referral_partner_id=user.referral_partner_id
+                referral_partner_id=user.referral_partner_id,
+                customer_email=getattr(user, "email", None),
             )
             
             payment_id = payment_info["payment_id"]
@@ -1196,7 +1338,7 @@ class SalesBot:
                 await callback.message.edit_text(
                     "❌ Ошибка при создании платежа.\n\n"
                     f"Диагностика: <code>{safe_err}</code>\n\n"
-                    "Обычно это неправильные ключи YooKassa (Shop ID/Secret Key) или магазин не в том режиме (тест/боевой)."
+                    "Чаще всего это: требования YooKassa к чеку (receipt/54‑ФЗ) или неверные настройки магазина/ключей."
                 )
             except Exception:
                 try:

@@ -68,6 +68,15 @@ class Config:
     YOOKASSA_SHOP_ID: str = _get_env_value("YOOKASSA_SHOP_ID", "")
     YOOKASSA_SECRET_KEY: str = _get_env_value("YOOKASSA_SECRET_KEY", "")
     YOOKASSA_RETURN_URL: str = _get_env_value("YOOKASSA_RETURN_URL", "https://t.me/StartNowQ_bot")
+
+    # YooKassa receipt (54-FZ)
+    # Some YooKassa shops require receipt data in every payment request.
+    # In this project we collect user's email in SalesBot and pass it to payment metadata.
+    YOOKASSA_RECEIPT_REQUIRED: str = _get_env_value("YOOKASSA_RECEIPT_REQUIRED", "0")  # "1" to enforce
+    # Tax system code (1-6). Common: 2 (УСН доход), 3 (УСН доход-расход).
+    YOOKASSA_TAX_SYSTEM_CODE: str = _get_env_value("YOOKASSA_TAX_SYSTEM_CODE", "2")
+    # VAT code. Common: 1 (без НДС), 6 (20%).
+    YOOKASSA_VAT_CODE: str = _get_env_value("YOOKASSA_VAT_CODE", "1")
     
     # Payment Currency
     PAYMENT_CURRENCY: str = _get_env_value("PAYMENT_CURRENCY", "RUB")  # RUB, USD, EUR, etc.

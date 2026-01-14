@@ -66,6 +66,7 @@ class Database:
                 username TEXT,
                 first_name TEXT,
                 last_name TEXT,
+                email TEXT,
                 tariff TEXT,
                 referral_partner_id TEXT,
                 start_date TEXT,
@@ -101,6 +102,16 @@ class Database:
         try:
             await self.conn.execute("""
                 ALTER TABLE users ADD COLUMN legal_accepted_at TEXT
+            """)
+            await self.conn.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
+
+        # Миграция: добавляем поле email, если его нет
+        try:
+            await self.conn.execute("""
+                ALTER TABLE users ADD COLUMN email TEXT
             """)
             await self.conn.commit()
         except Exception:
@@ -220,9 +231,9 @@ class Database:
         
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
-            INSERT INTO users (user_id, username, first_name, last_name, 
+            INSERT INTO users (user_id, username, first_name, last_name, email,
                              mentor_reminders, legal_accepted_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, NULL, ?, ?)
+            VALUES (?, ?, ?, ?, NULL, 0, NULL, ?, ?)
         """, (user_id, username, first_name, last_name, now, now))
         await self.conn.commit()
         return await self.get_user(user_id)
@@ -233,14 +244,14 @@ class Database:
         
         await self.conn.execute("""
             UPDATE users SET
-                username = ?, first_name = ?, last_name = ?,
+                username = ?, first_name = ?, last_name = ?, email = ?,
                 tariff = ?, referral_partner_id = ?,
                 start_date = ?, current_day = ?, mentor_reminders = ?, last_mentor_reminder = ?,
                 legal_accepted_at = ?,
                 updated_at = ?
             WHERE user_id = ?
         """, (
-            user.username, user.first_name, user.last_name,
+            user.username, user.first_name, user.last_name, getattr(user, "email", None),
             user.tariff.value if user.tariff else None,
             user.referral_partner_id,
             user.start_date.isoformat() if user.start_date else None,
@@ -438,6 +449,7 @@ class Database:
             username=row["username"],
             first_name=row["first_name"],
             last_name=row["last_name"],
+            email=row["email"] if ("email" in row.keys() and row["email"]) else None,
             tariff=Tariff(row["tariff"]) if row["tariff"] else None,
             referral_partner_id=row["referral_partner_id"],
             start_date=datetime.fromisoformat(row["start_date"]) if row["start_date"] else None,

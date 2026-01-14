@@ -31,6 +31,7 @@ class User:
     username: Optional[str]
     first_name: Optional[str]
     last_name: Optional[str]
+    email: Optional[str]  # Email for receipt (YooKassa 54-FZ) and notifications
     tariff: Optional[Tariff]
     referral_partner_id: Optional[str]  # Partner who referred this user
     start_date: Optional[datetime]      # When user started the course
