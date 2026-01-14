@@ -178,6 +178,26 @@ class SalesBot:
             InlineKeyboardButton(text="✅ Согласен", callback_data="legal:accept")
         ]])
 
+    @staticmethod
+    def _format_payment_error(e: Exception) -> str:
+        """
+        Format a safe, user-visible payment error.
+        Avoids leaking secrets; tries to include useful diagnostic hints like HTTP status code.
+        """
+        status = getattr(e, "status", None) or getattr(e, "status_code", None)
+        # Some libs keep status on response
+        resp = getattr(e, "response", None)
+        if status is None and resp is not None:
+            status = getattr(resp, "status", None) or getattr(resp, "status_code", None)
+        name = type(e).__name__
+        msg = str(e) or ""
+        msg = msg.replace("\n", " ").strip()
+        if len(msg) > 220:
+            msg = msg[:220] + "…"
+        if status:
+            return f"{name} (HTTP {status}): {msg}" if msg else f"{name} (HTTP {status})"
+        return f"{name}: {msg}" if msg else name
+
     async def _ensure_legal_consent(self, chat_id: int, user_id: int) -> bool:
         """
         Returns True if legal consent already accepted; otherwise sends consent message and returns False.
@@ -1075,11 +1095,16 @@ class SalesBot:
             
         except Exception as e:
             logger.error(f"❌ Error in handle_upgrade_tariff_selection: {e}", exc_info=True)
+            safe_err = self._format_payment_error(e)
             try:
-                await callback.answer("❌ Ошибка при создании платежа", show_alert=True)
+                await callback.answer(f"❌ Ошибка оплаты: {safe_err}", show_alert=True)
             except:
                 try:
-                    await callback.message.answer("❌ Ошибка при создании платежа. Попробуйте позже.")
+                    await callback.message.answer(
+                        "❌ Ошибка при создании платежа.\n\n"
+                        f"Диагностика: <code>{safe_err}</code>\n\n"
+                        "Проверьте ключи YooKassa (Shop ID/Secret Key) и попробуйте ещё раз."
+                    )
                 except:
                     pass
     
@@ -1166,7 +1191,21 @@ class SalesBot:
             logger.info(f"   Payment message sent to user")
         except Exception as e:
             logger.error(f"❌ Error in handle_payment_initiate: {e}", exc_info=True)
-            await callback.message.edit_text("❌ Ошибка при создании платежа. Попробуйте позже.")
+            safe_err = self._format_payment_error(e)
+            try:
+                await callback.message.edit_text(
+                    "❌ Ошибка при создании платежа.\n\n"
+                    f"Диагностика: <code>{safe_err}</code>\n\n"
+                    "Обычно это неправильные ключи YooKassa (Shop ID/Secret Key) или магазин не в том режиме (тест/боевой)."
+                )
+            except Exception:
+                try:
+                    await callback.message.answer(
+                        "❌ Ошибка при создании платежа.\n\n"
+                        f"Диагностика: <code>{safe_err}</code>"
+                    )
+                except Exception:
+                    pass
         
         # In production, you might want to:
         # 1. Poll payment status in background
