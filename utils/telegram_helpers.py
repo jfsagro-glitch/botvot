@@ -36,6 +36,7 @@ def create_persistent_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="📖 О курсе")
             ],
             [
+                KeyboardButton(text="💬 Поговорить с человеком"),
                 KeyboardButton(text="Забыть все")
             ]
         ],
@@ -70,10 +71,6 @@ def create_tariff_keyboard() -> InlineKeyboardMarkup:
             )
         ],
         [
-            InlineKeyboardButton(
-                text="💬 Поговорить с человеком",
-                callback_data="sales:talk_to_human"
-            ),
             InlineKeyboardButton(
                 text="📖 О курсе",
                 callback_data="sales:about_course"

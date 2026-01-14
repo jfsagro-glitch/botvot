@@ -16,6 +16,7 @@ import sys
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, Union
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.dispatcher.event.bases import SkipHandler
@@ -74,6 +75,8 @@ class SalesBot:
         # In-memory contexts (good enough for sales flow; DB stores the resulting email)
         self._awaiting_email: dict[int, dict] = {}
         self._awaiting_forget_confirm: set[int] = set()
+        # When enabled, all next messages from user are forwarded to curator group until stopped
+        self._talk_mode_users: set[int] = set()
         
         # Initialize lesson loader with error handling
         try:
@@ -131,7 +134,11 @@ class SalesBot:
         self.dp.message.register(self.handle_keyboard_go_to_course, F.text == "📚 Перейти в курс")
         self.dp.message.register(self.handle_keyboard_select_tariff, F.text == "📋 Выбор тарифа")
         self.dp.message.register(self.handle_keyboard_about_course, F.text == "📖 О курсе")
+        self.dp.message.register(self.handle_keyboard_talk_to_human, F.text == "💬 Поговорить с человеком")
         self.dp.message.register(self.handle_forget_everything_button, (F.text == "Забыть все") | (F.text == "🧹 Забыть все") | (F.text == "🧹 Забыть всё"))
+
+        # Voice questions in talk-to-human mode
+        self.dp.message.register(self.handle_voice_question_from_sales, F.voice)
 
         # Email input (receipt requirement)
         self.dp.message.register(self.handle_email_input, F.text & ~F.command)
@@ -168,6 +175,7 @@ class SalesBot:
         self.dp.callback_query.register(self.handle_back_to_tariffs, F.data == "back_to_tariffs")
         self.dp.callback_query.register(self.handle_cancel, F.data == "cancel")
         self.dp.callback_query.register(self.handle_talk_to_human, F.data == "sales:talk_to_human")
+        self.dp.callback_query.register(self.handle_talk_to_human_stop, F.data == "sales:talk_to_human:stop")
         self.dp.callback_query.register(self.handle_about_course, F.data == "sales:about_course")
         
         # Универсальный обработчик для отладки необработанных callback (должен быть последним)
@@ -333,6 +341,8 @@ class SalesBot:
 
         # Wipe DB user data (affects both sales and course bots)
         await self.db.reset_user_data(user_id)
+        # Also exit talk mode if active
+        self._talk_mode_users.discard(user_id)
 
         # Send Agent J image + confirmation
         img_path = self._agent_j_image_path()
@@ -346,6 +356,99 @@ class SalesBot:
                 await callback.message.answer("🕶️ Память стерта. Начинаем с нуля.\n\nНажмите /start")
         except Exception:
             await callback.message.answer("🕶️ Память стерта. Начинаем с нуля.\n\nНажмите /start")
+
+    def _normalize_curator_chat_id(self) -> Union[int, str]:
+        """
+        Normalize curator group ID from env (supports:
+        - '-100123...'
+        - '-123...' (web.telegram internal) -> converted to -100...
+        - 'https://web.telegram.org/k/#-123...' -> converted
+        - '@username')
+        Default per user request: web.telegram.org/k/#-3576021889 -> -1003576021889
+        """
+        raw = (Config.CURATOR_GROUP_ID or "").strip()
+        if not raw:
+            # fallback to the group provided by user
+            return -1003576021889
+
+        m = re.search(r"#-([0-9]{6,})", raw)
+        if m:
+            digits = m.group(1)
+            return int(f"-100{digits}")
+
+        if raw.startswith("-100") and raw[4:].isdigit():
+            return int(raw)
+
+        if raw.startswith("-") and raw[1:].isdigit():
+            # If this looks like web.telegram internal id, convert to -100...
+            digits = raw[1:]
+            if len(digits) >= 9 and not raw.startswith("-100"):
+                return int(f"-100{digits}")
+            return int(raw)
+
+        if raw.isdigit():
+            return int(raw)
+
+        return raw
+
+    def _talk_mode_keyboard(self) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Завершить", callback_data="sales:talk_to_human:stop")]
+        ])
+
+    async def handle_keyboard_talk_to_human(self, message: Message):
+        """Persistent keyboard: enter talk-to-human mode."""
+        user_id = message.from_user.id
+        self._talk_mode_users.add(user_id)
+
+        await message.answer(
+            "💬 <b>Поговорить с человеком</b>\n\n"
+            "Напишите сообщение или отправьте голосовое — я перешлю в группу кураторов.\n\n"
+            "Чтобы завершить — нажмите «✅ Завершить».",
+            reply_markup=self._talk_mode_keyboard()
+        )
+
+    async def handle_talk_to_human_stop(self, callback: CallbackQuery):
+        try:
+            await callback.answer("Готово")
+        except Exception:
+            pass
+        user_id = callback.from_user.id
+        self._talk_mode_users.discard(user_id)
+        try:
+            await callback.message.edit_text("✅ Диалог завершён. Можете продолжать пользоваться ботом.")
+        except Exception:
+            try:
+                await callback.message.answer("✅ Диалог завершён. Можете продолжать пользоваться ботом.")
+            except Exception:
+                pass
+
+    async def handle_voice_question_from_sales(self, message: Message):
+        """Forward voice messages to curator group when talk-to-human mode is enabled."""
+        user_id = message.from_user.id
+        if user_id not in self._talk_mode_users:
+            raise SkipHandler()
+
+        target_chat_id = self._normalize_curator_chat_id()
+
+        first_name = message.from_user.first_name or "Пользователь"
+        username = message.from_user.username
+        header = f"🎤 <b>Голосовое сообщение</b>\n👤 {first_name}"
+        if username:
+            header += f" (@{username})"
+        header += f"\n🆔 {user_id}"
+
+        try:
+            await self.bot.send_message(target_chat_id, header)
+            await self.bot.send_voice(
+                target_chat_id,
+                voice=message.voice.file_id,
+                caption="(переслано из продающего бота)"
+            )
+            await message.answer("✅ Голосовое отправлено куратору.", reply_markup=self._talk_mode_keyboard())
+        except Exception as e:
+            logger.error(f"❌ Error forwarding voice to curator group: {e}", exc_info=True)
+            await message.answer("❌ Не удалось отправить голосовое куратору. Проверьте, что бот добавлен в группу.")
 
     async def _start_payment_flow(self, message: Message, user, tariff: Tariff):
         """Create payment and show payment URL (non-upgrade)."""
@@ -1471,20 +1574,17 @@ class SalesBot:
         first_name = callback.from_user.first_name or "Пользователь"
         username = callback.from_user.username
         
-        # Сохраняем контекст, что пользователь хочет поговорить с человеком
-        if not hasattr(self, '_user_question_context'):
-            self._user_question_context = {}
-        self._user_question_context[user_id] = {
-            'waiting_for_question': True,
-            'source': 'sales_bot'
-        }
+        # Enable talk-to-human mode (all next messages will be forwarded until stopped)
+        self._talk_mode_users.add(user_id)
         
         await callback.message.answer(
             f"💬 <b>Поговорить с человеком</b>\n\n"
             f"👋 Привет, {first_name}!\n\n"
-            f"✍️ Напишите ваш вопрос прямо здесь 👇\n\n"
+            f"✍️ Напишите сообщение или отправьте голосовое прямо здесь 👇\n\n"
             f"📤 Ваш вопрос будет отправлен куратору, и мы ответим вам как можно скорее ⚡\n\n"
             f"💡 <i>Можете задать любой вопрос о курсе, тарифах или оплате.</i>"
+            ,
+            reply_markup=self._talk_mode_keyboard()
         )
     
     async def handle_about_course(self, callback: CallbackQuery):
@@ -1751,33 +1851,23 @@ class SalesBot:
     async def handle_question_from_sales(self, message: Message):
         """Handle question text from sales bot (when user clicked 'Talk to human')."""
         user_id = message.from_user.id
-        
-        # Проверяем, ожидаем ли мы вопрос от этого пользователя
-        if not hasattr(self, '_user_question_context') or user_id not in self._user_question_context:
-            # Не ожидаем вопрос — даём другим хэндлерам обработать это сообщение
+
+        # Only handle when talk-to-human mode is enabled
+        if user_id not in self._talk_mode_users:
             raise SkipHandler()
         
-        context = self._user_question_context[user_id]
-        if not context.get('waiting_for_question'):
-            raise SkipHandler()
-        
-        # Удаляем контекст после обработки
-        del self._user_question_context[user_id]
-        
-        # Создаем вопрос
+        # Форматируем вопрос для кураторов
         question_data = await self.question_service.create_question(
             user_id=user_id,
             lesson_id=None,
             question_text=message.text,
             context="Вопрос из бота оплаты (sales bot)"
         )
-        
-        # Форматируем вопрос для кураторов
         curator_message = await self.question_service.format_question_for_admin(question_data)
         curator_message += "\n\n📍 <b>Источник:</b> Бот оплаты (sales bot)"
-        
-        # Отправляем в группу кураторов (если настроена), иначе в админ-чат
-        target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
+
+        # Target group per settings (supports web.telegram link formats)
+        target_chat_id = self._normalize_curator_chat_id()
         
         if target_chat_id:
             try:
@@ -1815,10 +1905,11 @@ class SalesBot:
             logger.warning("⚠️ No curator group or admin chat configured!")
         
         await message.answer(
-            "✅ <b>Вопрос отправлен!</b>\n\n"
-            "📤 Ваш вопрос отправлен куратору 👥.\n"
-            "⏳ Мы ответим вам как можно скорее 💬.\n\n"
-            "💎 <i>Пока ждёте ответа, можете выбрать тариф и начать обучение!</i>"
+            "✅ <b>Сообщение отправлено!</b>\n\n"
+            "📤 Я переслал сообщение кураторам 👥.\n"
+            "⏳ Мы ответим вам как можно скорее.\n\n"
+            "Чтобы завершить диалог — нажмите «✅ Завершить».",
+            reply_markup=self._talk_mode_keyboard()
         )
     
     async def handle_payment_check(self, callback: CallbackQuery):
