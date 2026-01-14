@@ -102,15 +102,27 @@ class MentorReminderScheduler:
         if window_end_dt <= window_start_dt:
             window_end_dt = window_start_dt + timedelta(hours=12, minutes=30)
         
+        enabled = 0
+        sent = 0
+        skipped_disabled = 0
+        skipped_finished = 0
+        skipped_window = 0
+        skipped_interval = 0
+        skipped_has_assignment = 0
+        errors = 0
+
         for user in users:
             try:
                 # Пропускаем пользователей с отключенными напоминаниями
                 if user.mentor_reminders == 0:
+                    skipped_disabled += 1
                     continue
+                enabled += 1
                 
                 # Пропускаем пользователей, которые завершили курс
                 from core.config import Config
                 if user.current_day > Config.COURSE_DURATION_DAYS:
+                    skipped_finished += 1
                     continue
                 
                 # Respect the allowed local-time window (e.g., 09:30–22:00).
@@ -128,6 +140,7 @@ class MentorReminderScheduler:
                         user_window_end = user_window_start + timedelta(hours=12, minutes=30)
 
                 if user_now < user_window_start or user_now > user_window_end:
+                    skipped_window += 1
                     continue
 
                 # Distribute reminders evenly within the window.
@@ -144,10 +157,12 @@ class MentorReminderScheduler:
                         else:
                             time_since_last = user_now - last_local
                             if time_since_last < interval:
+                                skipped_interval += 1
                                 continue
                     else:
                         time_since_last = now_utc - user.last_mentor_reminder
                         if time_since_last < interval:
+                            skipped_interval += 1
                             continue
                 else:
                     # First reminder of the day: only after window start (already ensured)
@@ -157,11 +172,31 @@ class MentorReminderScheduler:
                 # Если задание уже отправлено, не отправляем напоминания
                 has_assignment = await self.db.has_assignment_for_day(user.user_id, user.current_day)
                 if has_assignment:
-                    logger.debug(f"   ⏭️ User {user.user_id} already submitted assignment for day {user.current_day}, skipping reminder")
+                    skipped_has_assignment += 1
+                    logger.debug(
+                        f"   ⏭️ mentor_reminder: user={user.user_id} day={user.current_day} skip=submitted"
+                    )
                     continue
                 
                 # Отправляем напоминание
                 await self.reminder_callback(user)
+                sent += 1
                 
             except Exception as e:
+                errors += 1
                 logger.error(f"Error processing mentor reminder for user {user.user_id}: {e}", exc_info=True)
+
+        # High-signal periodic diagnostics (INFO) so we can debug "not coming" in production logs.
+        try:
+            logger.info(
+                "👨‍🏫 Mentor reminders tick: "
+                f"users={len(users)} enabled={enabled} sent={sent} "
+                f"skipped_disabled={skipped_disabled} skipped_finished={skipped_finished} "
+                f"skipped_window={skipped_window} skipped_interval={skipped_interval} "
+                f"skipped_submitted={skipped_has_assignment} errors={errors} "
+                f"local_now={local_now.strftime('%Y-%m-%d %H:%M')} "
+                f"window={window_start_t.strftime('%H:%M')}-{window_end_t.strftime('%H:%M')} "
+                f"tz={getattr(Config, 'SCHEDULE_TIMEZONE', 'UTC')}"
+            )
+        except Exception:
+            pass
