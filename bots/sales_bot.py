@@ -135,14 +135,14 @@ class SalesBot:
 
         # Persistent keyboard buttons (sales bot)
         # IMPORTANT: register these BEFORE any generic text handler
-        self.dp.message.register(self.handle_keyboard_upgrade, F.text == "⬆️ Апгрейд тарифа")
-        self.dp.message.register(self.handle_keyboard_go_to_course, F.text == "📚 Перейти в курс")
-        self.dp.message.register(self.handle_keyboard_select_tariff, F.text == "📋 Выбор тарифа")
-        self.dp.message.register(self.handle_keyboard_about_course, F.text == "📖 О курсе")
-        self.dp.message.register(self.handle_keyboard_talk_to_human, F.text == "💬 Поговорить с человеком")
+        self.dp.message.register(self.handle_keyboard_upgrade, (F.text == "🔷 Апгрейд тарифа") | (F.text == "⬆️ Апгрейд тарифа"))
+        self.dp.message.register(self.handle_keyboard_go_to_course, (F.text == "🧿 Перейти в курс") | (F.text == "📚 Перейти в курс"))
+        self.dp.message.register(self.handle_keyboard_select_tariff, (F.text == "🟦 Выбор тарифа") | (F.text == "📋 Выбор тарифа"))
+        self.dp.message.register(self.handle_keyboard_about_course, (F.text == "📘 О курсе") | (F.text == "📖 О курсе"))
+        self.dp.message.register(self.handle_keyboard_talk_to_human, (F.text == "🔵 Поговорить с человеком") | (F.text == "💬 Поговорить с человеком"))
         self.dp.message.register(
             self.handle_forget_everything_button,
-            (F.text == "🕶️ Забыть все") | (F.text == "Забыть все") | (F.text == "🧹 Забыть все") | (F.text == "🧹 Забыть всё")
+            (F.text == "🧊 Забыть все") | (F.text == "🕶️ Забыть все") | (F.text == "Забыть все") | (F.text == "🧹 Забыть все") | (F.text == "🧹 Забыть всё")
         )
 
         # Voice questions in talk-to-human mode
@@ -205,7 +205,7 @@ class SalesBot:
 
     def _legal_consent_keyboard(self) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ Согласен", callback_data="legal:accept")
+            InlineKeyboardButton(text="🔵 Ознакомлен", callback_data="legal:accept")
         ]])
 
     @staticmethod
@@ -282,7 +282,7 @@ class SalesBot:
         return InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="🧹 Да, стереть всё", callback_data="forget:confirm"),
-                InlineKeyboardButton(text="❌ Отмена", callback_data="forget:cancel"),
+                InlineKeyboardButton(text="🔹 Отмена", callback_data="forget:cancel"),
             ]
         ])
 
@@ -455,7 +455,7 @@ class SalesBot:
 
     def _talk_mode_keyboard(self) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Завершить", callback_data="sales:talk_to_human:stop")]
+            [InlineKeyboardButton(text="🔵 Завершить", callback_data="sales:talk_to_human:stop")]
         ])
 
     async def handle_keyboard_talk_to_human(self, message: Message):
@@ -561,8 +561,8 @@ class SalesBot:
             f"Сумма: {price:.0f}{currency_symbol}\n\n"
             f"Нажмите кнопку ниже для завершения оплаты:{payment_note}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💳 Оплатить", url=payment_url)],
-                [InlineKeyboardButton(text="🔄 Проверить статус оплаты", callback_data=f"check_payment:{payment_id}")],
+                    [InlineKeyboardButton(text="🔷 Оплатить", url=payment_url)],
+                    [InlineKeyboardButton(text="🔁 Проверить оплату", callback_data=f"check_payment:{payment_id}")],
             ])
         )
 
@@ -590,9 +590,9 @@ class SalesBot:
             f"💰 К доплате: <b>{upgrade_price:.0f}{currency_symbol}</b>{payment_note}"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💳 Оплатить", url=payment_url)],
-            [InlineKeyboardButton(text="🔄 Проверить статус оплаты", callback_data=f"check_payment:{payment_id}")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")],
+            [InlineKeyboardButton(text="🔷 Оплатить", url=payment_url)],
+            [InlineKeyboardButton(text="🔁 Проверить оплату", callback_data=f"check_payment:{payment_id}")],
+            [InlineKeyboardButton(text="🔹 Отмена", callback_data="cancel")],
         ])
         await message.answer(upgrade_message, reply_markup=keyboard)
 
@@ -1202,19 +1202,19 @@ class SalesBot:
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="✅ Оплатить",
+                            text="🔷 Оплатить",
                             callback_data=f"pay:{tariff.value}"
                         )
                     ],
                     [
                         InlineKeyboardButton(
-                            text="📋 Выбор тарифа",
+                            text="🟦 Выбор тарифа",
                             callback_data="back_to_tariffs"
                         )
                     ],
                     [
                         InlineKeyboardButton(
-                            text="❌ Отмена",
+                            text="🔹 Отмена",
                             callback_data="cancel"
                         )
                     ]
@@ -1646,13 +1646,13 @@ class SalesBot:
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [
                         InlineKeyboardButton(
-                            text="💳 Оплатить",
+                            text="🔷 Оплатить",
                             url=payment_url
                         )
                     ],
                     [
                         InlineKeyboardButton(
-                            text="🔄 Проверить статус оплаты",
+                            text="🔁 Проверить оплату",
                             callback_data=f"check_payment:{payment_id}"
                         )
                     ]
@@ -2087,7 +2087,7 @@ class SalesBot:
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [
                             InlineKeyboardButton(
-                                text="🔄 Проверить статус оплаты снова",
+                                text="🔁 Проверить оплату",
                                 callback_data=f"check_payment:{payment_id}"
                             )
                         ]

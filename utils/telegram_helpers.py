@@ -28,16 +28,16 @@ def create_persistent_keyboard() -> ReplyKeyboardMarkup:
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text="⬆️ Апгрейд тарифа"),
-                KeyboardButton(text="📚 Перейти в курс")
+                KeyboardButton(text="🔷 Апгрейд тарифа"),
+                KeyboardButton(text="🧿 Перейти в курс")
             ],
             [
-                KeyboardButton(text="📋 Выбор тарифа"),
-                KeyboardButton(text="📖 О курсе")
+                KeyboardButton(text="🟦 Выбор тарифа"),
+                KeyboardButton(text="📘 О курсе")
             ],
             [
-                KeyboardButton(text="💬 Поговорить с человеком"),
-                KeyboardButton(text="🕶️ Забыть все")
+                KeyboardButton(text="🔵 Поговорить с человеком"),
+                KeyboardButton(text="🧊 Забыть все")
             ]
         ],
         resize_keyboard=True,
