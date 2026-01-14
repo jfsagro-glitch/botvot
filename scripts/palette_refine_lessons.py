@@ -61,6 +61,18 @@ def refine_text(s: str) -> str:
     s = re.sub(r"Только\s*❔\s*вопрос", "Только вопрос", s)
     s = re.sub(r"Просто\s*❔\s*задайте", "Просто задайте", s)
 
+    # Reduce emoji noise: collapse consecutive emoji runs (2+ in a row) into a single emoji.
+    # This is intentionally conservative: only collapses runs made of our approved set.
+    allowed_emojis = [
+        "💬","☑️","✔️","➡️","⬅️","⬆️","⏺️","🎦","📶","🏧","💤","🌐","💠","❔","❕","💙","🤍","🖤",
+        "🔎","🖌️","🖊️","🧷","📐","📖","📘","🗳️","📪","📨","🧿","💣","⚔️","💎","📡","⏱️","🧭",
+        "🎛️","🎙️","📽️","📷","📸","📹","🎥","⌚️","⚓️","🪝","✈️","♟️","🎤","🎧","🎲","🎱","🧊","🌏","🌍",
+    ]
+    # Build an alternation that matches exactly one of the emojis above.
+    emoji_alt = "(?:" + "|".join(re.escape(e) for e in sorted(allowed_emojis, key=len, reverse=True)) + ")"
+    # Collapse adjacent or space-separated emoji sequences (spaces/tabs only; keep newlines as separators)
+    s = re.sub(rf"({emoji_alt})(?:[ \t]*{emoji_alt})+", r"\1", s)
+
     # Common “double marker” phrases → keep one, keep context
     s = re.sub(r"💠\s*Подведите\s*💠\s*итоги", "💠 Подведите итоги", s)
     s = re.sub(r"💠\s*А еще\s*💠\s*сегодня", "💠 А еще сегодня", s, flags=re.IGNORECASE)
