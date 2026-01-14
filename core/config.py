@@ -48,7 +48,7 @@ class Config:
     PREMIUM_GROUP_INVITE_LINK: str = _get_env_value("PREMIUM_GROUP_INVITE_LINK", "")
     
     # Database
-    DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./data/course_platform.db")
+    DATABASE_PATH: str = _get_env_value("DATABASE_PATH", "./data/course_platform.db")
     
     # Course Settings
     COURSE_DURATION_DAYS: int = int(os.getenv("COURSE_DURATION_DAYS", "30"))
@@ -62,15 +62,15 @@ class Config:
     MENTOR_REMINDER_END_LOCAL: str = _get_env_value("MENTOR_REMINDER_END_LOCAL", "22:00")
     
     # Payment Settings
-    PAYMENT_PROVIDER: str = os.getenv("PAYMENT_PROVIDER", "mock")  # "mock" or "yookassa"
+    PAYMENT_PROVIDER: str = _get_env_value("PAYMENT_PROVIDER", "mock")  # "mock" or "yookassa"
     
     # YooKassa Settings (if PAYMENT_PROVIDER == "yookassa")
-    YOOKASSA_SHOP_ID: str = os.getenv("YOOKASSA_SHOP_ID", "")
-    YOOKASSA_SECRET_KEY: str = os.getenv("YOOKASSA_SECRET_KEY", "")
-    YOOKASSA_RETURN_URL: str = os.getenv("YOOKASSA_RETURN_URL", "https://t.me/StartNowQ_bot")
+    YOOKASSA_SHOP_ID: str = _get_env_value("YOOKASSA_SHOP_ID", "")
+    YOOKASSA_SECRET_KEY: str = _get_env_value("YOOKASSA_SECRET_KEY", "")
+    YOOKASSA_RETURN_URL: str = _get_env_value("YOOKASSA_RETURN_URL", "https://t.me/StartNowQ_bot")
     
     # Payment Currency
-    PAYMENT_CURRENCY: str = os.getenv("PAYMENT_CURRENCY", "RUB")  # RUB, USD, EUR, etc.
+    PAYMENT_CURRENCY: str = _get_env_value("PAYMENT_CURRENCY", "RUB")  # RUB, USD, EUR, etc.
     
     @classmethod
     def validate(cls) -> bool:
