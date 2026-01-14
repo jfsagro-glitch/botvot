@@ -309,7 +309,7 @@ class SalesBot:
         self._awaiting_forget_confirm.add(user_id)
         img_path = self._agent_j_image_path()
         caption = (
-            "🧊🖤\n\n"
+            "🧊\n\n"
             "<b>Забыть всё?</b>\n\n"
             "Это тестовая функция. Она удалит:\n"
             "• доступ/подписку\n"

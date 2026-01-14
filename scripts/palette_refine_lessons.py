@@ -70,6 +70,11 @@ def refine_text(s: str) -> str:
     ]
     # Build an alternation that matches exactly one of the emojis above.
     emoji_alt = "(?:" + "|".join(re.escape(e) for e in sorted(allowed_emojis, key=len, reverse=True)) + ")"
+    # If someone uses "emoji ● emoji" style bullets, keep only one emoji and drop the marker.
+    # Example: "🌊 ● 🌊 Текст" -> "🌊 Текст"
+    s = re.sub(rf"({emoji_alt})[ \t]*[●•][ \t]*{emoji_alt}", r"\1", s)
+    # If someone uses "emoji ● ..." (marker), drop the marker and keep the single emoji.
+    s = re.sub(rf"({emoji_alt})[ \t]*[●•][ \t]*", r"\1 ", s)
     # Collapse adjacent or space-separated emoji sequences (spaces/tabs only; keep newlines as separators)
     s = re.sub(rf"({emoji_alt})(?:[ \t]*{emoji_alt})+", r"\1", s)
 
