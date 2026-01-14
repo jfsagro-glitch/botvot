@@ -8,9 +8,10 @@ import asyncio
 import logging
 import sys
 import os
-import threading
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from typing import Optional, Any
+
+from aiohttp import web
 from bots.sales_bot import SalesBot
 from bots.course_bot import CourseBot
 from core.config import Config
@@ -24,70 +25,100 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    """Простой HTTP обработчик для healthcheck."""
-    
-    def do_GET(self):
-        """Обработка GET запросов для healthcheck."""
-        if self.path == '/' or self.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'OK')
-        else:
-            self.send_response(404)
-            self.end_headers()
-    
-    def log_message(self, format, *args):
-        """Отключаем логирование HTTP запросов для чистоты логов."""
-        pass
-
-
-def run_http_server(port):
-    """Запуск синхронного HTTP сервера в отдельном потоке."""
-    try:
-        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-        logger.info(f"🌐 HTTP сервер запущен на порту {port} для healthcheck")
-        logger.info(f"🌐 Healthcheck доступен по адресу: http://0.0.0.0:{port}/")
-        server.serve_forever()
-    except Exception as e:
-        logger.error(f"❌ Ошибка HTTP сервера: {e}", exc_info=True)
-
-
-def start_http_server():
-    """Запуск HTTP сервера в отдельном потоке."""
-    # Получаем порт из переменной окружения (Railway автоматически устанавливает PORT)
-    # В Railway переменная PORT устанавливается автоматически
-    port_str = os.environ.get('PORT')
+def _get_port() -> int:
+    port_str = os.environ.get("PORT", "").strip()
     if not port_str:
-        # Если PORT не установлен, используем значение по умолчанию
         logger.warning("⚠️ Переменная PORT не установлена, используем 8080")
-        port = 8080
-    else:
-        try:
-            port = int(port_str)
-            logger.info(f"📌 Используется порт из переменной окружения: {port}")
-        except (ValueError, TypeError):
-            logger.warning(f"⚠️ Неверный формат PORT: {port_str}, используем 8080")
-            port = 8080
-    
-    # Запускаем HTTP сервер в отдельном потоке
-    http_thread = threading.Thread(target=run_http_server, args=(port,), daemon=True)
-    http_thread.start()
-    logger.info("✅ HTTP сервер запущен в отдельном потоке")
-    
-    # Даем время серверу запуститься
-    import time
-    time.sleep(1)
-    
-    return http_thread
+        return 8080
+    try:
+        port = int(port_str)
+        logger.info(f"📌 Используется порт из переменной окружения: {port}")
+        return port
+    except (ValueError, TypeError):
+        logger.warning(f"⚠️ Неверный формат PORT: {port_str}, используем 8080")
+        return 8080
+
+
+async def _handle_health(_: web.Request) -> web.Response:
+    return web.Response(text="OK")
+
+
+def _extract_payment_id(payload: dict) -> Optional[str]:
+    try:
+        obj = payload.get("object") or {}
+        pid = obj.get("id")
+        return str(pid) if pid else None
+    except Exception:
+        return None
+
+
+async def _handle_yookassa_webhook(request: web.Request) -> web.Response:
+    """
+    YooKassa webhook endpoint.
+    - returns 200 quickly for non-succeeded events
+    - uses DB idempotency to avoid duplicate processing
+    """
+    app = request.app
+    sales_bot: Optional[Any] = app.get("sales_bot")
+    if not sales_bot:
+        # App is up but bots not ready yet
+        return web.Response(status=503, text="Bots not ready")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.Response(status=400, text="Invalid JSON")
+
+    payment_id = _extract_payment_id(payload)
+    if not payment_id:
+        return web.Response(status=400, text="Missing payment id")
+
+    try:
+        # Idempotency: if already processed, acknowledge
+        if await sales_bot.db.is_payment_processed(payment_id):
+            return web.Response(text="OK")
+
+        # Let processor validate/parse webhook and grant access
+        result = await sales_bot.payment_service.process_payment_completion(
+            payment_id=payment_id,
+            webhook_data=payload,
+        )
+
+        # If not completed yet (or not a succeeded event), we still acknowledge
+        if not result:
+            return web.Response(text="OK")
+
+        await sales_bot.db.mark_payment_processed(payment_id)
+        logger.info(f"✅ Webhook processed: payment_id={payment_id}, user_id={result.get('user_id')}")
+        return web.Response(text="OK")
+    except Exception as e:
+        logger.error(f"❌ Error processing YooKassa webhook: {e}", exc_info=True)
+        # Return 500 so YooKassa can retry
+        return web.Response(status=500, text="ERROR")
+
+
+async def start_web_server(app: web.Application) -> web.AppRunner:
+    """Start aiohttp server (health + webhook) on PORT."""
+    port = _get_port()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+    logger.info(f"🌐 HTTP сервер запущен на порту {port}")
+    logger.info(f"🌐 Healthcheck: http://0.0.0.0:{port}/health")
+    logger.info(f"🌐 Webhook:     http://0.0.0.0:{port}/payment/webhook")
+    return runner
 
 
 async def main():
     """Запуск обоих ботов и HTTP сервера."""
     sales_bot = None
     course_bot = None
-    http_thread = None
+    web_runner: Optional[web.AppRunner] = None
+    web_app = web.Application()
+    web_app.router.add_get("/", _handle_health)
+    web_app.router.add_get("/health", _handle_health)
+    web_app.router.add_post("/payment/webhook", _handle_yookassa_webhook)
     
     logger.info("=" * 60)
     logger.info("🚀 Запуск платформы курсов")
@@ -204,16 +235,16 @@ async def main():
     except Exception as e:
         logger.warning(f"⚠️ Не удалось выполнить диагностику DATABASE_PATH: {e}")
     
-    # КРИТИЧЕСКИ ВАЖНО: Запускаем HTTP сервер ПЕРВЫМ и в отдельном потоке
+    # КРИТИЧЕСКИ ВАЖНО: Запускаем HTTP сервер ПЕРВЫМ
     # Railway проверяет healthcheck сразу, даже если боты еще не готовы
     logger.info("Запуск HTTP сервера для healthcheck...")
     try:
-        http_thread = start_http_server()
-        logger.info("✅ HTTP сервер успешно запущен и готов отвечать на healthcheck")
+        web_runner = await start_web_server(web_app)
+        logger.info("✅ HTTP сервер успешно запущен и готов отвечать на healthcheck/webhook")
     except Exception as e:
         logger.error(f"❌ Критическая ошибка при запуске HTTP сервера: {e}", exc_info=True)
         logger.error("⚠️ Продолжаем без HTTP сервера (healthcheck НЕ БУДЕТ работать)")
-        http_thread = None
+        web_runner = None
     
     # Теперь проверяем конфигурацию (после запуска HTTP сервера)
     try:
@@ -230,7 +261,7 @@ async def main():
             logger.error("⚠️ HTTP сервер работает, но боты не могут запуститься")
             # Не выходим, чтобы healthcheck продолжал работать
             # Просто ждем бесконечно, чтобы контейнер не перезапускался
-            if http_thread:
+            if web_runner:
                 logger.info("🌐 HTTP сервер работает. Ожидание исправления конфигурации...")
                 while True:
                     await asyncio.sleep(60)
@@ -239,7 +270,7 @@ async def main():
         logger.info("✅ Конфигурация валидна, все обязательные переменные установлены")
     except Exception as e:
         logger.error(f"❌ Ошибка при проверке конфигурации: {e}", exc_info=True)
-        if http_thread:
+        if web_runner:
             logger.info("🌐 HTTP сервер работает. Ожидание исправления конфигурации...")
             while True:
                 await asyncio.sleep(60)
@@ -251,6 +282,8 @@ async def main():
         try:
             sales_bot = SalesBot()
             logger.info("✅ Продающий бот инициализирован")
+            # Expose sales_bot to webhook app (payment_service/db are inside)
+            web_app["sales_bot"] = sales_bot
         except Exception as e:
             logger.error(f"❌ Ошибка при инициализации продающего бота: {e}", exc_info=True)
             # Не падаем, продолжаем с другим ботом
@@ -288,7 +321,7 @@ async def main():
         else:
             logger.warning("⚠️ Ни один бот не запущен, но HTTP сервер работает")
             # Ждем бесконечно, чтобы контейнер не перезапускался
-            if http_thread:
+            if web_runner:
                 while True:
                     await asyncio.sleep(60)
                     
@@ -298,7 +331,7 @@ async def main():
         logger.error(f"❌ Критическая ошибка: {e}", exc_info=True)
         # Не выходим, чтобы HTTP сервер продолжал работать для healthcheck
         logger.warning("⚠️ Ошибка в ботах, но HTTP сервер продолжает работать")
-        if http_thread:
+        if web_runner:
             while True:
                 await asyncio.sleep(60)
     finally:
@@ -314,7 +347,12 @@ async def main():
             except Exception as e:
                 logger.error(f"Ошибка при остановке курс-бота: {e}")
         
-        # HTTP сервер работает в daemon потоке и остановится автоматически
+        # Stop aiohttp server
+        if web_runner:
+            try:
+                await web_runner.cleanup()
+            except Exception as e:
+                logger.error(f"Ошибка при остановке HTTP сервера: {e}")
         logger.info("Все сервисы остановлены")
 
 

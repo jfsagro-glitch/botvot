@@ -166,7 +166,37 @@ class Database:
                 FOREIGN KEY (lesson_id) REFERENCES lessons(lesson_id)
             )
         """)
+
+        # Processed payments table (idempotency for webhooks)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS processed_payments (
+                payment_id TEXT PRIMARY KEY,
+                processed_at TEXT NOT NULL
+            )
+        """)
         
+        await self.conn.commit()
+
+    # Payment operations (webhook idempotency)
+    async def is_payment_processed(self, payment_id: str) -> bool:
+        """Return True if payment_id was already processed."""
+        await self._ensure_connection()
+        async with self.conn.execute(
+            "SELECT 1 FROM processed_payments WHERE payment_id = ? LIMIT 1",
+            (payment_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return bool(row)
+
+    async def mark_payment_processed(self, payment_id: str):
+        """Mark payment_id as processed (idempotent)."""
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        # INSERT OR IGNORE to be safe under retries/concurrency
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO processed_payments (payment_id, processed_at) VALUES (?, ?)",
+            (payment_id, now),
+        )
         await self.conn.commit()
     
     # User operations
