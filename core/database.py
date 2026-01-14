@@ -71,6 +71,7 @@ class Database:
                 start_date TEXT,
                 current_day INTEGER DEFAULT 1,
                 mentor_reminders INTEGER DEFAULT 0,
+                legal_accepted_at TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -90,6 +91,16 @@ class Database:
         try:
             await self.conn.execute("""
                 ALTER TABLE users ADD COLUMN last_mentor_reminder TEXT
+            """)
+            await self.conn.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
+
+        # Миграция: добавляем поле legal_accepted_at, если его нет
+        try:
+            await self.conn.execute("""
+                ALTER TABLE users ADD COLUMN legal_accepted_at TEXT
             """)
             await self.conn.commit()
         except Exception:
@@ -180,8 +191,8 @@ class Database:
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
             INSERT INTO users (user_id, username, first_name, last_name, 
-                             mentor_reminders, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, ?, ?)
+                             mentor_reminders, legal_accepted_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, NULL, ?, ?)
         """, (user_id, username, first_name, last_name, now, now))
         await self.conn.commit()
         return await self.get_user(user_id)
@@ -195,6 +206,7 @@ class Database:
                 username = ?, first_name = ?, last_name = ?,
                 tariff = ?, referral_partner_id = ?,
                 start_date = ?, current_day = ?, mentor_reminders = ?, last_mentor_reminder = ?,
+                legal_accepted_at = ?,
                 updated_at = ?
             WHERE user_id = ?
         """, (
@@ -204,6 +216,7 @@ class Database:
             user.start_date.isoformat() if user.start_date else None,
             user.current_day, user.mentor_reminders,
             user.last_mentor_reminder.isoformat() if user.last_mentor_reminder else None,
+            user.legal_accepted_at.isoformat() if getattr(user, "legal_accepted_at", None) else None,
             datetime.utcnow().isoformat(),
             user.user_id
         ))
@@ -402,7 +415,8 @@ class Database:
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             mentor_reminders=row["mentor_reminders"] if "mentor_reminders" in row.keys() else 0,
-            last_mentor_reminder=datetime.fromisoformat(row["last_mentor_reminder"]) if ("last_mentor_reminder" in row.keys() and row["last_mentor_reminder"]) else None
+            last_mentor_reminder=datetime.fromisoformat(row["last_mentor_reminder"]) if ("last_mentor_reminder" in row.keys() and row["last_mentor_reminder"]) else None,
+            legal_accepted_at=datetime.fromisoformat(row["legal_accepted_at"]) if ("legal_accepted_at" in row.keys() and row["legal_accepted_at"]) else None
         )
     
     def _row_to_lesson(self, row) -> Lesson:

@@ -13,6 +13,7 @@ Handles:
 import asyncio
 import logging
 import sys
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
@@ -133,6 +134,9 @@ class SalesBot:
         
         # Обработчик для check_payment:
         self.dp.callback_query.register(self.handle_payment_check, F.data.startswith("check_payment:"))
+
+        # Legal consent (must be BEFORE generic handlers)
+        self.dp.callback_query.register(self.handle_legal_accept, F.data == "legal:accept")
         
         # Точные совпадения после startswith
         self.dp.callback_query.register(self.handle_upgrade_tariff, F.data == "upgrade_tariff")
@@ -144,6 +148,70 @@ class SalesBot:
         # Универсальный обработчик для отладки необработанных callback (должен быть последним)
         # Регистрируем БЕЗ фильтров, чтобы он ловил все остальное
         self.dp.callback_query.register(self.handle_unhandled_callback)
+
+    def _legal_consent_text(self) -> str:
+        offer = "https://docs.google.com/document/d/1TJKkr0A4YFpiY5NIG5mBJnhoY3BQzwMiee6zMnpC6OI/edit?usp=sharing"
+        privacy = "https://docs.google.com/document/d/1INTWXjxfSH58sv51oYFeVOT6tXAd8iUMCqEPFXxEGrw/edit?usp=sharing"
+        personal = "https://docs.google.com/document/d/1Yh1CzAf5s9ZexrfxLU2IaTr2ptgIC0n6cM9TFCvWwXw/edit?usp=sharing"
+        return (
+            "✅ <b>Согласие</b>\n\n"
+            "Нажимая кнопку ниже, вы соглашаетесь с "
+            f"<a href='{offer}'>договором оферты</a> и "
+            f"<a href='{privacy}'>политикой конфиденциальности</a>, "
+            "а также даёте "
+            f"<a href='{personal}'>согласие на обработку персональных данных</a>."
+        )
+
+    def _legal_consent_keyboard(self) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Согласен", callback_data="legal:accept")
+        ]])
+
+    async def _ensure_legal_consent(self, chat_id: int, user_id: int) -> bool:
+        """
+        Returns True if legal consent already accepted; otherwise sends consent message and returns False.
+        """
+        user = await self.user_service.get_or_create_user(user_id)
+        if getattr(user, "legal_accepted_at", None):
+            return True
+        await self.bot.send_message(
+            chat_id,
+            self._legal_consent_text(),
+            reply_markup=self._legal_consent_keyboard(),
+            disable_web_page_preview=True
+        )
+        return False
+
+    async def handle_legal_accept(self, callback: CallbackQuery):
+        """Handle legal consent acceptance."""
+        try:
+            await callback.answer()
+        except Exception:
+            pass
+
+        user_id = callback.from_user.id
+        user = await self.user_service.get_or_create_user(
+            user_id,
+            callback.from_user.username,
+            callback.from_user.first_name,
+            callback.from_user.last_name
+        )
+        user.legal_accepted_at = datetime.utcnow()
+        await self.db.update_user(user)
+
+        # Confirm and give next step
+        if user.has_access():
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="📚 Перейти в курс", url="https://t.me/StartNowAI_bot?start=course")
+            ]])
+            await callback.message.answer("✅ Спасибо! Согласие принято. Теперь вы можете перейти в курс 👇", reply_markup=keyboard)
+        else:
+            await callback.message.answer("✅ Спасибо! Согласие принято. Теперь можно выбрать тариф и оплатить курс 👇")
+            # Show tariffs right away for convenience
+            try:
+                await self.handle_keyboard_select_tariff(callback.message)
+            except Exception:
+                pass
         
         # Регистрация обработчиков для постоянных кнопок клавиатуры
         # ВАЖНО: Регистрируем ПЕРЕД общим обработчиком текста, чтобы они имели приоритет
@@ -1045,6 +1113,10 @@ class SalesBot:
                 logger.warning(f"   Не удалось ответить на callback: {answer_error}")
             
             logger.info(f"💳 Payment initiation requested by user {callback.from_user.id}")
+
+            # Legal consent required before payment
+            if not await self._ensure_legal_consent(callback.message.chat.id, callback.from_user.id):
+                return
             
             tariff_str = callback.data.split(":")[1]
             tariff = Tariff(tariff_str)
@@ -1315,6 +1387,10 @@ class SalesBot:
                 "❌ У вас нет активного доступа к курсу.\n\n"
                 "Используйте кнопку '📋 Выбор тарифа' для приобретения доступа."
             )
+            return
+
+        # Legal consent required before entering course
+        if not await self._ensure_legal_consent(message.chat.id, user_id):
             return
         
         await message.answer(
@@ -1663,6 +1739,20 @@ class SalesBot:
             user = await self.user_service.get_user(user_id)
             if not user:
                 logger.error(f"User {user_id} not found")
+                return
+
+            # Legal consent required before sending lessons
+            if not getattr(user, "legal_accepted_at", None):
+                try:
+                    await self.bot.send_message(
+                        user_id,
+                        self._legal_consent_text(),
+                        reply_markup=self._legal_consent_keyboard(),
+                        disable_web_page_preview=True
+                    )
+                except Exception:
+                    pass
+                logger.warning(f"User {user_id} has not accepted legal terms yet; skipping lesson 0 send")
                 return
             
             # Используем метод CourseBot для отправки урока с заданием

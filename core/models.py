@@ -39,6 +39,7 @@ class User:
     updated_at: datetime
     mentor_reminders: int = 0            # Frequency of mentor reminders (0-5, 0 = disabled)
     last_mentor_reminder: Optional[datetime] = None  # Last time mentor reminder was sent
+    legal_accepted_at: Optional[datetime] = None  # When user accepted legal terms (offer/privacy/personal data)
     
     def has_access(self) -> bool:
         """Check if user has active course access."""
