@@ -76,10 +76,10 @@ class CourseBot:
         keyboard = ReplyKeyboardMarkup(
             keyboard=[
                 [
-                    KeyboardButton(text="🧿"),
-                    KeyboardButton(text="🔵"),
-                    KeyboardButton(text="💙"),
-                    KeyboardButton(text="🟦"),
+                    KeyboardButton(text="🧭"),
+                    KeyboardButton(text="❔"),
+                    KeyboardButton(text="💎"),
+                    KeyboardButton(text="💬"),
                     KeyboardButton(text="👨‍🏫")
                 ]
             ],
@@ -211,11 +211,11 @@ class CourseBot:
         
         # Обработчики для постоянных кнопок клавиатуры
         # ВАЖНО: Регистрируем ПЕРЕД общими обработчиками текста, чтобы они имели приоритет
-        self.dp.message.register(self.handle_keyboard_navigator, (F.text == "🧿") | (F.text == "🧭"))
-        self.dp.message.register(self.handle_keyboard_ask_question, (F.text == "🔵") | (F.text == "❓"))
-        self.dp.message.register(self.handle_keyboard_tariffs, (F.text == "💙") | (F.text == "💎"))
+        self.dp.message.register(self.handle_keyboard_navigator, (F.text == "🧭") | (F.text == "🧿"))
+        self.dp.message.register(self.handle_keyboard_ask_question, (F.text == "❔") | (F.text == "❓") | (F.text == "🔵"))
+        self.dp.message.register(self.handle_keyboard_tariffs, (F.text == "💎") | (F.text == "💙"))
         # Кнопка 🔍 была тестовой и удалена из постоянной клавиатуры
-        self.dp.message.register(self.handle_keyboard_discussion, (F.text == "🟦") | (F.text == "💬"))
+        self.dp.message.register(self.handle_keyboard_discussion, (F.text == "💬") | (F.text == "🟦"))
         self.dp.message.register(self.handle_keyboard_mentor, F.text == "👨‍🏫")
         
         # Обработчики для настройки наставника

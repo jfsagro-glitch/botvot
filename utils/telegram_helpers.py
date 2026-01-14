@@ -28,15 +28,15 @@ def create_persistent_keyboard() -> ReplyKeyboardMarkup:
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text="🔷 Апгрейд тарифа"),
+                KeyboardButton(text="⬆️ Апгрейд тарифа"),
                 KeyboardButton(text="🧿 Перейти в курс")
             ],
             [
-                KeyboardButton(text="🟦 Выбор тарифа"),
+                KeyboardButton(text="🗳️ Выбор тарифа"),
                 KeyboardButton(text="📘 О курсе")
             ],
             [
-                KeyboardButton(text="🔵 Поговорить с человеком"),
+                KeyboardButton(text="💬 Поговорить с человеком"),
                 KeyboardButton(text="🧊 Забыть все")
             ]
         ],
@@ -54,7 +54,7 @@ def create_tariff_keyboard() -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text=f"📚 БАЗОВЫЙ - {basic_price:.0f}₽",
+                text=f"📘 БАЗОВЫЙ - {basic_price:.0f}₽",
                 callback_data="tariff:basic"
             )
         ],
@@ -66,7 +66,7 @@ def create_tariff_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                text=f"🎯 PRACTIC - {practic_price:.0f}₽",
+                text=f"🎛️ PRACTIC - {practic_price:.0f}₽",
                 callback_data="tariff:practic"
             )
         ],
@@ -93,7 +93,7 @@ def create_upgrade_tariff_keyboard(sales_bot_username: str = "StartNowQ_bot") ->
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="⬆️ Обновить тариф",
+                text="⬆️ Апгрейд тарифа",
                 url=f"https://t.me/{sales_bot_username}?start=upgrade"
             )
         ]
