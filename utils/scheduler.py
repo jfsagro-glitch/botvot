@@ -64,8 +64,8 @@ class LessonScheduler:
     
     async def _check_and_deliver_lessons(self):
         """Check all users and deliver lessons that are due."""
-        from services.lesson_loader import LessonLoader
-        lesson_loader = LessonLoader()
+        # Avoid re-instantiating LessonLoader on every tick. Reuse the one created in LessonService if available.
+        lesson_loader = getattr(self.lesson_service, "lesson_loader", None)
         
         users = await self.db.get_users_with_access()
         
@@ -82,7 +82,7 @@ class LessonScheduler:
                     continue
                 
                 # Проверяем день тишины
-                if lesson_loader.is_silent_day(user.current_day):
+                if lesson_loader and lesson_loader.is_silent_day(user.current_day):
                     # Пропускаем день тишины, но увеличиваем счетчик
                     if await self.lesson_service.should_send_lesson(user):
                         await self.lesson_service.advance_user_to_next_day(user)

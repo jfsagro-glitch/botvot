@@ -177,6 +177,11 @@ class Database:
                 FOREIGN KEY (lesson_id) REFERENCES lessons(lesson_id)
             )
         """)
+        # Index for hot path: mentor reminders and "has assignment" checks.
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_assignments_user_day
+            ON assignments(user_id, day_number)
+        """)
 
         # Assignment intents ("user clicked submit assignment" flag)
         # Used to stop mentor reminders once the user has started submission flow,
@@ -499,6 +504,24 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             return bool(row)
+
+    async def has_assignment_activity_for_day(self, user_id: int, day_number: int) -> bool:
+        """
+        Fast check used by mentor reminders:
+        returns True if user has EITHER started assignment flow (clicked submit) OR submitted an assignment.
+        Implemented as a single DB round-trip.
+        """
+        await self._ensure_connection()
+        async with self.conn.execute(
+            """
+            SELECT
+              EXISTS(SELECT 1 FROM assignment_intents WHERE user_id = ? AND day_number = ?) OR
+              EXISTS(SELECT 1 FROM assignments WHERE user_id = ? AND day_number = ?)
+            """,
+            (user_id, day_number, user_id, day_number),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return bool(row[0]) if row else False
     
     async def get_pending_assignments(self) -> List[Assignment]:
         """Get all assignments pending admin feedback."""
