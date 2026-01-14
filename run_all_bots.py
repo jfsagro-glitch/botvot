@@ -64,6 +64,9 @@ async def _handle_version(_: web.Request) -> web.Response:
         "currency": Config.PAYMENT_CURRENCY,
         "yookassa_shop_id_set": bool(Config.YOOKASSA_SHOP_ID),
         "yookassa_shop_id_len": len(Config.YOOKASSA_SHOP_ID or ""),
+        "yookassa_receipt_required": str(getattr(Config, "YOOKASSA_RECEIPT_REQUIRED", "0")).strip(),
+        "yookassa_tax_system_code": str(getattr(Config, "YOOKASSA_TAX_SYSTEM_CODE", "")).strip(),
+        "yookassa_vat_code": str(getattr(Config, "YOOKASSA_VAT_CODE", "")).strip(),
         "basic_price": PaymentService.TARIFF_PRICES.get(Tariff.BASIC, None),
     })
 
