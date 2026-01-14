@@ -15,6 +15,8 @@ from aiohttp import web
 from bots.sales_bot import SalesBot
 from bots.course_bot import CourseBot
 from core.config import Config
+from services.payment_service import PaymentService
+from core.models import Tariff
 
 # Настройка логирования
 logging.basicConfig(
@@ -41,6 +43,29 @@ def _get_port() -> int:
 
 async def _handle_health(_: web.Request) -> web.Response:
     return web.Response(text="OK")
+
+
+async def _handle_version(_: web.Request) -> web.Response:
+    """
+    Small debug endpoint to confirm what revision/config is actually running in Railway.
+    Does NOT expose secrets.
+    """
+    possible_keys = [
+        "RAILWAY_GIT_COMMIT_SHA",
+        "RAILWAY_GIT_BRANCH",
+        "RAILWAY_DEPLOYMENT_ID",
+        "GIT_COMMIT",
+        "COMMIT_SHA",
+    ]
+    meta = {k: os.environ.get(k) for k in possible_keys if os.environ.get(k)}
+    return web.json_response({
+        "deploy": meta,
+        "payment_provider": (Config.PAYMENT_PROVIDER or "").lower(),
+        "currency": Config.PAYMENT_CURRENCY,
+        "yookassa_shop_id_set": bool(Config.YOOKASSA_SHOP_ID),
+        "yookassa_shop_id_len": len(Config.YOOKASSA_SHOP_ID or ""),
+        "basic_price": PaymentService.TARIFF_PRICES.get(Tariff.BASIC, None),
+    })
 
 
 def _extract_payment_id(payload: dict) -> Optional[str]:
@@ -118,6 +143,7 @@ async def main():
     web_app = web.Application()
     web_app.router.add_get("/", _handle_health)
     web_app.router.add_get("/health", _handle_health)
+    web_app.router.add_get("/version", _handle_version)
     web_app.router.add_post("/payment/webhook", _handle_yookassa_webhook)
     
     logger.info("=" * 60)

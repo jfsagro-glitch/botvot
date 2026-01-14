@@ -10,6 +10,18 @@ from typing import List, Optional
 from core.models import Tariff, Lesson
 from core.config import Config
 
+try:
+    # Used only to show up-to-date prices in UI (including test price changes)
+    from services.payment_service import PaymentService  # noqa: F401
+    _TARIFF_PRICE_MAP = PaymentService.TARIFF_PRICES
+except Exception:
+    _TARIFF_PRICE_MAP = {
+        Tariff.BASIC: 5000.0,
+        Tariff.FEEDBACK: 10000.0,
+        Tariff.PREMIUM: 8000.0,
+        Tariff.PRACTIC: 20000.0,
+    }
+
 
 def create_persistent_keyboard() -> ReplyKeyboardMarkup:
     """Create persistent keyboard for sales bot with main buttons."""
@@ -32,22 +44,25 @@ def create_persistent_keyboard() -> ReplyKeyboardMarkup:
 
 def create_tariff_keyboard() -> InlineKeyboardMarkup:
     """Create keyboard for tariff selection with additional buttons."""
+    basic_price = _TARIFF_PRICE_MAP.get(Tariff.BASIC, 0)
+    feedback_price = _TARIFF_PRICE_MAP.get(Tariff.FEEDBACK, 0)
+    practic_price = _TARIFF_PRICE_MAP.get(Tariff.PRACTIC, 0)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="📚 БАЗОВЫЙ - 5000₽",
+                text=f"📚 БАЗОВЫЙ - {basic_price:.0f}₽",
                 callback_data="tariff:basic"
             )
         ],
         [
             InlineKeyboardButton(
-                text="💬 С ОБРАТНОЙ СВЯЗЬЮ - 10000₽",
+                text=f"💬 С ОБРАТНОЙ СВЯЗЬЮ - {feedback_price:.0f}₽",
                 callback_data="tariff:feedback"
             )
         ],
         [
             InlineKeyboardButton(
-                text="🎯 PRACTIC - 20000₽",
+                text=f"🎯 PRACTIC - {practic_price:.0f}₽",
                 callback_data="tariff:practic"
             )
         ],
@@ -200,10 +215,14 @@ def format_lesson_message(lesson: Lesson) -> str:
 def format_tariff_description(tariff: Tariff) -> str:
     """Format tariff description for display with premium styling."""
     separator = "━━━━━━━━━━━━━━"  # 14 символов для мобильных
+    p_basic = _TARIFF_PRICE_MAP.get(Tariff.BASIC, 5000.0)
+    p_feedback = _TARIFF_PRICE_MAP.get(Tariff.FEEDBACK, 10000.0)
+    p_premium = _TARIFF_PRICE_MAP.get(Tariff.PREMIUM, 8000.0)
+    p_practic = _TARIFF_PRICE_MAP.get(Tariff.PRACTIC, 20000.0)
     descriptions = {
         Tariff.BASIC: (
             f"{separator}\n"
-            f"📚 <b>БАЗОВЫЙ ТАРИФ</b> - 5000₽\n"
+            f"📚 <b>БАЗОВЫЙ ТАРИФ</b> - {p_basic:.0f}₽\n"
             f"{separator}\n\n"
             f"<b>✨ Что включено:</b>\n"
             f"  ✅ 30 занятий\n"
@@ -218,7 +237,7 @@ def format_tariff_description(tariff: Tariff) -> str:
         ),
         Tariff.FEEDBACK: (
             f"{separator}\n"
-            f"💬 <b>С ОБРАТНОЙ СВЯЗЬЮ</b> - 10000₽\n"
+            f"💬 <b>С ОБРАТНОЙ СВЯЗЬЮ</b> - {p_feedback:.0f}₽\n"
             f"{separator}\n\n"
             f"<b>✨ Что включено:</b>\n"
             f"  ✅ Всё из Базового тарифа\n"
@@ -233,7 +252,7 @@ def format_tariff_description(tariff: Tariff) -> str:
         ),
         Tariff.PREMIUM: (
             f"{separator}\n"
-            f"⭐ <b>ПРЕМИУМ ТАРИФ</b> - 8000₽\n"
+            f"⭐ <b>ПРЕМИУМ ТАРИФ</b> - {p_premium:.0f}₽\n"
             f"{separator}\n\n"
             f"<b>✨ Что включено:</b>\n"
             f"  ✅ Всё из тарифа с обратной связью\n"
@@ -253,7 +272,7 @@ def format_tariff_description(tariff: Tariff) -> str:
         ),
         Tariff.PRACTIC: (
             f"{separator}\n"
-            f"🎯 <b>PRACTIC</b> - 20000₽\n"
+            f"🎯 <b>PRACTIC</b> - {p_practic:.0f}₽\n"
             f"{separator}\n\n"
             f"<b>✨ Что включено:</b>\n"
             f"  ✅ Всё из тарифов Basic + Feedback\n"
