@@ -185,6 +185,15 @@ class Database:
                 processed_at TEXT NOT NULL
             )
         """)
+
+        # Simple key-value settings storage (for runtime binding like curator group chat_id)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         
         await self.conn.commit()
 
@@ -230,6 +239,29 @@ class Database:
             except Exception:
                 pass
             raise
+
+    # App settings (key/value)
+    async def get_setting(self, key: str) -> Optional[str]:
+        await self._ensure_connection()
+        async with self.conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (key,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row["value"] if row else None
+
+    async def set_setting(self, key: str, value: str):
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        await self.conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (key, value, now),
+        )
+        await self.conn.commit()
     
     # User operations
     async def get_user(self, user_id: int) -> Optional[User]:

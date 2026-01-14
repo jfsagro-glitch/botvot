@@ -127,6 +127,8 @@ class SalesBot:
         self.dp.message.register(self.handle_start, CommandStart())
         self.dp.message.register(self.handle_help, Command("help"))
         self.dp.message.register(self.handle_author, Command("author"))
+        # Bind curator/answers group (run inside target group)
+        self.dp.message.register(self.handle_bind_sales_group, Command("bind_sales_group"))
 
         # Persistent keyboard buttons (sales bot)
         # IMPORTANT: register these BEFORE any generic text handler
@@ -362,7 +364,7 @@ class SalesBot:
         except Exception:
             await callback.message.answer("🕶️ Память стерта. Начинаем с нуля.\n\nНажмите /start")
 
-    def _normalize_curator_chat_id(self) -> Union[int, str]:
+    async def _normalize_curator_chat_id(self) -> Union[int, str]:
         """
         Normalize curator group ID from env (supports:
         - '-100123...'
@@ -371,6 +373,17 @@ class SalesBot:
         - '@username')
         Default per user request: web.telegram.org/k/#-3576021889 -> -1003576021889
         """
+        # Prefer runtime-bound group id if set (stored in DB)
+        try:
+            bound = await self.db.get_setting("sales_curator_group_id")
+        except Exception:
+            bound = None
+        if bound:
+            try:
+                return int(bound)
+            except Exception:
+                pass
+
         raw = (Config.CURATOR_GROUP_ID or "").strip()
         if not raw:
             # fallback to the group provided by user
@@ -396,6 +409,19 @@ class SalesBot:
 
         return raw
 
+    async def handle_bind_sales_group(self, message: Message):
+        """
+        Run this command inside the target group to bind it as the destination
+        for "Поговорить с человеком" forwarding.
+        """
+        if message.chat.type == "private":
+            await message.answer("Эту команду нужно отправить в группе, которую хотите привязать.")
+            return
+
+        chat_id = message.chat.id
+        await self.db.set_setting("sales_curator_group_id", str(chat_id))
+        await message.answer(f"✅ Группа привязана для продающего бота.\nchat_id: <code>{chat_id}</code>")
+
     def _talk_mode_keyboard(self) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Завершить", callback_data="sales:talk_to_human:stop")]
@@ -404,7 +430,7 @@ class SalesBot:
     async def handle_keyboard_talk_to_human(self, message: Message):
         """Persistent keyboard: enter talk-to-human mode."""
         user_id = message.from_user.id
-        target_chat_id = self._normalize_curator_chat_id()
+        target_chat_id = await self._normalize_curator_chat_id()
         # Try sending a small test message to ensure bot can post to curator group
         try:
             await self.bot.send_message(
@@ -455,7 +481,7 @@ class SalesBot:
         if user_id not in self._talk_mode_users:
             raise SkipHandler()
 
-        target_chat_id = self._normalize_curator_chat_id()
+        target_chat_id = await self._normalize_curator_chat_id()
 
         first_name = message.from_user.first_name or "Пользователь"
         username = message.from_user.username
@@ -1896,7 +1922,7 @@ class SalesBot:
         curator_message += "\n\n📍 <b>Источник:</b> Бот оплаты (sales bot)"
 
         # Target group per settings (supports web.telegram link formats)
-        target_chat_id = self._normalize_curator_chat_id()
+        target_chat_id = await self._normalize_curator_chat_id()
         
         if target_chat_id:
             try:
