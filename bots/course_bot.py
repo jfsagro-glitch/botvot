@@ -1604,6 +1604,13 @@ class CourseBot:
         if not lesson_data:
             await callback.message.answer(f"❌ Урок для дня {day_from_callback} не найден.")
             return
+
+        # IMPORTANT: once user clicks "submit assignment", stop mentor reminders for this day.
+        # This matches product requirement: reminders continue until the user starts submission flow.
+        try:
+            await self.db.mark_assignment_intent(user_id, day_from_callback)
+        except Exception as e:
+            logger.warning(f"   ⚠️ Could not mark assignment intent for user={user_id} day={day_from_callback}: {e}")
         
         # Check if user can submit assignments (BASIC tariff cannot)
         if not user.can_receive_feedback():

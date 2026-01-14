@@ -59,8 +59,8 @@ class LessonService:
         
         Logic:
         - Lesson 0 is sent immediately after purchase (handled separately)
-        - Lesson 1 is sent on start_date at 9:00 (6:00 UTC)
-        - Subsequent lessons are sent daily at 9:00 (6:00 UTC)
+        - Lesson 1 is sent on start_date (configured local delivery time, stored in UTC)
+        - Subsequent lessons are sent daily at the same delivery time
         """
         if not user.has_access() or not user.start_date:
             return False
@@ -70,7 +70,7 @@ class LessonService:
             return False
         
         # Calculate when the lesson should be sent
-        # start_date is set to tomorrow at 9:00 (6:00 UTC) when access is granted
+        # start_date is set to tomorrow at Config.LESSON_DELIVERY_TIME_LOCAL (local timezone) when access is granted
         # Lesson 1 should be sent at start_date
         # Lesson 2 should be sent at start_date + 1 day
         # etc.

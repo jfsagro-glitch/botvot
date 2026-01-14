@@ -57,6 +57,9 @@ class Config:
     # Scheduling / Timezone
     # Used for mentor reminder window calculations. Default: Moscow time.
     SCHEDULE_TIMEZONE: str = _get_env_value("SCHEDULE_TIMEZONE", "Europe/Moscow")
+    # Daily lesson delivery time in local time (SCHEDULE_TIMEZONE)
+    # Example: "08:30"
+    LESSON_DELIVERY_TIME_LOCAL: str = _get_env_value("LESSON_DELIVERY_TIME_LOCAL", "08:30")
     # Mentor reminders are allowed only within this local-time window
     MENTOR_REMINDER_START_LOCAL: str = _get_env_value("MENTOR_REMINDER_START_LOCAL", "09:30")
     MENTOR_REMINDER_END_LOCAL: str = _get_env_value("MENTOR_REMINDER_END_LOCAL", "22:00")

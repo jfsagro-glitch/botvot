@@ -109,6 +109,7 @@ class MentorReminderScheduler:
         skipped_window = 0
         skipped_interval = 0
         skipped_has_assignment = 0
+        skipped_started = 0
         errors = 0
 
         for user in users:
@@ -170,6 +171,14 @@ class MentorReminderScheduler:
                 
                 # ВАЖНО: Проверяем, не отправлено ли уже задание для текущего дня
                 # Если задание уже отправлено, не отправляем напоминания
+                started = await self.db.has_assignment_intent_for_day(user.user_id, user.current_day)
+                if started:
+                    skipped_started += 1
+                    logger.debug(
+                        f"   ⏭️ mentor_reminder: user={user.user_id} day={user.current_day} skip=started"
+                    )
+                    continue
+
                 has_assignment = await self.db.has_assignment_for_day(user.user_id, user.current_day)
                 if has_assignment:
                     skipped_has_assignment += 1
@@ -193,7 +202,7 @@ class MentorReminderScheduler:
                 f"users={len(users)} enabled={enabled} sent={sent} "
                 f"skipped_disabled={skipped_disabled} skipped_finished={skipped_finished} "
                 f"skipped_window={skipped_window} skipped_interval={skipped_interval} "
-                f"skipped_submitted={skipped_has_assignment} errors={errors} "
+                f"skipped_started={skipped_started} skipped_submitted={skipped_has_assignment} errors={errors} "
                 f"local_now={local_now.strftime('%Y-%m-%d %H:%M')} "
                 f"window={window_start_t.strftime('%H:%M')}-{window_end_t.strftime('%H:%M')} "
                 f"tz={getattr(Config, 'SCHEDULE_TIMEZONE', 'UTC')}"

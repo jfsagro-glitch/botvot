@@ -178,6 +178,18 @@ class Database:
             )
         """)
 
+        # Assignment intents ("user clicked submit assignment" flag)
+        # Used to stop mentor reminders once the user has started submission flow,
+        # even if they haven't sent the final answer yet.
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS assignment_intents (
+                user_id INTEGER NOT NULL,
+                day_number INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, day_number)
+            )
+        """)
+
         # Processed payments table (idempotency for webhooks)
         await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS processed_payments (
@@ -230,6 +242,7 @@ class Database:
             # Order matters due to FK references
             await self.conn.execute("DELETE FROM user_progress WHERE user_id = ?", (user_id,))
             await self.conn.execute("DELETE FROM assignments WHERE user_id = ?", (user_id,))
+            await self.conn.execute("DELETE FROM assignment_intents WHERE user_id = ?", (user_id,))
             await self.conn.execute("DELETE FROM referrals WHERE referred_user_id = ?", (user_id,))
             await self.conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
             await self.conn.commit()
@@ -463,6 +476,29 @@ class Database:
             row = await cursor.fetchone()
             count = row[0] if row else 0
             return count > 0
+
+    async def mark_assignment_intent(self, user_id: int, day_number: int):
+        """Mark that user clicked 'submit assignment' for a specific day (idempotent)."""
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO assignment_intents (user_id, day_number, started_at)
+            VALUES (?, ?, ?)
+            """,
+            (user_id, day_number, now),
+        )
+        await self.conn.commit()
+
+    async def has_assignment_intent_for_day(self, user_id: int, day_number: int) -> bool:
+        """Return True if user already clicked 'submit assignment' for this day."""
+        await self._ensure_connection()
+        async with self.conn.execute(
+            "SELECT 1 FROM assignment_intents WHERE user_id = ? AND day_number = ? LIMIT 1",
+            (user_id, day_number),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return bool(row)
     
     async def get_pending_assignments(self) -> List[Assignment]:
         """Get all assignments pending admin feedback."""

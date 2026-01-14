@@ -56,14 +56,14 @@ class UserService:
         
         Sets:
         - current_day = 0 (lesson 0 will be sent immediately)
-        - start_date = tomorrow at 9:00 (lesson 1 will be sent tomorrow at 9:00)
+        - start_date = tomorrow at configured local time (lesson 1 will be sent tomorrow at that time)
         """
         user = await self.get_or_create_user(user_id)
         
         # Only grant access if user doesn't already have it
         if not user.has_access():
             user.tariff = tariff
-            # Set start_date to tomorrow at 09:00 in configured timezone (default: Europe/Moscow),
+            # Set start_date to tomorrow at LESSON_DELIVERY_TIME_LOCAL in configured timezone (default: Europe/Moscow),
             # stored as naive UTC datetime for backwards compatibility.
             now_utc = datetime.utcnow()
             if ZoneInfo is not None:
@@ -73,12 +73,18 @@ class UserService:
                     tz = ZoneInfo("UTC")
                 now_local = now_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
                 tomorrow_local_date = (now_local + timedelta(days=1)).date()
-                start_local = datetime.combine(tomorrow_local_date, time(9, 0), tzinfo=tz)
+                # Parse "HH:MM" (fallback to 08:30)
+                try:
+                    hh, mm = (Config.LESSON_DELIVERY_TIME_LOCAL or "").strip().split(":", 1)
+                    delivery_t = time(hour=int(hh), minute=int(mm))
+                except Exception:
+                    delivery_t = time(8, 30)
+                start_local = datetime.combine(tomorrow_local_date, delivery_t, tzinfo=tz)
                 user.start_date = start_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
             else:
-                # Fallback to previous behavior: 06:00 UTC ≈ 09:00 MSK
+                # Fallback: assume Moscow time and convert roughly to UTC (08:30 MSK ≈ 05:30 UTC)
                 tomorrow = now_utc + timedelta(days=1)
-                user.start_date = tomorrow.replace(hour=6, minute=0, second=0, microsecond=0)
+                user.start_date = tomorrow.replace(hour=5, minute=30, second=0, microsecond=0)
             user.current_day = 0  # Lesson 0 will be sent immediately
             user.referral_partner_id = referral_partner_id
             
