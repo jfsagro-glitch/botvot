@@ -15,10 +15,11 @@ import logging
 import sys
 import re
 from datetime import datetime
+from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.dispatcher.event.bases import SkipHandler
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, FSInputFile
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
@@ -72,6 +73,7 @@ class SalesBot:
 
         # In-memory contexts (good enough for sales flow; DB stores the resulting email)
         self._awaiting_email: dict[int, dict] = {}
+        self._awaiting_forget_confirm: set[int] = set()
         
         # Initialize lesson loader with error handling
         try:
@@ -129,6 +131,7 @@ class SalesBot:
         self.dp.message.register(self.handle_keyboard_go_to_course, F.text == "📚 Перейти в курс")
         self.dp.message.register(self.handle_keyboard_select_tariff, F.text == "📋 Выбор тарифа")
         self.dp.message.register(self.handle_keyboard_about_course, F.text == "📖 О курсе")
+        self.dp.message.register(self.handle_forget_everything_button, (F.text == "Забыть все") | (F.text == "🧹 Забыть все") | (F.text == "🧹 Забыть всё"))
 
         # Email input (receipt requirement)
         self.dp.message.register(self.handle_email_input, F.text & ~F.command)
@@ -155,6 +158,10 @@ class SalesBot:
 
         # Legal consent (must be BEFORE generic handlers)
         self.dp.callback_query.register(self.handle_legal_accept, F.data == "legal:accept")
+
+        # Forget everything (test)
+        self.dp.callback_query.register(self.handle_forget_everything_confirm, F.data == "forget:confirm")
+        self.dp.callback_query.register(self.handle_forget_everything_cancel, F.data == "forget:cancel")
         
         # Точные совпадения после startswith
         self.dp.callback_query.register(self.handle_upgrade_tariff, F.data == "upgrade_tariff")
@@ -254,6 +261,91 @@ class SalesBot:
 
         # Unknown context -> ignore
         raise SkipHandler()
+
+    def _forget_confirm_keyboard(self) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🧹 Да, стереть всё", callback_data="forget:confirm"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="forget:cancel"),
+            ]
+        ])
+
+    def _agent_j_image_path(self) -> Path:
+        # File is in repo under /logo. Use a stable relative path from project root.
+        return Path(__file__).resolve().parent.parent / "logo" / "ChatGPT Image 14 янв. 2026 г., 17_45_46.png"
+
+    async def handle_forget_everything_button(self, message: Message):
+        """
+        TEST BUTTON: wipes user access/progress and resets sales bot state.
+        """
+        user_id = message.from_user.id
+        self._awaiting_forget_confirm.add(user_id)
+        await message.answer(
+            "⚠️ <b>Забыть всё?</b>\n\n"
+            "Это тестовая функция. Она удалит:\n"
+            "• доступ/подписку\n"
+            "• прогресс уроков\n"
+            "• отправленные задания\n\n"
+            "После этого всё начнётся сначала.",
+            reply_markup=self._forget_confirm_keyboard()
+        )
+
+    async def handle_forget_everything_cancel(self, callback: CallbackQuery):
+        try:
+            await callback.answer("Отменено")
+        except Exception:
+            pass
+        self._awaiting_forget_confirm.discard(callback.from_user.id)
+        try:
+            await callback.message.edit_text("✅ Ок, ничего не меняю.")
+        except Exception:
+            try:
+                await callback.message.answer("✅ Ок, ничего не меняю.")
+            except Exception:
+                pass
+
+    async def handle_forget_everything_confirm(self, callback: CallbackQuery):
+        user_id = callback.from_user.id
+        if user_id not in self._awaiting_forget_confirm:
+            try:
+                await callback.answer("Сначала нажмите «Забыть все»", show_alert=True)
+            except Exception:
+                pass
+            return
+
+        try:
+            await callback.answer("Стираю…")
+        except Exception:
+            pass
+
+        # Clear in-memory contexts for this user
+        try:
+            if hasattr(self, "_user_question_context") and user_id in self._user_question_context:
+                del self._user_question_context[user_id]
+        except Exception:
+            pass
+        try:
+            if user_id in self._awaiting_email:
+                del self._awaiting_email[user_id]
+        except Exception:
+            pass
+        self._awaiting_forget_confirm.discard(user_id)
+
+        # Wipe DB user data (affects both sales and course bots)
+        await self.db.reset_user_data(user_id)
+
+        # Send Agent J image + confirmation
+        img_path = self._agent_j_image_path()
+        try:
+            if img_path.exists():
+                await callback.message.answer_photo(
+                    FSInputFile(str(img_path)),
+                    caption="🕶️ Память стерта. Начинаем с нуля.\n\nНажмите /start"
+                )
+            else:
+                await callback.message.answer("🕶️ Память стерта. Начинаем с нуля.\n\nНажмите /start")
+        except Exception:
+            await callback.message.answer("🕶️ Память стерта. Начинаем с нуля.\n\nНажмите /start")
 
     async def _start_payment_flow(self, message: Message, user, tariff: Tariff):
         """Create payment and show payment URL (non-upgrade)."""
