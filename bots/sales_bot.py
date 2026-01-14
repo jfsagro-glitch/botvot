@@ -285,8 +285,19 @@ class SalesBot:
         ])
 
     def _agent_j_image_path(self) -> Path:
-        # File is in repo under /logo. Use a stable relative path from project root.
-        return Path(__file__).resolve().parent.parent / "logo" / "ChatGPT Image 14 янв. 2026 г., 17_45_46.png"
+        # File is in repo under /logo. Prefer ASCII name for cross-platform compatibility.
+        base = Path(__file__).resolve().parent.parent / "logo"
+        candidate = base / "agent_j.png"
+        if candidate.exists():
+            return candidate
+        # Fallback: any png in logo dir
+        try:
+            pngs = sorted(base.glob("*.png"))
+            if pngs:
+                return pngs[0]
+        except Exception:
+            pass
+        return candidate
 
     async def handle_forget_everything_button(self, message: Message):
         """
