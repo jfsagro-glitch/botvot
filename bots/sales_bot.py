@@ -16,6 +16,7 @@ import sys
 from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -117,6 +118,16 @@ class SalesBot:
         self.dp.message.register(self.handle_start, CommandStart())
         self.dp.message.register(self.handle_help, Command("help"))
         self.dp.message.register(self.handle_author, Command("author"))
+
+        # Persistent keyboard buttons (sales bot)
+        # IMPORTANT: register these BEFORE any generic text handler
+        self.dp.message.register(self.handle_keyboard_upgrade, F.text == "⬆️ Апгрейд тарифа")
+        self.dp.message.register(self.handle_keyboard_go_to_course, F.text == "📚 Перейти в курс")
+        self.dp.message.register(self.handle_keyboard_select_tariff, F.text == "📋 Выбор тарифа")
+        self.dp.message.register(self.handle_keyboard_about_course, F.text == "📖 О курсе")
+
+        # Questions from sales bot (generic text) - should be LAST among text handlers
+        self.dp.message.register(self.handle_question_from_sales, F.text & ~F.command)
         
         # Регистрация обработчиков callback query
         # ВАЖНО: Порядок регистрации важен - более специфичные первыми
@@ -212,29 +223,6 @@ class SalesBot:
                 await self.handle_keyboard_select_tariff(callback.message)
             except Exception:
                 pass
-        
-        # Регистрация обработчиков для постоянных кнопок клавиатуры
-        # ВАЖНО: Регистрируем ПЕРЕД общим обработчиком текста, чтобы они имели приоритет
-        self.dp.message.register(self.handle_keyboard_upgrade, F.text == "⬆️ Апгрейд тарифа")
-        self.dp.message.register(self.handle_keyboard_go_to_course, F.text == "📚 Перейти в курс")
-        self.dp.message.register(self.handle_keyboard_select_tariff, F.text == "📋 Выбор тарифа")
-        self.dp.message.register(self.handle_keyboard_about_course, F.text == "📖 О курсе")
-        
-        # Регистрация обработчика вопросов из sales bot (должен быть после кнопок, но перед общим текстом)
-        self.dp.message.register(self.handle_question_from_sales, F.text & ~F.command)
-        
-        logger.info("✅ Handlers registered successfully")
-        logger.info(f"   - CommandStart handler: {self.handle_start.__name__}")
-        logger.info(f"   - Command help handler: {self.handle_help.__name__}")
-        logger.info(f"   - Command author handler: {self.handle_author.__name__}")
-        logger.info(f"   - Callback handlers: 7 registered")
-        logger.info(f"     * upgrade_tariff -> handle_upgrade_tariff")
-        logger.info(f"     * tariff: -> handle_tariff_selection")
-        logger.info(f"     * upgrade: -> handle_upgrade_tariff_selection")
-        logger.info(f"     * back_to_tariffs -> handle_back_to_tariffs")
-        logger.info(f"     * pay: -> handle_payment_initiate")
-        logger.info(f"     * check_payment: -> handle_payment_check")
-        logger.info(f"     * cancel -> handle_cancel")
     
     async def handle_start(self, message: Message):
         """
@@ -1493,12 +1481,12 @@ class SalesBot:
         
         # Проверяем, ожидаем ли мы вопрос от этого пользователя
         if not hasattr(self, '_user_question_context') or user_id not in self._user_question_context:
-            # Не ожидаем вопрос, пропускаем
-            return
+            # Не ожидаем вопрос — даём другим хэндлерам обработать это сообщение
+            raise SkipHandler()
         
         context = self._user_question_context[user_id]
         if not context.get('waiting_for_question'):
-            return
+            raise SkipHandler()
         
         # Удаляем контекст после обработки
         del self._user_question_context[user_id]
