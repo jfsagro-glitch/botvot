@@ -291,15 +291,29 @@ class SalesBot:
         """
         user_id = message.from_user.id
         self._awaiting_forget_confirm.add(user_id)
-        await message.answer(
+        img_path = self._agent_j_image_path()
+        caption = (
+            "🕶️⚡\n\n"
             "⚠️ <b>Забыть всё?</b>\n\n"
             "Это тестовая функция. Она удалит:\n"
             "• доступ/подписку\n"
             "• прогресс уроков\n"
             "• отправленные задания\n\n"
-            "После этого всё начнётся сначала.",
-            reply_markup=self._forget_confirm_keyboard()
+            "После этого всё начнётся сначала."
         )
+        try:
+            if img_path.exists():
+                await message.answer_photo(
+                    FSInputFile(str(img_path)),
+                    caption=caption,
+                    reply_markup=self._forget_confirm_keyboard()
+                )
+                return
+        except Exception:
+            pass
+
+        # Fallback without image
+        await message.answer(caption, reply_markup=self._forget_confirm_keyboard())
 
     async def handle_forget_everything_cancel(self, callback: CallbackQuery):
         try:
