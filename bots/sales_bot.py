@@ -126,6 +126,7 @@ class SalesBot:
         # ВАЖНО: Регистрируем обработчики в правильном порядке
         self.dp.message.register(self.handle_start, CommandStart())
         self.dp.message.register(self.handle_help, Command("help"))
+        self.dp.message.register(self.handle_menu, Command("menu"))
         self.dp.message.register(self.handle_author, Command("author"))
         # Bind curator/answers group (run inside target group)
         self.dp.message.register(self.handle_bind_sales_group, Command("bind_sales_group"))
@@ -771,6 +772,11 @@ class SalesBot:
             f"💬 <b>Нужна помощь?</b> Обратитесь в поддержку."
         )
         await send_animated_message(self.bot, message.chat.id, help_text, typing_duration=0.5)
+
+    async def handle_menu(self, message: Message):
+        """Resend persistent keyboard (useful if user hid it)."""
+        persistent_keyboard = create_persistent_keyboard()
+        await message.answer("✅ Кнопки внизу включены.", reply_markup=persistent_keyboard)
     
     async def handle_author(self, message: Message):
         """Handle /author command - show information about course author."""

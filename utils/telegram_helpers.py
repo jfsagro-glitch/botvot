@@ -41,7 +41,7 @@ def create_persistent_keyboard() -> ReplyKeyboardMarkup:
             ]
         ],
         resize_keyboard=True,
-        persistent=True
+        is_persistent=True
     )
     return keyboard
 
