@@ -341,6 +341,11 @@ class SalesBot:
 
         # Wipe DB user data (affects both sales and course bots)
         await self.db.reset_user_data(user_id)
+        # Verify
+        remaining = await self.db.get_user(user_id)
+        if remaining is not None:
+            await callback.message.answer("❌ Не удалось сбросить данные (пользователь всё ещё в базе). Попробуйте ещё раз.")
+            return
         # Also exit talk mode if active
         self._talk_mode_users.discard(user_id)
 
@@ -399,6 +404,27 @@ class SalesBot:
     async def handle_keyboard_talk_to_human(self, message: Message):
         """Persistent keyboard: enter talk-to-human mode."""
         user_id = message.from_user.id
+        target_chat_id = self._normalize_curator_chat_id()
+        # Try sending a small test message to ensure bot can post to curator group
+        try:
+            await self.bot.send_message(
+                target_chat_id,
+                f"🟢 <b>Новый диалог (sales bot)</b>\n"
+                f"👤 {message.from_user.first_name or 'Пользователь'}"
+                + (f" (@{message.from_user.username})" if message.from_user.username else "")
+                + f"\n🆔 {user_id}"
+            )
+        except Exception as e:
+            logger.error(f"❌ Cannot send to curator group {target_chat_id}: {e}", exc_info=True)
+            await message.answer(
+                "❌ Не могу отправить сообщение в группу кураторов.\n\n"
+                "Проверьте:\n"
+                "1) бот добавлен в группу\n"
+                "2) у бота есть право писать сообщения/медиа\n\n"
+                f"Целевая группа: <code>{target_chat_id}</code>"
+            )
+            return
+
         self._talk_mode_users.add(user_id)
 
         await message.answer(
@@ -448,7 +474,10 @@ class SalesBot:
             await message.answer("✅ Голосовое отправлено куратору.", reply_markup=self._talk_mode_keyboard())
         except Exception as e:
             logger.error(f"❌ Error forwarding voice to curator group: {e}", exc_info=True)
-            await message.answer("❌ Не удалось отправить голосовое куратору. Проверьте, что бот добавлен в группу.")
+            await message.answer(
+                "❌ Не удалось отправить голосовое куратору.\n\n"
+                "Проверьте, что бот добавлен в группу и у него есть право писать сообщения/медиа."
+            )
 
     async def _start_payment_flow(self, message: Message, user, tariff: Tariff):
         """Create payment and show payment URL (non-upgrade)."""

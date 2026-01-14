@@ -216,13 +216,20 @@ class Database:
         After this, /start will create a clean user again.
         """
         await self._ensure_connection()
-        async with self.conn.execute("BEGIN"):
+        try:
+            await self.conn.execute("BEGIN")
             # Order matters due to FK references
             await self.conn.execute("DELETE FROM user_progress WHERE user_id = ?", (user_id,))
             await self.conn.execute("DELETE FROM assignments WHERE user_id = ?", (user_id,))
             await self.conn.execute("DELETE FROM referrals WHERE referred_user_id = ?", (user_id,))
             await self.conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-        await self.conn.commit()
+            await self.conn.commit()
+        except Exception:
+            try:
+                await self.conn.rollback()
+            except Exception:
+                pass
+            raise
     
     # User operations
     async def get_user(self, user_id: int) -> Optional[User]:
