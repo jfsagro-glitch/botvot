@@ -77,6 +77,8 @@ class SalesBot:
         self._awaiting_forget_confirm: set[int] = set()
         # When enabled, all next messages from user are forwarded to curator group until stopped
         self._talk_mode_users: set[int] = set()
+        # Remember action to continue after legal consent
+        self._pending_after_legal: dict[int, dict] = {}
         
         # Initialize lesson loader with error handling
         try:
@@ -626,6 +628,42 @@ class SalesBot:
         user.legal_accepted_at = datetime.utcnow()
         await self.db.update_user(user)
 
+        # Continue pending action if any
+        pending = self._pending_after_legal.pop(user_id, None)
+        if pending:
+            kind = pending.get("kind")
+            if kind == "pay":
+                tariff_value = pending.get("tariff")
+                try:
+                    tariff = Tariff(str(tariff_value))
+                except Exception:
+                    tariff = None
+                if tariff is not None:
+                    # Ensure we have a user object for email/referral
+                    user = await self.user_service.get_or_create_user(
+                        user_id,
+                        callback.from_user.username,
+                        callback.from_user.first_name,
+                        callback.from_user.last_name
+                    )
+                    if self._receipt_required() and not getattr(user, "email", None):
+                        self._awaiting_email[user_id] = {"kind": "pay", "tariff": tariff.value}
+                        await callback.message.answer(
+                            "✅ Спасибо! Согласие принято.\n\n"
+                            "✉️ Для оплаты нужен email для отправки чека.\n"
+                            "Пожалуйста, отправьте ваш email одним сообщением (пример: name@gmail.com)."
+                        )
+                        return
+                    await callback.message.answer("✅ Спасибо! Согласие принято. Перехожу к оплате…")
+                    await self._start_payment_flow(callback.message, user, tariff)
+                    return
+
+            if kind == "go_to_course":
+                await callback.message.answer("✅ Спасибо! Согласие принято. Перехожу в курс…")
+                await self.handle_keyboard_go_to_course(callback.message)
+                return
+
+        # Default confirmation and next step
         # Confirm and give next step
         if user.has_access():
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -1545,6 +1583,13 @@ class SalesBot:
 
             # Legal consent required before payment
             if not await self._ensure_legal_consent(callback.message.chat.id, callback.from_user.id):
+                # Remember desired payment action so we can continue after consent
+                try:
+                    tariff_str_pending = callback.data.split(":")[1]
+                except Exception:
+                    tariff_str_pending = None
+                if tariff_str_pending:
+                    self._pending_after_legal[callback.from_user.id] = {"kind": "pay", "tariff": tariff_str_pending}
                 return
             
             tariff_str = callback.data.split(":")[1]
@@ -1841,6 +1886,7 @@ class SalesBot:
 
         # Legal consent required before entering course
         if not await self._ensure_legal_consent(message.chat.id, user_id):
+            self._pending_after_legal[user_id] = {"kind": "go_to_course"}
             return
         
         await message.answer(
