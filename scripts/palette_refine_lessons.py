@@ -13,9 +13,15 @@ def refine_text(s: str) -> str:
     s = s.replace("🔵+", "🔵➕")
 
     # Collapse accidental duplicates from earlier migrations
-    s = re.sub(r"(🟦){2,}", "🟦", s)
-    s = re.sub(r"(🔷){2,}", "🔷", s)
-    s = re.sub(r"(⚫\s*){2,}", "⚫ ", s)
+    # - IMPORTANT: only collapse across spaces/tabs (NOT newlines) to preserve formatting.
+    s = re.sub(r"(🟦[ \t]*){2,}", "🟦", s)
+    s = re.sub(r"(🔷[ \t]*){2,}", "🔷", s)
+    s = re.sub(r"(🧿[ \t]*){2,}", "🧿", s)
+    s = re.sub(r"(🩵[ \t]*){2,}", "🩵", s)
+    s = re.sub(r"(🌊[ \t]*){2,}", "🌊", s)
+    s = re.sub(r"(⚫[ \t]*){2,}", "⚫ ", s)
+    s = re.sub(r"(⚪️[ \t]*){2,}", "⚪️", s)
+    s = re.sub(r"(⚪[ \t]*){2,}", "⚪", s)
 
     # Contextual markers: IMPORTANT / WARNING → gray/black emphasis
     # (Keep meaning; avoid yellow/red.)
@@ -25,6 +31,19 @@ def refine_text(s: str) -> str:
 
     # White palette (allowed): silence/quiet/day-off vibe
     s = s.replace("\n\n🟦 Сегодня воскресенье, день тишины.", "\n\n⚪️ Сегодня воскресенье, день тишины.")
+
+    # De-emoji: remove redundant markers where meaning already conveyed by text nearby
+    s = re.sub(r"🔵❔\s*●\s*🔵❔\s*", "🔵❔ ● ", s)  # bullet marker duplication
+    s = re.sub(r"Только\s*🔵❔\s*вопрос", "Только вопрос", s)
+    s = re.sub(r"Просто\s*🔵❔\s*задайте", "Просто задайте", s)
+
+    # Common “double marker” phrases → keep one, keep context
+    s = re.sub(r"🟦\s*Подведите\s*🟦\s*итоги", "🟦 Подведите итоги", s)
+    s = re.sub(r"🟦\s*А еще\s*🟦\s*сегодня", "🟦 А еще сегодня", s, flags=re.IGNORECASE)
+    s = re.sub(r"🔷\s*Сделайте\s*🔷\s*вывод", "🔷 Сделайте вывод", s, flags=re.IGNORECASE)
+
+    # Trim decorative trailing clusters (keep one tone emoji)
+    s = re.sub(r"([.!?…])\s*🔷\s*🩵\s*$", r"\1 🩵", s)
 
     # Tool headings: keep semantics but allow gray palette
     # Example blocks use "🔹 ОТВЁРТКА"/"🔹 НОЖ" etc.
@@ -43,6 +62,16 @@ def refine_text(s: str) -> str:
         "⚫ Копирование в группе будет закрыто",
         s,
     )
+
+    # Final whitespace cleanup (do not touch newlines, only trailing spaces)
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"[ \t]+$", "", s)
+
+    # Ensure there's a space between leading marker-emoji and the following word/number
+    # (This prevents "🟦Сегодня" after collapsing duplicates like "🟦 🟦 Сегодня".)
+    s = re.sub(r"(🔵❔)([0-9A-Za-zА-Яа-яЁё])", r"\1 \2", s)
+    s = re.sub(r"(🔵❕)([0-9A-Za-zА-Яа-яЁё])", r"\1 \2", s)
+    s = re.sub(r"([🟦🔷🧿🩵🌊⚪️⚪⚫🩶❕🩶])(?!\s)([0-9A-Za-zА-Яа-яЁё])", r"\1 \2", s)
 
     return s
 
