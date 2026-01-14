@@ -1558,9 +1558,9 @@ class CourseBot:
         
         logger.info(f"   ✅ Урок {day} найден: {lesson_data.get('title', 'No title')}")
         
-        # Отправляем урок БЕЗ intro_text и about_me_text (только основной контент)
+        # В навигаторе показываем ПОЛНУЮ версию урока (intro/about/task/media).
         await send_typing_action(self.bot, user_id, 0.8)
-        await self._send_lesson_from_json(user, lesson_data, day, skip_intro=True, skip_about_me=True)
+        await self._send_lesson_from_json(user, lesson_data, day, skip_intro=False, skip_about_me=False)
         # Убеждаемся, что постоянная клавиатура видна после отправки урока
         await self._ensure_persistent_keyboard(user_id)
         logger.info(f"   ✅ Navigator lesson {day} sent successfully to user {user_id}")
