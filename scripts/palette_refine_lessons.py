@@ -15,12 +15,16 @@ def refine_text(s: str) -> str:
     # Collapse accidental duplicates from earlier migrations
     s = re.sub(r"(🟦){2,}", "🟦", s)
     s = re.sub(r"(🔷){2,}", "🔷", s)
+    s = re.sub(r"(⚫\s*){2,}", "⚫ ", s)
 
     # Contextual markers: IMPORTANT / WARNING → gray/black emphasis
     # (Keep meaning; avoid yellow/red.)
     s = re.sub(r"(^|\n)🟦️?\s*Важно", r"\1🩶❕ Важно", s)
     s = re.sub(r"(^|\n)🟦️?\s*Внимание", r"\1🩶❕ Внимание", s)
     s = re.sub(r"(^|\n)(Осторожно[,!:]?)", r"\1⚫ \2", s)
+
+    # White palette (allowed): silence/quiet/day-off vibe
+    s = s.replace("\n\n🟦 Сегодня воскресенье, день тишины.", "\n\n⚪️ Сегодня воскресенье, день тишины.")
 
     # Tool headings: keep semantics but allow gray palette
     # Example blocks use "🔹 ОТВЁРТКА"/"🔹 НОЖ" etc.
@@ -34,7 +38,11 @@ def refine_text(s: str) -> str:
         s = re.sub(rf"(^|\n)🔹\s+{re.escape(tool)}\b", rf"\1{repl}", s)
 
     # "copying locked" / "closed" → subtle dark marker
-    s = s.replace("Копирование в группе будет закрыто", "⚫ Копирование в группе будет закрыто")
+    s = re.sub(
+        r"(?<!⚫\s)Копирование в группе будет закрыто",
+        "⚫ Копирование в группе будет закрыто",
+        s,
+    )
 
     return s
 
