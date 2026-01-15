@@ -322,13 +322,20 @@ async def main():
     # КРИТИЧЕСКИ ВАЖНО: Запускаем HTTP сервер ПЕРВЫМ
     # Railway проверяет healthcheck сразу, даже если боты еще не готовы
     logger.info("Запуск HTTP сервера для healthcheck...")
+    web_runner = None
     try:
         web_runner = await start_web_server(web_app)
         logger.info("✅ HTTP сервер успешно запущен и готов отвечать на healthcheck/webhook")
+        logger.info(f"🌐 Healthcheck endpoint: http://0.0.0.0:{_get_port()}/health")
     except Exception as e:
         logger.error(f"❌ Критическая ошибка при запуске HTTP сервера: {e}", exc_info=True)
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         logger.error("⚠️ Продолжаем без HTTP сервера (healthcheck НЕ БУДЕТ работать)")
         web_runner = None
+        # Если HTTP сервер не запустился, приложение не может работать
+        logger.error("❌ Не могу продолжить без HTTP сервера. Завершаю работу.")
+        return
     
     # Теперь проверяем конфигурацию (после запуска HTTP сервера)
     try:
