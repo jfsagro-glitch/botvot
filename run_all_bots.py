@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Any
 
 from aiohttp import web
+import aiosqlite
 from bots.sales_bot import SalesBot
 from bots.course_bot import CourseBot
 from core.config import Config
@@ -58,8 +59,60 @@ async def _handle_version(_: web.Request) -> web.Response:
         "COMMIT_SHA",
     ]
     meta = {k: os.environ.get(k) for k in possible_keys if os.environ.get(k)}
+
+    # Runtime refs (optional)
+    app = _.app if hasattr(_, "app") else None
+    sales_bot = app.get("sales_bot") if app else None
+    course_bot = app.get("course_bot") if app else None
+
+    # DB diagnostics (helps debug "no lessons/reminders" quickly)
+    db_path = (os.environ.get("DATABASE_PATH") or Config.DATABASE_PATH or "").strip()
+    db_info: dict = {"path": db_path}
+    try:
+        p = Path(db_path) if db_path else None
+        if p:
+            db_info.update({
+                "exists": p.exists(),
+                "size_bytes": p.stat().st_size if p.exists() else None,
+                "mtime": p.stat().st_mtime if p.exists() else None,
+            })
+        if p and p.exists():
+            async with aiosqlite.connect(str(p)) as conn:
+                # counts are safe to expose
+                async with conn.execute("SELECT COUNT(*) FROM users") as cur:
+                    db_info["users_total"] = (await cur.fetchone())[0]
+                async with conn.execute("SELECT COUNT(*) FROM users WHERE tariff IS NOT NULL") as cur:
+                    db_info["users_with_access"] = (await cur.fetchone())[0]
+                async with conn.execute("SELECT COUNT(*) FROM users WHERE mentor_reminders > 0 AND tariff IS NOT NULL") as cur:
+                    db_info["mentor_enabled"] = (await cur.fetchone())[0]
+                async with conn.execute("SELECT COUNT(*) FROM assignments") as cur:
+                    db_info["assignments_total"] = (await cur.fetchone())[0]
+                # optional: next lesson schedule sanity
+                async with conn.execute("SELECT MIN(current_day), MAX(current_day) FROM users WHERE tariff IS NOT NULL") as cur:
+                    row = await cur.fetchone()
+                    db_info["current_day_min"] = row[0]
+                    db_info["current_day_max"] = row[1]
+    except Exception as e:
+        db_info["error"] = str(e)
+
     return web.json_response({
         "deploy": meta,
+        "runtime": {
+            "sales_bot_ready": bool(sales_bot),
+            "course_bot_ready": bool(course_bot),
+        },
+        "config": {
+            "schedule_timezone": getattr(Config, "SCHEDULE_TIMEZONE", ""),
+            "lesson_delivery_time_local": getattr(Config, "LESSON_DELIVERY_TIME_LOCAL", ""),
+            "mentor_window_local": f"{Config.MENTOR_REMINDER_START_LOCAL}-{Config.MENTOR_REMINDER_END_LOCAL}",
+        },
+        "tokens": {
+            "sales_token_set": bool(Config.SALES_BOT_TOKEN),
+            "course_token_set": bool(Config.COURSE_BOT_TOKEN),
+            # safe: only reveals whether they are identical (common root cause of getUpdates conflicts)
+            "tokens_equal": bool(Config.SALES_BOT_TOKEN and Config.COURSE_BOT_TOKEN and Config.SALES_BOT_TOKEN == Config.COURSE_BOT_TOKEN),
+        },
+        "db": db_info,
         "payment_provider": (Config.PAYMENT_PROVIDER or "").lower(),
         "currency": Config.PAYMENT_CURRENCY,
         "yookassa_shop_id_set": bool(Config.YOOKASSA_SHOP_ID),
@@ -322,6 +375,7 @@ async def main():
         try:
             course_bot = CourseBot()
             logger.info("✅ Курс-бот инициализирован")
+            web_app["course_bot"] = course_bot
         except Exception as e:
             logger.error(f"❌ Ошибка при инициализации курс-бота: {e}", exc_info=True)
             # Не падаем, продолжаем
