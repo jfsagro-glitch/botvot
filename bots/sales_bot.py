@@ -899,8 +899,7 @@ class SalesBot:
             
             # No access -> show compact start menu (no duplicated long course info)
             logger.info("Showing program/tariff start menu...")
-            online_min_price = PaymentService.TARIFF_PRICES.get(Tariff.BASIC, 10.0)
-            persistent_keyboard = create_persistent_keyboard(online_min_price=online_min_price, offline_min_price=6000.0)
+            persistent_keyboard = create_persistent_keyboard()
             await message.answer("Используйте кнопки внизу для навигации 👇", reply_markup=persistent_keyboard)
             await self._show_program_tariff_menu(message)
             logger.info("Program/tariff menu shown successfully")
