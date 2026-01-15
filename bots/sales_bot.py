@@ -277,6 +277,90 @@ class SalesBot:
             tariff = Tariff(ctx["tariff"])
             await self._start_payment_flow(message, user, tariff)
             return
+        if kind == "pay_offline":
+            # Handle offline tariff payment
+            tariff_str = ctx.get("tariff")
+            OFFLINE_TARIFF_PRICES = {
+                "slushatel": 6000.0,
+                "aktivist": 12000.0,
+                "media_persona": 22000.0,
+                "glavnyi_geroi": 30000.0,
+            }
+            OFFLINE_TARIFF_NAMES = {
+                "slushatel": "СЛУШАТЕЛЬ",
+                "aktivist": "АКТИВИСТ",
+                "media_persona": "МЕДИА-ПЕРСОНА",
+                "glavnyi_geroi": "ГЛАВНЫЙ ГЕРОЙ",
+            }
+            if tariff_str not in OFFLINE_TARIFF_PRICES:
+                await message.answer("❌ Ошибка: неверный офлайн тариф. Попробуйте снова.")
+                return
+            
+            offline_price = OFFLINE_TARIFF_PRICES[tariff_str]
+            offline_name = OFFLINE_TARIFF_NAMES[tariff_str]
+            self._selected_program[user_id] = "offline"
+            
+            # Create payment directly
+            payment_data = {
+                "amount": {
+                    "value": f"{offline_price:.2f}",
+                    "currency": Config.PAYMENT_CURRENCY
+                },
+                "description": f"Офлайн курс «Главный герой» - тариф {offline_name}",
+                "metadata": {
+                    "user_id": str(user_id),
+                    "tariff": f"offline_{tariff_str}",
+                    "tariff_name": offline_name,
+                    "course_program": "offline",
+                    "offline_tariff": "true"
+                },
+                "receipt": {
+                    "customer": {"email": email},
+                    "items": [{
+                        "description": f"Офлайн курс «Главный герой» - тариф {offline_name}",
+                        "quantity": "1",
+                        "amount": {"value": f"{offline_price:.2f}", "currency": Config.PAYMENT_CURRENCY},
+                        "vat_code": Config.YOOKASSA_VAT_CODE,
+                    }],
+                    "tax_system_code": Config.YOOKASSA_TAX_SYSTEM_CODE
+                }
+            }
+            
+            payment_info = await self.payment_processor.create_payment(payment_data)
+            payment_id = payment_info.get("id") or payment_info.get("payment_id")
+            payment_url = payment_info.get("confirmation", {}).get("confirmation_url") or payment_info.get("payment_url")
+            
+            payment_note = ""
+            if Config.PAYMENT_PROVIDER.lower() == "mock":
+                payment_note = "\n\n<i>Примечание: Это тестовая система оплаты. Платеж автоматически завершится через 5 секунд.</i>\n\nЧерез 5 секунд нажмите кнопку 'Проверить статус оплаты'."
+            else:
+                payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
+            
+            currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
+            
+            await message.answer(
+                f"💳 <b>Требуется оплата</b>\n\n"
+                f"Программа: <b>офлайн · ГЛАВНЫЙ ГЕРОЙ</b>\n"
+                f"Тариф: <b>{offline_name}</b>\n"
+                f"Сумма: {offline_price:.0f}{currency_symbol}\n\n"
+                f"Нажмите кнопку ниже для завершения оплаты:{payment_note}\n\n"
+                f"<i>Не забудьте после оплаты прислать свое имя в Телеграм на @niktatv, чтобы вас включили в рабочую группу.</i>",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="🏧 Оплатить",
+                            url=payment_url
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="🔎 Проверить оплату",
+                            callback_data=f"check_payment:{payment_id}"
+                        )
+                    ]
+                ])
+            )
+            return
         if kind == "upgrade":
             # For upgrade we stored required fields
             current_tariff = Tariff(ctx["current_tariff"])
@@ -938,10 +1022,15 @@ class SalesBot:
             "Всё, что в прошлом тарифе\n\n"
             "10 рилсов для продвижения\n\n"
             "Личная стратегическая онлайн-консультация\n\n"
-            "💰 <b>30 000 ₽</b>"
+            "💰 <b>30 000 ₽</b>\n\n"
+            "✨ <b>Выберите тариф для оплаты:</b>"
         )
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👂 Оплатить СЛУШАТЕЛЬ · 6000₽", callback_data="pay:offline:slushatel")],
+            [InlineKeyboardButton(text="🎯 Оплатить АКТИВИСТ · 12000₽", callback_data="pay:offline:aktivist")],
+            [InlineKeyboardButton(text="📹 Оплатить МЕДИА-ПЕРСОНА · 22000₽", callback_data="pay:offline:media_persona")],
+            [InlineKeyboardButton(text="👑 Оплатить ГЛАВНЫЙ ГЕРОЙ · 30000₽", callback_data="pay:offline:glavnyi_geroi")],
             [InlineKeyboardButton(
                 text="🔗 Открыть сайт «Главный герой»",
                 url="https://sites.google.com/view/nikitinartem/education/main-hero"
@@ -1742,9 +1831,42 @@ class SalesBot:
                 prog, tariff_str = rest.split(":", 1)
                 prog = (prog or "").strip().lower() or None
                 tariff_str = (tariff_str or "").strip().lower()
-            tariff = Tariff(tariff_str)
-            if prog in ("online", "offline"):
-                self._selected_program[callback.from_user.id] = prog
+            
+            # Offline tariffs mapping (not in Tariff enum)
+            OFFLINE_TARIFF_PRICES = {
+                "slushatel": 6000.0,
+                "aktivist": 12000.0,
+                "media_persona": 22000.0,
+                "glavnyi_geroi": 30000.0,
+            }
+            
+            OFFLINE_TARIFF_NAMES = {
+                "slushatel": "СЛУШАТЕЛЬ",
+                "aktivist": "АКТИВИСТ",
+                "media_persona": "МЕДИА-ПЕРСОНА",
+                "glavnyi_geroi": "ГЛАВНЫЙ ГЕРОЙ",
+            }
+            
+            # Check if this is an offline tariff
+            is_offline_tariff = False
+            offline_price = None
+            offline_name = None
+            
+            if prog == "offline" and tariff_str in OFFLINE_TARIFF_PRICES:
+                is_offline_tariff = True
+                offline_price = OFFLINE_TARIFF_PRICES[tariff_str]
+                offline_name = OFFLINE_TARIFF_NAMES[tariff_str]
+                self._selected_program[callback.from_user.id] = "offline"
+            else:
+                # Online tariff (from Tariff enum)
+                try:
+                    tariff = Tariff(tariff_str)
+                    if prog in ("online", "offline"):
+                        self._selected_program[callback.from_user.id] = prog
+                except ValueError:
+                    logger.error(f"   ❌ Invalid tariff: '{tariff_str}'")
+                    await callback.message.answer(f"❌ Ошибка: неверный тариф '{tariff_str}'. Попробуйте снова.")
+                    return
             
             user_id = callback.from_user.id
             user = await self.user_service.get_or_create_user(
@@ -1754,62 +1876,150 @@ class SalesBot:
                 callback.from_user.last_name
             )
             
-            logger.info(f"   Tariff: {tariff.value}, User: {user_id}")
-
-            # Receipt/email required for some YooKassa shops
-            if self._receipt_required() and not getattr(user, "email", None):
-                self._awaiting_email[user_id] = {"kind": "pay", "tariff": tariff.value, "program": self._selected_program.get(user_id)}
-                await callback.message.answer(
-                    "✉️ Для оплаты нужен email для отправки чека.\n"
-                    "Пожалуйста, отправьте ваш email одним сообщением (пример: name@gmail.com)."
+            if is_offline_tariff:
+                logger.info(f"   Offline Tariff: {offline_name}, Price: {offline_price}, User: {user_id}")
+                
+                # Receipt/email required for some YooKassa shops
+                if self._receipt_required() and not getattr(user, "email", None):
+                    self._awaiting_email[user_id] = {"kind": "pay_offline", "tariff": tariff_str, "program": "offline"}
+                    await callback.message.answer(
+                        "✉️ Для оплаты нужен email для отправки чека.\n"
+                        "Пожалуйста, отправьте ваш email одним сообщением (пример: name@gmail.com)."
+                    )
+                    return
+                
+                # For offline tariffs, we need to create a payment with a custom price
+                # Since PaymentService expects a Tariff enum, we'll use a workaround
+                # Create payment with BASIC tariff but override the price in metadata
+                from payment.base import PaymentProcessor
+                
+                # Get payment processor
+                payment_processor = self.payment_processor
+                
+                # Create payment directly with custom price
+                payment_data = {
+                    "amount": {
+                        "value": f"{offline_price:.2f}",
+                        "currency": Config.PAYMENT_CURRENCY
+                    },
+                    "description": f"Офлайн курс «Главный герой» - тариф {offline_name}",
+                    "metadata": {
+                        "user_id": str(user_id),
+                        "tariff": f"offline_{tariff_str}",
+                        "tariff_name": offline_name,
+                        "course_program": "offline",
+                        "offline_tariff": "true"
+                    }
+                }
+                
+                # Add receipt if required
+                if self._receipt_required() and getattr(user, "email", None):
+                    payment_data["receipt"] = {
+                        "customer": {"email": user.email},
+                        "items": [{
+                            "description": f"Офлайн курс «Главный герой» - тариф {offline_name}",
+                            "quantity": "1",
+                            "amount": {"value": f"{offline_price:.2f}", "currency": Config.PAYMENT_CURRENCY},
+                            "vat_code": Config.YOOKASSA_VAT_CODE,
+                        }],
+                        "tax_system_code": Config.YOOKASSA_TAX_SYSTEM_CODE
+                    }
+                
+                payment_info = await payment_processor.create_payment(payment_data)
+                payment_id = payment_info.get("id") or payment_info.get("payment_id")
+                payment_url = payment_info.get("confirmation", {}).get("confirmation_url") or payment_info.get("payment_url")
+                
+                logger.info(f"   Offline payment created: {payment_id}")
+                
+                # Show payment information
+                payment_note = ""
+                if Config.PAYMENT_PROVIDER.lower() == "mock":
+                    payment_note = "\n\n<i>Примечание: Это тестовая система оплаты. Платеж автоматически завершится через 5 секунд.</i>\n\nЧерез 5 секунд нажмите кнопку 'Проверить статус оплаты'."
+                else:
+                    payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
+                
+                currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
+                
+                await callback.message.edit_text(
+                    f"💳 <b>Требуется оплата</b>\n\n"
+                    f"Программа: <b>офлайн · ГЛАВНЫЙ ГЕРОЙ</b>\n"
+                    f"Тариф: <b>{offline_name}</b>\n"
+                    f"Сумма: {offline_price:.0f}{currency_symbol}\n\n"
+                    f"Нажмите кнопку ниже для завершения оплаты:{payment_note}\n\n"
+                    f"<i>Не забудьте после оплаты прислать свое имя в Телеграм на @niktatv, чтобы вас включили в рабочую группу.</i>",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="🏧 Оплатить",
+                                url=payment_url
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text="🔎 Проверить оплату",
+                                callback_data=f"check_payment:{payment_id}"
+                            )
+                        ]
+                    ])
                 )
-                return
-            
-            # Initiate payment
-            payment_info = await self.payment_service.initiate_payment(
-                user_id=user_id,
-                tariff=tariff,
-                referral_partner_id=user.referral_partner_id,
-                customer_email=getattr(user, "email", None),
-                course_program=self._selected_program.get(user_id),
-            )
-            
-            payment_id = payment_info["payment_id"]
-            payment_url = payment_info["payment_url"]
-            
-            logger.info(f"   Payment created: {payment_id}")
-            
-            # Show payment information
-            payment_note = ""
-            if Config.PAYMENT_PROVIDER.lower() == "mock":
-                payment_note = "\n\n<i>Примечание: Это тестовая система оплаты. Платеж автоматически завершится через 5 секунд.</i>\n\nЧерез 5 секунд нажмите кнопку 'Проверить статус оплаты'."
             else:
-                payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
-            
-            # Форматируем цену с валютой
-            price = PaymentService.TARIFF_PRICES[tariff]
-            currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
-            
-            await callback.message.edit_text(
-                f"💳 <b>Требуется оплата</b>\n\n"
-                f"Тариф: <b>{tariff.value.upper()}</b>\n"
-                f"Сумма: {price:.0f}{currency_symbol}\n\n"
-                f"Нажмите кнопку ниже для завершения оплаты:{payment_note}",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="🏧 Оплатить",
-                            url=payment_url
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text="🔎 Проверить оплату",
-                            callback_data=f"check_payment:{payment_id}"
-                        )
-                    ]
-                ])
-            )
+                # Online tariff (existing logic)
+                logger.info(f"   Tariff: {tariff.value}, User: {user_id}")
+
+                # Receipt/email required for some YooKassa shops
+                if self._receipt_required() and not getattr(user, "email", None):
+                    self._awaiting_email[user_id] = {"kind": "pay", "tariff": tariff.value, "program": self._selected_program.get(user_id)}
+                    await callback.message.answer(
+                        "✉️ Для оплаты нужен email для отправки чека.\n"
+                        "Пожалуйста, отправьте ваш email одним сообщением (пример: name@gmail.com)."
+                    )
+                    return
+                
+                # Initiate payment
+                payment_info = await self.payment_service.initiate_payment(
+                    user_id=user_id,
+                    tariff=tariff,
+                    referral_partner_id=user.referral_partner_id,
+                    customer_email=getattr(user, "email", None),
+                    course_program=self._selected_program.get(user_id),
+                )
+                
+                payment_id = payment_info["payment_id"]
+                payment_url = payment_info["payment_url"]
+                
+                logger.info(f"   Payment created: {payment_id}")
+                
+                # Show payment information
+                payment_note = ""
+                if Config.PAYMENT_PROVIDER.lower() == "mock":
+                    payment_note = "\n\n<i>Примечание: Это тестовая система оплаты. Платеж автоматически завершится через 5 секунд.</i>\n\nЧерез 5 секунд нажмите кнопку 'Проверить статус оплаты'."
+                else:
+                    payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
+                
+                # Форматируем цену с валютой
+                price = PaymentService.TARIFF_PRICES[tariff]
+                currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
+                
+                await callback.message.edit_text(
+                    f"💳 <b>Требуется оплата</b>\n\n"
+                    f"Тариф: <b>{tariff.value.upper()}</b>\n"
+                    f"Сумма: {price:.0f}{currency_symbol}\n\n"
+                    f"Нажмите кнопку ниже для завершения оплаты:{payment_note}",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="🏧 Оплатить",
+                                url=payment_url
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text="🔎 Проверить оплату",
+                                callback_data=f"check_payment:{payment_id}"
+                            )
+                        ]
+                    ])
+                )
             
             logger.info(f"   Payment message sent to user")
         except Exception as e:
