@@ -446,8 +446,7 @@ class DriveContentSync:
         db_path = Path(Config.DATABASE_PATH)
         return db_path.parent / "lessons.json"
 
-    @staticmethod
-    def _backup_file_if_exists(target: Path) -> Optional[Path]:
+    def _backup_file_if_exists(self, target: Path) -> Optional[Path]:
         """
         Create a timestamped backup copy next to the target, if it exists.
         Returns backup path if created.
@@ -460,10 +459,68 @@ class DriveContentSync:
             ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
             backup_path = backups_dir / f"{target.stem}.{ts}{target.suffix}"
             shutil.copy2(target, backup_path)
+            logger.info(f"✅ Backup created: {backup_path}")
             return backup_path
         except Exception as e:
             logger.warning(f"⚠️ Failed to backup {target}: {e}")
             return None
+    
+    def get_latest_backup(self) -> Optional[Path]:
+        """Get the most recent backup file path."""
+        target = self._target_lessons_path()
+        backups_dir = target.parent / "content_backups"
+        if not backups_dir.exists():
+            return None
+        backups = sorted(backups_dir.glob(f"{target.stem}.*{target.suffix}"), reverse=True)
+        return backups[0] if backups else None
+    
+    def get_all_backups(self) -> List[Tuple[Path, datetime]]:
+        """Get all backup files with their timestamps."""
+        target = self._target_lessons_path()
+        backups_dir = target.parent / "content_backups"
+        if not backups_dir.exists():
+            return []
+        backups = []
+        for backup_path in backups_dir.glob(f"{target.stem}.*{target.suffix}"):
+            try:
+                # Extract timestamp from filename: lessons.YYYYMMDD-HHMMSS.json
+                parts = backup_path.stem.split(".")
+                if len(parts) >= 2:
+                    ts_str = parts[-1]
+                    ts = datetime.strptime(ts_str, "%Y%m%d-%H%M%S")
+                    backups.append((backup_path, ts))
+            except Exception:
+                # If timestamp parsing fails, use file mtime
+                ts = datetime.fromtimestamp(backup_path.stat().st_mtime)
+                backups.append((backup_path, ts))
+        return sorted(backups, key=lambda x: x[1], reverse=True)
+    
+    def restore_from_backup(self, backup_path: Optional[Path] = None) -> bool:
+        """
+        Restore lessons.json from a backup.
+        If backup_path is None, uses the latest backup.
+        Returns True if successful.
+        """
+        try:
+            if backup_path is None:
+                backup_path = self.get_latest_backup()
+            if not backup_path or not backup_path.exists():
+                logger.error("No backup found to restore from")
+                return False
+            
+            target = self._target_lessons_path()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Create a backup of current file before restoring
+            if target.exists():
+                self._backup_file_if_exists(target)
+            
+            shutil.copy2(backup_path, target)
+            logger.info(f"✅ Restored lessons.json from backup: {backup_path}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to restore from backup: {e}", exc_info=True)
+            return False
 
     def sync_now(self) -> SyncResult:
         ok, reason = self._admin_ready()

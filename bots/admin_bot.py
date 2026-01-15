@@ -96,6 +96,8 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_question_reply_callback, F.data.startswith("reply_question:"))
         self.dp.callback_query.register(self.handle_all_user_stats, F.data == "admin:all_user_stats")
         self.dp.callback_query.register(self.handle_user_stats_detail, F.data.startswith("admin:user_stats:"))
+        self.dp.callback_query.register(self.handle_restore_confirm, F.data.startswith("admin:restore_confirm:"))
+        self.dp.callback_query.register(self.handle_restore_cancel, F.data == "admin:restore_cancel")
         
         # Commands for user stats
         self.dp.message.register(self.handle_user_stats, Command("user_stats"))
@@ -105,6 +107,7 @@ class AdminBot:
         self.dp.message.register(self.handle_users_button, F.text == "👥 Пользователи")
         self.dp.message.register(self.handle_settings_button, F.text == "⚙️ Настройки")
         self.dp.message.register(self.handle_sync_button, F.text == "🔄 Обновить контент")
+        self.dp.message.register(self.handle_restore_button, F.text == "⏪ Откатить обновление")
     
     async def handle_start(self, message: Message):
         """Handle /start command - show admin menu."""
@@ -141,6 +144,9 @@ class AdminBot:
                 [
                     KeyboardButton(text="⚙️ Настройки"),
                     KeyboardButton(text="🔄 Обновить контент")
+                ],
+                [
+                    KeyboardButton(text="⏪ Откатить обновление")
                 ]
             ],
             resize_keyboard=True,
@@ -239,16 +245,32 @@ class AdminBot:
             f"• Путь: {Config.DATABASE_PATH}\n\n"
             f"📁 <b>Google Drive:</b>\n"
             f"• Синхронизация: {'✅ Включена' if self.drive_sync and self.drive_sync._admin_ready() else '❌ Отключена'}\n"
+            f"• Документ: {('https://docs.google.com/document/d/' + Config.DRIVE_MASTER_DOC_ID + '/edit') if Config.DRIVE_MASTER_DOC_ID else 'Не указан'}\n"
         )
         await message.answer(settings_text)
     
     async def handle_sync_content(self, message: Message):
         """Handle /sync_content command - sync content from Google Drive."""
         if not self.drive_sync or not self.drive_sync._admin_ready():
-            await message.answer("❌ Синхронизация с Google Drive не настроена.")
+            await message.answer(
+                "❌ Синхронизация с Google Drive не настроена.\n\n"
+                "Убедитесь, что установлены:\n"
+                "• DRIVE_CONTENT_ENABLED=1\n"
+                "• DRIVE_MASTER_DOC_ID (ID документа)\n"
+                "• GOOGLE_SERVICE_ACCOUNT_JSON"
+            )
             return
         
-        await message.answer("🔄 Начинаю синхронизацию контента из Google Drive...")
+        # Show current document info
+        doc_id = (Config.DRIVE_MASTER_DOC_ID or "").strip()
+        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit" if doc_id else "Не указан"
+        
+        await message.answer(
+            f"🔄 <b>Начинаю синхронизацию контента</b>\n\n"
+            f"📄 <b>Документ:</b> {doc_url}\n"
+            f"⏳ Подтягиваю данные из Google Drive...\n\n"
+            f"Это может занять несколько секунд."
+        )
         
         try:
             # sync_now is synchronous, run in executor to avoid blocking
@@ -256,16 +278,33 @@ class AdminBot:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, self.drive_sync.sync_now)
             
+            # Check for warnings
+            warnings_text = ""
+            if result.warnings:
+                warnings_text = f"\n⚠️ <b>Предупреждения:</b>\n" + "\n".join([f"• {w}" for w in result.warnings[:5]])
+                if len(result.warnings) > 5:
+                    warnings_text += f"\n... и еще {len(result.warnings) - 5} предупреждений"
+            
             # result is SyncResult dataclass
             await message.answer(
                 f"✅ <b>Синхронизация завершена</b>\n\n"
+                f"📄 Документ: {doc_url}\n"
                 f"• Обновлено дней: {result.days_synced}\n"
                 f"• Медиа файлов загружено: {result.media_files_downloaded}\n"
                 f"• Путь к урокам: {result.lessons_path}\n"
+                f"{warnings_text}\n\n"
+                f"💡 Контент обновлен. Курс-бот автоматически подхватит изменения."
             )
         except Exception as e:
             logger.error(f"Error syncing content: {e}", exc_info=True)
-            await message.answer(f"❌ Ошибка при синхронизации: {e}")
+            await message.answer(
+                f"❌ <b>Ошибка при синхронизации</b>\n\n"
+                f"{str(e)}\n\n"
+                f"💡 Проверьте:\n"
+                f"• Доступ к Google Drive\n"
+                f"• Правильность ID документа\n"
+                f"• Настройки сервисного аккаунта"
+            )
     
     async def handle_reply(self, message: Message):
         """Handle reply to question/assignment message."""
@@ -463,6 +502,103 @@ class AdminBot:
     async def handle_sync_button(self, message: Message):
         """Handle sync button from keyboard."""
         await self.handle_sync_content(message)
+    
+    async def handle_restore_button(self, message: Message):
+        """Handle restore button from keyboard - restore from latest backup."""
+        if not self.drive_sync or not self.drive_sync._admin_ready():
+            await message.answer("❌ Синхронизация с Google Drive не настроена.")
+            return
+        
+        await message.answer("⏪ Проверяю доступные бэкапы...")
+        
+        try:
+            backups = self.drive_sync.get_all_backups()
+            
+            if not backups:
+                await message.answer(
+                    "❌ <b>Бэкапы не найдены</b>\n\n"
+                    "Нет сохраненных версий для отката.\n"
+                    "Бэкапы создаются автоматически при каждой синхронизации."
+                )
+                return
+            
+            # Show latest backup info
+            latest_backup, latest_time = backups[0]
+            backup_info = f"📦 <b>Последний бэкап:</b>\n"
+            backup_info += f"• Дата: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            backup_info += f"• Файл: {latest_backup.name}\n\n"
+            
+            if len(backups) > 1:
+                backup_info += f"📚 Всего бэкапов: {len(backups)}\n\n"
+            
+            backup_info += "⚠️ <b>Внимание:</b> Откат заменит текущую версию уроков на версию из бэкапа.\n"
+            backup_info += "Продолжить?"
+            
+            # Create confirmation keyboard
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ Да, откатить",
+                        callback_data=f"admin:restore_confirm:{latest_backup.name}"
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Отмена",
+                        callback_data="admin:restore_cancel"
+                    )
+                ]
+            ])
+            
+            await message.answer(backup_info, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Error getting backups: {e}", exc_info=True)
+            await message.answer(f"❌ Ошибка при получении бэкапов: {e}")
+    
+    async def handle_restore_confirm(self, callback: CallbackQuery):
+        """Handle restore confirmation."""
+        await callback.answer()
+        
+        try:
+            backup_name = callback.data.split(":")[2]
+            
+            # Find backup by name
+            backups = self.drive_sync.get_all_backups()
+            backup_path = None
+            for path, _ in backups:
+                if path.name == backup_name:
+                    backup_path = path
+                    break
+            
+            if not backup_path or not backup_path.exists():
+                await callback.message.answer("❌ Бэкап не найден.")
+                return
+            
+            await callback.message.answer("⏪ Выполняю откат...")
+            
+            # Restore from backup
+            import asyncio
+            loop = asyncio.get_event_loop()
+            success = await loop.run_in_executor(None, self.drive_sync.restore_from_backup, backup_path)
+            
+            if success:
+                await callback.message.answer(
+                    f"✅ <b>Откат выполнен успешно</b>\n\n"
+                    f"📦 Восстановлен бэкап: {backup_name}\n"
+                    f"💡 Курс-бот автоматически подхватит изменения при следующей загрузке уроков."
+                )
+            else:
+                await callback.message.answer("❌ Ошибка при откате. Проверьте логи.")
+        except Exception as e:
+            logger.error(f"Error restoring from backup: {e}", exc_info=True)
+            await callback.message.answer(f"❌ Ошибка при откате: {e}")
+    
+    async def handle_restore_cancel(self, callback: CallbackQuery):
+        """Handle restore cancellation."""
+        await callback.answer("Отменено")
+        try:
+            await callback.message.edit_text("✅ Откат отменен.")
+        except Exception:
+            await callback.message.answer("✅ Откат отменен.")
     
     async def handle_forwarded_message(self, message: Message):
         """
