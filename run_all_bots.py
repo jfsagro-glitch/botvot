@@ -392,14 +392,24 @@ async def main():
         admin_bot = None
         try:
             if Config.ADMIN_BOT_TOKEN:
-                admin_bot = AdminBot()
-                logger.info("✅ Админ-бот инициализирован")
-                web_app["admin_bot"] = admin_bot
+                try:
+                    admin_bot = AdminBot()
+                    logger.info("✅ Админ-бот инициализирован")
+                    web_app["admin_bot"] = admin_bot
+                except ValueError as ve:
+                    # ADMIN_BOT_TOKEN not configured - это нормально, просто пропускаем
+                    logger.warning(f"⚠️ Админ-бот не может быть инициализирован: {ve}")
+                    admin_bot = None
+                except Exception as e:
+                    logger.error(f"❌ Ошибка при инициализации админ-бота: {e}", exc_info=True)
+                    logger.warning("⚠️ Продолжаем без админ-бота")
+                    admin_bot = None
             else:
                 logger.warning("⚠️ ADMIN_BOT_TOKEN не установлен, админ-бот не будет запущен")
         except Exception as e:
-            logger.error(f"❌ Ошибка при инициализации админ-бота: {e}", exc_info=True)
+            logger.error(f"❌ Критическая ошибка при проверке админ-бота: {e}", exc_info=True)
             logger.warning("⚠️ Продолжаем без админ-бота")
+            admin_bot = None
         
         # Запуск ботов параллельно (если они были инициализированы)
         tasks = []
@@ -419,7 +429,7 @@ async def main():
             logger.info(f"✅ Запущено {len(tasks)} бот(ов). Все сервисы готовы к работе")
             # Ждем завершения всех задач
             try:
-                await asyncio.gather(*tasks)
+                await asyncio.gather(*tasks, return_exceptions=True)
             except asyncio.CancelledError:
                 logger.info("Получен сигнал остановки")
                 for task in tasks:
