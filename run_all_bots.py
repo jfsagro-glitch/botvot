@@ -194,8 +194,9 @@ async def start_web_server(app: web.Application) -> web.AppRunner:
 
 async def main():
     """Запуск обоих ботов и HTTP сервера."""
-    sales_bot = None
-    course_bot = None
+    sales_bot: Optional[SalesBot] = None
+    course_bot: Optional[CourseBot] = None
+    admin_bot: Optional[AdminBot] = None
     web_runner: Optional[web.AppRunner] = None
     web_app = web.Application()
     web_app.router.add_get("/", _handle_health)
@@ -364,6 +365,7 @@ async def main():
     try:
         # Инициализация ботов
         logger.info("Инициализация продающего бота...")
+        sales_bot = None
         try:
             sales_bot = SalesBot()
             logger.info("✅ Продающий бот инициализирован")
@@ -373,6 +375,7 @@ async def main():
             logger.error(f"❌ Ошибка при инициализации продающего бота: {e}", exc_info=True)
             # Не падаем, продолжаем с другим ботом
             logger.warning("⚠️ Продолжаем без продающего бота")
+            sales_bot = None
         
         logger.info("Инициализация курс-бота...")
         try:

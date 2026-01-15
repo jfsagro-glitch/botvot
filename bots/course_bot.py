@@ -2940,8 +2940,6 @@ class CourseBot:
             await self.db.log_user_activity(user_id, "course", "assignment_submitted", f"lesson_{assignment.day_number}")
         except Exception:
             pass
-            submission_media_ids=media_ids
-        )
         
         # Forward to admin
         admin_text = (
