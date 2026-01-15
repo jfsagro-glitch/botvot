@@ -199,6 +199,9 @@ class LessonLoader:
             elif media_item.get("type") == "video" and not video_url:
                 video_url = media_item.get("file_id") or media_item.get("path")
         
+        # created_at is required by Lesson dataclass in core.models.
+        # JSON lessons don't include it, so we stamp "now" deterministically.
+        from datetime import datetime
         return Lesson(
             lesson_id=f"lesson_{day}",
             day_number=day,
@@ -206,6 +209,7 @@ class LessonLoader:
             content_text=lesson_data.get("text", ""),
             image_url=image_url,
             video_url=video_url,
-            assignment_text=lesson_data.get("task", "")
+            assignment_text=lesson_data.get("task", ""),
+            created_at=datetime.utcnow(),
         )
 

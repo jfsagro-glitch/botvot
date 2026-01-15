@@ -121,7 +121,7 @@ class MentorReminderScheduler:
                 enabled += 1
                 
                 # Пропускаем пользователей, которые завершили курс
-                from core.config import Config
+                # NOTE: do NOT re-import Config here; it causes UnboundLocalError earlier in the function.
                 if user.current_day > Config.COURSE_DURATION_DAYS:
                     skipped_finished += 1
                     continue
