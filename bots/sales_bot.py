@@ -846,6 +846,10 @@ class SalesBot:
         except Exception:
             pass
 
+        basic_price = PaymentService.TARIFF_PRICES.get(Tariff.BASIC, 0)
+        feedback_price = PaymentService.TARIFF_PRICES.get(Tariff.FEEDBACK, 0)
+        practic_price = PaymentService.TARIFF_PRICES.get(Tariff.PRACTIC, 0)
+
         # Show online tariffs + pay buttons (existing payment flow)
         text = (
             "<b>онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ</b>\n\n"
@@ -859,7 +863,7 @@ class SalesBot:
             "Полный доступ ко всему контенту\n\n"
             "Выполняйте задания в своем темпе\n\n"
             "Без обратной связи от лидера\n\n"
-            "5 000 ₽\n\n"
+            f"{basic_price:.0f} ₽\n\n"
             "<b>FEEDBACK</b>\n"
             "<b>Что включено</b>\n"
             "Всё из Базового тарифа\n\n"
@@ -870,7 +874,7 @@ class SalesBot:
             "Лидер проверяет ваши задания\n\n"
             "Персональные комментарии\n\n"
             "Можно задавать вопросы и получать ответы\n\n"
-            "10 000 ₽\n\n"
+            f"{feedback_price:.0f} ₽\n\n"
             "<b>PRACTIC</b>\n"
             "<b>Что включено</b>\n"
             "Всё из тарифов Basic + Feedback\n\n"
@@ -881,7 +885,7 @@ class SalesBot:
             "Каждое интервью до 15 мин\n\n"
             "Подбор собеседника\n\n"
             "Профессиональный формат\n\n"
-            "20 000 ₽\n\n"
+            f"{practic_price:.0f} ₽\n\n"
             "Выберите тариф для оплаты:"
         )
 
