@@ -301,33 +301,23 @@ class SalesBot:
             offline_name = OFFLINE_TARIFF_NAMES[tariff_str]
             self._selected_program[user_id] = "offline"
             
-            # Create payment directly
-            payment_data = {
-                "amount": {
-                    "value": f"{offline_price:.2f}",
-                    "currency": Config.PAYMENT_CURRENCY
-                },
-                "description": f"Офлайн курс «Главный герой» - тариф {offline_name}",
-                "metadata": {
-                    "user_id": str(user_id),
-                    "tariff": f"offline_{tariff_str}",
-                    "tariff_name": offline_name,
-                    "course_program": "offline",
-                    "offline_tariff": "true"
-                },
-                "receipt": {
-                    "customer": {"email": email},
-                    "items": [{
-                        "description": f"Офлайн курс «Главный герой» - тариф {offline_name}",
-                        "quantity": "1",
-                        "amount": {"value": f"{offline_price:.2f}", "currency": Config.PAYMENT_CURRENCY},
-                        "vat_code": Config.YOOKASSA_VAT_CODE,
-                    }],
-                    "tax_system_code": Config.YOOKASSA_TAX_SYSTEM_CODE
-                }
+            # Prepare metadata with email for receipt generation
+            metadata = {
+                "tariff": f"offline_{tariff_str}",
+                "tariff_name": offline_name,
+                "course_program": "offline",
+                "offline_tariff": "true",
+                "customer_email": email  # For receipt generation
             }
             
-            payment_info = await self.payment_processor.create_payment(payment_data)
+            # Create payment with correct arguments
+            payment_info = await self.payment_processor.create_payment(
+                user_id=user_id,
+                amount=offline_price,
+                currency=Config.PAYMENT_CURRENCY,
+                description=f"Офлайн курс «Главный герой» - тариф {offline_name}",
+                metadata=metadata
+            )
             payment_id = payment_info.get("id") or payment_info.get("payment_id")
             payment_url = payment_info.get("confirmation", {}).get("confirmation_url") or payment_info.get("payment_url")
             
@@ -1891,42 +1881,29 @@ class SalesBot:
                 
                 # For offline tariffs, we need to create a payment with a custom price
                 # Since PaymentService expects a Tariff enum, we'll use a workaround
-                # Create payment with BASIC tariff but override the price in metadata
-                from payment.base import PaymentProcessor
-                
-                # Get payment processor
+                # Create payment directly with payment processor
                 payment_processor = self.payment_processor
                 
-                # Create payment directly with custom price
-                payment_data = {
-                    "amount": {
-                        "value": f"{offline_price:.2f}",
-                        "currency": Config.PAYMENT_CURRENCY
-                    },
-                    "description": f"Офлайн курс «Главный герой» - тариф {offline_name}",
-                    "metadata": {
-                        "user_id": str(user_id),
-                        "tariff": f"offline_{tariff_str}",
-                        "tariff_name": offline_name,
-                        "course_program": "offline",
-                        "offline_tariff": "true"
-                    }
+                # Prepare metadata
+                metadata = {
+                    "tariff": f"offline_{tariff_str}",
+                    "tariff_name": offline_name,
+                    "course_program": "offline",
+                    "offline_tariff": "true"
                 }
                 
-                # Add receipt if required
-                if self._receipt_required() and getattr(user, "email", None):
-                    payment_data["receipt"] = {
-                        "customer": {"email": user.email},
-                        "items": [{
-                            "description": f"Офлайн курс «Главный герой» - тариф {offline_name}",
-                            "quantity": "1",
-                            "amount": {"value": f"{offline_price:.2f}", "currency": Config.PAYMENT_CURRENCY},
-                            "vat_code": Config.YOOKASSA_VAT_CODE,
-                        }],
-                        "tax_system_code": Config.YOOKASSA_TAX_SYSTEM_CODE
-                    }
+                # Add email to metadata if available (for receipt generation)
+                if getattr(user, "email", None):
+                    metadata["customer_email"] = user.email
                 
-                payment_info = await payment_processor.create_payment(payment_data)
+                # Create payment with correct arguments
+                payment_info = await payment_processor.create_payment(
+                    user_id=user_id,
+                    amount=offline_price,
+                    currency=Config.PAYMENT_CURRENCY,
+                    description=f"Офлайн курс «Главный герой» - тариф {offline_name}",
+                    metadata=metadata
+                )
                 payment_id = payment_info.get("id") or payment_info.get("payment_id")
                 payment_url = payment_info.get("confirmation", {}).get("confirmation_url") or payment_info.get("payment_url")
                 
