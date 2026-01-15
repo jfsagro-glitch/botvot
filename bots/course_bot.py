@@ -24,6 +24,7 @@ from core.models import User, Tariff
 from services.user_service import UserService
 from services.lesson_service import LessonService
 from services.lesson_loader import LessonLoader
+from services.drive_content_sync import DriveContentSync
 from services.assignment_service import AssignmentService
 from services.community_service import CommunityService
 from services.question_service import QuestionService
@@ -133,6 +134,40 @@ class CourseBot:
             await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
         except Exception as e:
             logger.debug(f"Could not send persistent keyboard to {user_id}: {e}")
+
+    async def handle_sync_content(self, message: Message):
+        """Admin command: sync lessons from Google Drive into /app/data/lessons.json and reload LessonLoader."""
+        if not Config.ADMIN_CHAT_ID or message.from_user.id != Config.ADMIN_CHAT_ID:
+            return
+
+        await message.answer("🔄 Синхронизирую контент из Google Drive…")
+        syncer = DriveContentSync()
+        try:
+            result = await asyncio.to_thread(syncer.sync_now)
+        except Exception as e:
+            await message.answer(f"❌ Sync failed: <code>{e}</code>")
+            return
+
+        # Reload in-memory cache so new lessons take effect immediately
+        try:
+            self.lesson_loader.reload()
+        except Exception:
+            pass
+
+        warn_text = ""
+        if result.warnings:
+            shown = result.warnings[:10]
+            warn_text = "\n\n⚠️ Предупреждения:\n" + "\n".join(f"• {w}" for w in shown)
+            if len(result.warnings) > 10:
+                warn_text += f"\n…и ещё {len(result.warnings) - 10}"
+
+        await message.answer(
+            "✅ Sync completed.\n\n"
+            f"• days_synced: <b>{result.days_synced}</b>\n"
+            f"• media_downloaded: <b>{result.media_files_downloaded}</b>\n"
+            f"• lessons_path: <code>{result.lessons_path}</code>"
+            f"{warn_text}"
+        )
     
     async def _send_video_with_retry(self, user_id: int, video, caption: str = None, 
                                      width: int = None, height: int = None, 
@@ -183,6 +218,7 @@ class CourseBot:
         self.dp.message.register(self.handle_start, CommandStart())
         self.dp.message.register(self.handle_current_lesson, Command("lesson"))
         self.dp.message.register(self.handle_progress, Command("progress"))
+        self.dp.message.register(self.handle_sync_content, Command("sync_content"))
         # ВРЕМЕННАЯ КНОПКА ДЛЯ ПРОВЕРКИ УРОКОВ
         self.dp.message.register(self.handle_test_lessons, Command("test_lessons"))
         # НАВИГАТОР КУРСА
@@ -192,6 +228,7 @@ class CourseBot:
         logger.info(f"   - /start -> handle_start")
         logger.info(f"   - /lesson -> handle_current_lesson")
         logger.info(f"   - /progress -> handle_progress")
+        logger.info(f"   - /sync_content -> handle_sync_content")
         logger.info(f"   - /test_lessons -> handle_test_lessons")
         logger.info(f"   - /navigator -> handle_navigator")
         

@@ -49,6 +49,16 @@ class Config:
     
     # Database
     DATABASE_PATH: str = _get_env_value("DATABASE_PATH", "./data/course_platform.db")
+
+    # Content Sync (Google Drive)
+    # If configured, admins can run /sync_content to pull lessons/tasks/media from Drive
+    DRIVE_CONTENT_ENABLED: str = _get_env_value("DRIVE_CONTENT_ENABLED", "0")  # "1" to enable
+    DRIVE_ROOT_FOLDER_ID: str = _get_env_value("DRIVE_ROOT_FOLDER_ID", "")
+    # Provide one of these (preferred: JSON string; alternative: base64-encoded JSON)
+    GOOGLE_SERVICE_ACCOUNT_JSON: str = _get_env_value("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    GOOGLE_SERVICE_ACCOUNT_JSON_B64: str = _get_env_value("GOOGLE_SERVICE_ACCOUNT_JSON_B64", "")
+    # Where to store synced media relative to project root (/app in container)
+    DRIVE_MEDIA_DIR: str = _get_env_value("DRIVE_MEDIA_DIR", "data/content_media")
     
     # Course Settings
     COURSE_DURATION_DAYS: int = int(os.getenv("COURSE_DURATION_DAYS", "30"))
