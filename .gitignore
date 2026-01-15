@@ -45,6 +45,7 @@ quick_start_bots.py
 bot_logs.txt
 *.txt
 !requirements.txt
+!requirements-dev.txt
 !README.md
 !*.md
 
