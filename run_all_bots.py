@@ -15,6 +15,7 @@ from aiohttp import web
 import aiosqlite
 from bots.sales_bot import SalesBot
 from bots.course_bot import CourseBot
+from bots.admin_bot import AdminBot
 from core.config import Config
 from services.payment_service import PaymentService
 from core.models import Tariff
@@ -333,13 +334,15 @@ async def main():
         # Диагностика: проверяем, какие переменные установлены (без логирования самих токенов)
         sales_token_set = bool(Config.SALES_BOT_TOKEN)
         course_token_set = bool(Config.COURSE_BOT_TOKEN)
-        logger.info(f"📋 Проверка конфигурации: SALES_BOT_TOKEN={('✅ установлен' if sales_token_set else '❌ не установлен')}, COURSE_BOT_TOKEN={('✅ установлен' if course_token_set else '❌ не установлен')}")
+        admin_token_set = bool(Config.ADMIN_BOT_TOKEN)
+        logger.info(f"📋 Проверка конфигурации: SALES_BOT_TOKEN={('✅ установлен' if sales_token_set else '❌ не установлен')}, COURSE_BOT_TOKEN={('✅ установлен' if course_token_set else '❌ не установлен')}, ADMIN_BOT_TOKEN={('✅ установлен' if admin_token_set else '❌ не установлен')}")
         
         if not Config.validate():
             logger.error("❌ Неверная конфигурация: отсутствуют обязательные переменные окружения")
             logger.error("⚠️ Убедитесь, что в Railway Variables установлены:")
             logger.error("   - SALES_BOT_TOKEN")
             logger.error("   - COURSE_BOT_TOKEN")
+            logger.error("   - ADMIN_BOT_TOKEN (опционально)")
             logger.error("⚠️ HTTP сервер работает, но боты не могут запуститься")
             # Не выходим, чтобы healthcheck продолжал работать
             # Просто ждем бесконечно, чтобы контейнер не перезапускался
@@ -380,6 +383,20 @@ async def main():
             logger.error(f"❌ Ошибка при инициализации курс-бота: {e}", exc_info=True)
             # Не падаем, продолжаем
             logger.warning("⚠️ Продолжаем без курс-бота")
+            course_bot = None
+        
+        logger.info("Инициализация админ-бота...")
+        admin_bot = None
+        try:
+            if Config.ADMIN_BOT_TOKEN:
+                admin_bot = AdminBot()
+                logger.info("✅ Админ-бот инициализирован")
+                web_app["admin_bot"] = admin_bot
+            else:
+                logger.warning("⚠️ ADMIN_BOT_TOKEN не установлен, админ-бот не будет запущен")
+        except Exception as e:
+            logger.error(f"❌ Ошибка при инициализации админ-бота: {e}", exc_info=True)
+            logger.warning("⚠️ Продолжаем без админ-бота")
         
         # Запуск ботов параллельно (если они были инициализированы)
         tasks = []
@@ -390,6 +407,10 @@ async def main():
         if course_bot:
             logger.info("Запуск курс-бота...")
             tasks.append(asyncio.create_task(course_bot.start()))
+        
+        if admin_bot:
+            logger.info("Запуск админ-бота...")
+            tasks.append(asyncio.create_task(admin_bot.start()))
         
         if tasks:
             logger.info(f"✅ Запущено {len(tasks)} бот(ов). Все сервисы готовы к работе")
@@ -429,6 +450,12 @@ async def main():
                 await course_bot.stop()
             except Exception as e:
                 logger.error(f"Ошибка при остановке курс-бота: {e}")
+        
+        if admin_bot:
+            try:
+                await admin_bot.stop()
+            except Exception as e:
+                logger.error(f"Ошибка при остановке админ-бота: {e}")
         
         # Stop aiohttp server
         if web_runner:

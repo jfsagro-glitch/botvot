@@ -2789,18 +2789,49 @@ class CourseBot:
             f"✍️ <b>Ответ:</b>\n{message.text}"
         )
         
-        await self.bot.send_message(
-            Config.ADMIN_CHAT_ID,
-            admin_text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=f"💬 Ответить пользователю",
-                        callback_data=f"admin_reply:{assignment.assignment_id}"
-                    )
-                ]
-            ])
-        )
+        # Send to admin bot if configured, otherwise to admin chat
+        if Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID:
+            try:
+                from utils.admin_helpers import send_to_admin_bot
+                await send_to_admin_bot(
+                    admin_text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=f"💬 Ответить пользователю",
+                                callback_data=f"admin_reply:{assignment.assignment_id}"
+                            )
+                        ]
+                    ])
+                )
+            except Exception as e:
+                logger.error(f"Error sending to admin bot: {e}, falling back to admin chat")
+                # Fallback to admin chat
+                await self.bot.send_message(
+                    Config.ADMIN_CHAT_ID,
+                    admin_text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=f"💬 Ответить пользователю",
+                                callback_data=f"admin_reply:{assignment.assignment_id}"
+                            )
+                        ]
+                    ])
+                )
+        elif Config.ADMIN_CHAT_ID:
+            await self.bot.send_message(
+                Config.ADMIN_CHAT_ID,
+                admin_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=f"💬 Ответить пользователю",
+                            callback_data=f"admin_reply:{assignment.assignment_id}"
+                        )
+                    ]
+                ])
+            )
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
@@ -2901,9 +2932,27 @@ class CourseBot:
         if message.photo:
             await self.bot.send_photo(Config.ADMIN_CHAT_ID, message.photo[-1].file_id, caption=admin_text)
         elif message.video:
-            await self.bot.send_video(Config.ADMIN_CHAT_ID, message.video.file_id, caption=admin_text)
+            # Send to admin bot if configured
+            if Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID:
+                try:
+                    from utils.admin_helpers import send_to_admin_bot
+                    await send_to_admin_bot(admin_text, video_file_id=message.video.file_id)
+                except Exception as e:
+                    logger.error(f"Error sending to admin bot: {e}, falling back")
+                    await self.bot.send_video(Config.ADMIN_CHAT_ID, message.video.file_id, caption=admin_text)
+            elif Config.ADMIN_CHAT_ID:
+                await self.bot.send_video(Config.ADMIN_CHAT_ID, message.video.file_id, caption=admin_text)
         elif message.document:
-            await self.bot.send_document(Config.ADMIN_CHAT_ID, message.document.file_id, caption=admin_text)
+            # Send to admin bot if configured
+            if Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID:
+                try:
+                    from utils.admin_helpers import send_to_admin_bot
+                    await send_to_admin_bot(admin_text, document_file_id=message.document.file_id)
+                except Exception as e:
+                    logger.error(f"Error sending to admin bot: {e}, falling back")
+                    await self.bot.send_document(Config.ADMIN_CHAT_ID, message.document.file_id, caption=admin_text)
+            elif Config.ADMIN_CHAT_ID:
+                await self.bot.send_document(Config.ADMIN_CHAT_ID, message.document.file_id, caption=admin_text)
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
@@ -2966,43 +3015,38 @@ class CourseBot:
         # Форматируем вопрос для кураторов
         curator_message = await self.question_service.format_question_for_admin(question_data)
         
-        # Отправляем в группу кураторов (если настроена), иначе в админ-чат
-        target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
-        
-        if target_chat_id:
-            try:
-                # Отправляем вопрос в группу кураторов с кнопкой для ответа
-                await self.bot.send_message(
-                    target_chat_id,
-                    curator_message,
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="💬 Ответить",
-                                callback_data=f"curator_reply:{user_id}:{lesson_day}"
-                            )
-                        ]
-                    ])
+        # Send to admin bot if configured, otherwise to curator group or admin chat
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💬 Ответить",
+                    callback_data=f"curator_reply:{user_id}:{lesson_day}"
                 )
-                logger.info(f"✅ Question sent to curator group from user {user_id}")
+            ]
+        ])
+        
+        if Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID:
+            try:
+                from utils.admin_helpers import send_to_admin_bot
+                await send_to_admin_bot(curator_message, reply_markup=keyboard)
+                logger.info(f"✅ Question sent to admin bot from user {user_id}")
             except Exception as e:
-                logger.error(f"❌ Error sending question to curator group: {e}")
-                # Fallback: отправляем в админ-чат
-                if Config.ADMIN_CHAT_ID:
-                    await self.bot.send_message(
-                        Config.ADMIN_CHAT_ID,
-                        curator_message,
-                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text="💬 Ответить",
-                                    callback_data=f"curator_reply:{user_id}:{lesson_day}"
-                                )
-                            ]
-                        ])
-                    )
+                logger.error(f"Error sending to admin bot: {e}, falling back")
+                # Fallback to curator group or admin chat
+                target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
+                if target_chat_id:
+                    await self.bot.send_message(target_chat_id, curator_message, reply_markup=keyboard)
         else:
-            logger.warning("⚠️ No curator group or admin chat configured!")
+            # Send to curator group or admin chat
+            target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
+            if target_chat_id:
+                try:
+                    await self.bot.send_message(target_chat_id, curator_message, reply_markup=keyboard)
+                    logger.info(f"✅ Question sent to curator group from user {user_id}")
+                except Exception as e:
+                    logger.error(f"❌ Error sending question: {e}")
+            else:
+                logger.warning("⚠️ No curator group or admin chat configured!")
         
         persistent_keyboard = self._create_persistent_keyboard()
         persistent_keyboard = self._create_persistent_keyboard()

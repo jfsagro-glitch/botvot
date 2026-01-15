@@ -2527,40 +2527,38 @@ class SalesBot:
         # Target group per settings (supports web.telegram link formats)
         target_chat_id = await self._normalize_curator_chat_id()
         
-        if target_chat_id:
-            try:
-                # Отправляем вопрос в группу кураторов с кнопкой для ответа
-                await self.bot.send_message(
-                    target_chat_id,
-                    curator_message,
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="💬 Ответить",
-                                callback_data=f"curator_reply:{user_id}:0"
-                            )
-                        ]
-                    ])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💬 Ответить",
+                    callback_data=f"curator_reply:{user_id}:0"
                 )
-                logger.info(f"✅ Question from sales bot sent to curator group from user {user_id}")
+            ]
+        ])
+        
+        # Send to admin bot if configured
+        if Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID:
+            try:
+                from utils.admin_helpers import send_to_admin_bot
+                await send_to_admin_bot(curator_message, reply_markup=keyboard)
+                logger.info(f"✅ Question from sales bot sent to admin bot from user {user_id}")
             except Exception as e:
-                logger.error(f"❌ Error sending question to curator group: {e}")
-                # Fallback: отправляем в админ-чат
-                if Config.ADMIN_CHAT_ID:
-                    await self.bot.send_message(
-                        Config.ADMIN_CHAT_ID,
-                        curator_message,
-                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text="💬 Ответить",
-                                    callback_data=f"curator_reply:{user_id}:0"
-                                )
-                            ]
-                        ])
-                    )
+                logger.error(f"Error sending to admin bot: {e}, falling back")
+                # Fallback to curator group or admin chat
+                target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
+                if target_chat_id:
+                    await self.bot.send_message(target_chat_id, curator_message, reply_markup=keyboard)
         else:
-            logger.warning("⚠️ No curator group or admin chat configured!")
+            # Send to curator group or admin chat
+            target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
+            if target_chat_id:
+                try:
+                    await self.bot.send_message(target_chat_id, curator_message, reply_markup=keyboard)
+                    logger.info(f"✅ Question from sales bot sent to curator group from user {user_id}")
+                except Exception as e:
+                    logger.error(f"❌ Error sending question: {e}")
+            else:
+                logger.warning("⚠️ No curator group or admin chat configured!")
         
         await message.answer(
             "✅ <b>Сообщение отправлено!</b>\n\n"

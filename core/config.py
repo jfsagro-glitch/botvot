@@ -30,6 +30,7 @@ class Config:
     # Railway устанавливает переменные в os.environ
     SALES_BOT_TOKEN: str = _get_env_value("SALES_BOT_TOKEN", "")
     COURSE_BOT_TOKEN: str = _get_env_value("COURSE_BOT_TOKEN", "")
+    ADMIN_BOT_TOKEN: str = _get_env_value("ADMIN_BOT_TOKEN", "")
     
     # Admin Chat ID (for assignment feedback)
     ADMIN_CHAT_ID: int = int(_get_env_value("ADMIN_CHAT_ID", "0") or "0")
