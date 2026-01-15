@@ -342,13 +342,16 @@ class CourseBot:
             reply_markup=persistent_keyboard
         )
         
-        # Log session start
+        # Log session start (non-blocking, don't fail if DB not ready)
         try:
             from datetime import datetime
+            # Ensure DB is connected before logging
+            await self.db._ensure_connection()
             await self.db.log_user_session(user_id, "course", datetime.utcnow())
             await self.db.log_user_activity(user_id, "course", "start", "main")
         except Exception as e:
-            logger.warning(f"Failed to log user activity: {e}")
+            # Don't fail the request if logging fails
+            logger.debug(f"Failed to log user activity (non-critical): {e}")
     
     async def handle_current_lesson(self, message: Message):
         """Handle /lesson command - show current lesson."""

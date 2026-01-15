@@ -791,13 +791,16 @@ class SalesBot:
         logger.info("=" * 60)
         
         try:
-            # Log session start
+            # Log session start (non-blocking, don't fail if DB not ready)
             try:
                 from datetime import datetime
+                # Ensure DB is connected before logging
+                await self.db._ensure_connection()
                 await self.db.log_user_session(message.from_user.id, "sales", datetime.utcnow())
                 await self.db.log_user_activity(message.from_user.id, "sales", "start", "main")
             except Exception as e:
-                logger.warning(f"Failed to log user activity: {e}")
+                # Don't fail the request if logging fails
+                logger.debug(f"Failed to log user activity (non-critical): {e}")
             
             # Отправляем анимированное сообщение
             await send_typing_action(self.bot, message.chat.id, 0.8)
