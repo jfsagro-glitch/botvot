@@ -481,11 +481,16 @@ async def main():
 
 if __name__ == "__main__":
     try:
+        logger.info("=" * 60)
+        logger.info("🚀 Запуск приложения...")
+        logger.info("=" * 60)
         # Используем asyncio.run для правильного запуска
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Завершение работы...")
     except Exception as e:
         logger.error(f"❌ Фатальная ошибка при запуске: {e}", exc_info=True)
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         sys.exit(1)
 
