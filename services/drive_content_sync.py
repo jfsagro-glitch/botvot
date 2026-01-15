@@ -58,11 +58,161 @@ class DriveContentSync:
     def _admin_ready(self) -> Tuple[bool, str]:
         if not self.enabled:
             return False, "DRIVE_CONTENT_ENABLED=0"
-        if not self.root_folder_id:
-            return False, "DRIVE_ROOT_FOLDER_ID is empty"
+        if not self.root_folder_id and not (Config.DRIVE_MASTER_DOC_ID or "").strip():
+            return False, "Set DRIVE_ROOT_FOLDER_ID (folders mode) or DRIVE_MASTER_DOC_ID (single-doc mode)"
         if not (Config.GOOGLE_SERVICE_ACCOUNT_JSON or Config.GOOGLE_SERVICE_ACCOUNT_JSON_B64):
             return False, "Google service account creds are missing (GOOGLE_SERVICE_ACCOUNT_JSON[_B64])"
         return True, "ok"
+
+    @staticmethod
+    def _extract_drive_file_ids(text: str) -> List[str]:
+        """
+        Extract Drive file IDs from common URL forms:
+          - https://drive.google.com/file/d/<id>/view
+          - https://drive.google.com/open?id=<id>
+          - https://docs.google.com/document/d/<id>/edit
+          - https://drive.google.com/uc?id=<id>
+        """
+        if not text:
+            return []
+        ids = set()
+        patterns = [
+            r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]{10,})",
+            r"https?://drive\.google\.com/open\?id=([a-zA-Z0-9_-]{10,})",
+            r"https?://drive\.google\.com/uc\?id=([a-zA-Z0-9_-]{10,})",
+            r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]{10,})",
+        ]
+        for p in patterns:
+            for m in re.findall(p, text):
+                ids.add(m)
+        return list(ids)
+
+    @staticmethod
+    def _split_master_doc(text: str) -> Dict[int, Dict[str, str]]:
+        """
+        Split a master doc (plain text export) into per-day blocks.
+
+        Expected markers in doc (Russian or English):
+          - "День 0" ... "День 30"
+          - "Day 0" ... "Day 30"
+
+        Inside each day block:
+          - Optional title line: "Заголовок: ..." or "Title: ..."
+          - Task starts at a line beginning with "Задание:" / "Task:"
+        """
+        blocks: Dict[int, List[str]] = {}
+        current_day: Optional[int] = None
+
+        lines = (text or "").splitlines()
+        day_header_re = re.compile(r"^\s*(?:День|Day)\s+(\d{1,2})\s*(?::\s*(.*))?$", re.IGNORECASE)
+
+        for line in lines:
+            m = day_header_re.match(line)
+            if m:
+                day = int(m.group(1))
+                if 0 <= day <= 30:
+                    current_day = day
+                    blocks.setdefault(day, [])
+                    # If header has title after colon, store it as first line hint
+                    title_hint = (m.group(2) or "").strip()
+                    if title_hint:
+                        blocks[day].append(f"Заголовок: {title_hint}")
+                    continue
+            if current_day is not None:
+                blocks[current_day].append(line)
+
+        out: Dict[int, Dict[str, str]] = {}
+        for day, bl in blocks.items():
+            raw = "\n".join(bl).strip()
+            if not raw:
+                continue
+
+            title = ""
+            lesson = raw
+            task = ""
+
+            # title line
+            for ln in bl[:10]:
+                mm = re.match(r"^\s*(?:Заголовок|Title)\s*:\s*(.+)\s*$", ln, re.IGNORECASE)
+                if mm:
+                    title = mm.group(1).strip()
+                    break
+
+            # split task
+            task_re = re.compile(r"^\s*(?:Задание|Task)\s*:\s*$", re.IGNORECASE)
+            parts_lesson: List[str] = []
+            parts_task: List[str] = []
+            in_task = False
+            for ln in bl:
+                if task_re.match(ln):
+                    in_task = True
+                    continue
+                (parts_task if in_task else parts_lesson).append(ln)
+            lesson = "\n".join(parts_lesson).strip()
+            task = "\n".join(parts_task).strip()
+
+            out[day] = {"title": title, "lesson": lesson, "task": task}
+
+        return out
+
+    def _sync_from_master_doc(self, drive, warnings: List[str]) -> Tuple[Dict[str, Any], int]:
+        master_id = (Config.DRIVE_MASTER_DOC_ID or "").strip()
+        if not master_id:
+            raise RuntimeError("DRIVE_MASTER_DOC_ID is empty")
+
+        # Download master doc text
+        master_text = self._download_text_file(drive, master_id, GOOGLE_DOC_MIME)
+        master_text, w = self._sanitize_telegram_html(master_text or "")
+        if w:
+            warnings.extend([f"master_doc: {x}" for x in w])
+
+        day_map = self._split_master_doc(master_text)
+        if not day_map:
+            raise RuntimeError("Could not find any 'День N' sections in master doc")
+
+        project_root = Path.cwd()
+        media_root = (project_root / self.media_dir).resolve()
+        media_downloaded = 0
+
+        compiled: Dict[str, Any] = {}
+        for day, data in sorted(day_map.items(), key=lambda x: x[0]):
+            title = (data.get("title") or "").strip() or f"День {day}"
+            lesson_text = (data.get("lesson") or "").strip()
+            task_text = (data.get("task") or "").strip()
+
+            # Optional: download Drive-linked media referenced in the text/task
+            media_items: List[Dict[str, Any]] = []
+            for fid in self._extract_drive_file_ids(lesson_text + "\n" + task_text):
+                try:
+                    meta = drive.files().get(fileId=fid, fields="id,name,mimeType").execute()
+                    mt = (meta.get("mimeType") or "").lower()
+                    name = (meta.get("name") or f"file_{fid}").strip()
+                    if mt.startswith("image/"):
+                        media_type = "photo"
+                    elif mt.startswith("video/"):
+                        media_type = "video"
+                    else:
+                        continue
+                    safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
+                    dest = media_root / f"day_{day:02d}" / safe_name
+                    self._download_binary_file(drive, fid, dest)
+                    media_downloaded += 1
+                    rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
+                    media_items.append({"type": media_type, "path": rel_path})
+                except Exception as e:
+                    warnings.append(f"day {day}: failed to download linked media ({fid}): {e}")
+
+            entry: Dict[str, Any] = {
+                "day_number": day,
+                "title": title,
+                "text": lesson_text,
+                "task": task_text,
+            }
+            if media_items:
+                entry["media"] = media_items
+            compiled[str(day)] = entry
+
+        return compiled, media_downloaded
 
     def _build_drive_client(self):
         # Lazy import to avoid hard dependency if feature disabled
@@ -301,6 +451,23 @@ class DriveContentSync:
 
         drive = self._build_drive_client()
         warnings: List[str] = []
+
+        # Single-doc mode
+        if (Config.DRIVE_MASTER_DOC_ID or "").strip():
+            compiled, media_downloaded = self._sync_from_master_doc(drive, warnings)
+            target = self._target_lessons_path()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(".json.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(compiled, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, target)
+            logger.info(f"✅ Drive master-doc sync wrote {len(compiled)} lessons to {target}")
+            return SyncResult(
+                days_synced=len(compiled),
+                lessons_path=str(target),
+                media_files_downloaded=media_downloaded,
+                warnings=warnings,
+            )
 
         root_children = self._list_children(drive, self.root_folder_id)
         day_folders: List[Tuple[int, Dict[str, Any]]] = []
