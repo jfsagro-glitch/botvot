@@ -34,7 +34,7 @@ from services.payment_service import PaymentService
 from services.community_service import CommunityService
 from services.question_service import QuestionService
 from services.lesson_loader import LessonLoader
-from utils.telegram_helpers import create_tariff_keyboard, format_tariff_description, create_persistent_keyboard
+from utils.telegram_helpers import create_tariff_keyboard, create_programs_tariff_keyboard, format_tariff_description, create_persistent_keyboard
 from utils.premium_ui import (
     send_animated_message, send_typing_action,
     format_premium_header, format_premium_section, create_premium_separator,
@@ -79,6 +79,8 @@ class SalesBot:
         self._talk_mode_users: set[int] = set()
         # Remember action to continue after legal consent
         self._pending_after_legal: dict[int, dict] = {}
+        # Tracks user's last selected program in sales flow ("online"/"offline")
+        self._selected_program: dict[int, str] = {}
         
         # Initialize lesson loader with error handling
         try:
@@ -264,6 +266,9 @@ class SalesBot:
 
         kind = ctx.get("kind")
         if kind == "pay":
+            prog = ctx.get("program")
+            if prog in ("online", "offline"):
+                self._selected_program[user_id] = prog
             tariff = Tariff(ctx["tariff"])
             await self._start_payment_flow(message, user, tariff)
             return
@@ -543,6 +548,7 @@ class SalesBot:
             tariff=tariff,
             referral_partner_id=user.referral_partner_id,
             customer_email=getattr(user, "email", None),
+            course_program=self._selected_program.get(user.user_id),
         )
         payment_id = payment_info["payment_id"]
         payment_url = payment_info["payment_url"]
@@ -634,8 +640,13 @@ class SalesBot:
             kind = pending.get("kind")
             if kind == "pay":
                 tariff_value = pending.get("tariff")
+                program = pending.get("program")
                 try:
-                    tariff = Tariff(str(tariff_value))
+                    tv = str(tariff_value)
+                    # allow "online:basic" format (backward compatible)
+                    if ":" in tv:
+                        tv = tv.split(":")[-1]
+                    tariff = Tariff(tv)
                 except Exception:
                     tariff = None
                 if tariff is not None:
@@ -647,13 +658,17 @@ class SalesBot:
                         callback.from_user.last_name
                     )
                     if self._receipt_required() and not getattr(user, "email", None):
-                        self._awaiting_email[user_id] = {"kind": "pay", "tariff": tariff.value}
+                        self._awaiting_email[user_id] = {"kind": "pay", "tariff": tariff.value, "program": program}
+                        if program in ("online", "offline"):
+                            self._selected_program[user_id] = program
                         await callback.message.answer(
                             "✅ Спасибо! Согласие принято.\n\n"
                             "✉️ Для оплаты нужен email для отправки чека.\n"
                             "Пожалуйста, отправьте ваш email одним сообщением (пример: name@gmail.com)."
                         )
                         return
+                    if program in ("online", "offline"):
+                        self._selected_program[user_id] = program
                     await callback.message.answer("✅ Спасибо! Согласие принято. Перехожу к оплате…")
                     await self._start_payment_flow(callback.message, user, tariff)
                     return
@@ -743,7 +758,7 @@ class SalesBot:
             
             # Если запрошены тарифы - показываем только тарифы
             if tariffs_requested:
-                await self.handle_keyboard_select_tariff(message)
+                await self._show_program_tariff_menu(message)
                 return
             
             # Если запрошен апгрейд и пользователь имеет доступ - показываем меню апгрейда
@@ -756,7 +771,7 @@ class SalesBot:
                     "❌ У вас нет активного доступа к курсу.\n\n"
                     "Для обновления тарифа сначала необходимо приобрести доступ к курсу."
                 )
-                await self._show_course_info(message, referral_partner_id, first_name)
+                await self._show_program_tariff_menu(message)
                 return
             
             # Check if user already has access
@@ -802,19 +817,30 @@ class SalesBot:
                 await send_animated_message(self.bot, message.chat.id, "", keyboard, 0.5)
                 return
             
-            # Show course description and tariffs
-            logger.info("Showing course info...")
-            # Устанавливаем постоянную клавиатуру
+            # No access -> show compact start menu (no duplicated long course info)
+            logger.info("Showing program/tariff start menu...")
             persistent_keyboard = create_persistent_keyboard()
             await message.answer("Используйте кнопки внизу для навигации 👇", reply_markup=persistent_keyboard)
-            await self._show_course_info(message, referral_partner_id, first_name)
-            logger.info("Course info shown successfully")
+            await self._show_program_tariff_menu(message)
+            logger.info("Program/tariff menu shown successfully")
         except Exception as e:
             logger.error(f"❌ Error in handle_start: {e}", exc_info=True)
             try:
                 await message.answer("❌ Произошла ошибка. Попробуйте позже.")
             except Exception as send_error:
                 logger.error(f"Error sending error message: {send_error}")
+
+    async def _show_program_tariff_menu(self, message: Message):
+        """Compact start menu: greeting + programs/tariffs (no long course description)."""
+        text = (
+            "Привет! Я помогу тебе записаться на курс по искусству задавать вопросы и получать ответы.\n\n"
+            "Выбери программу и тариф:\n\n"
+            "<b>онлайн</b>\n"
+            "ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ\n\n"
+            "<b>офлайн</b>\n"
+            "ГЛАВНЫЙ ГЕРОЙ"
+        )
+        await message.answer(text, reply_markup=create_programs_tariff_keyboard(), disable_web_page_preview=True)
     
     async def handle_help(self, message: Message):
         """Handle /help command with premium styling."""
@@ -1093,17 +1119,17 @@ class SalesBot:
                     logger.error(f"   ❌ Failed to send error message: {send_error}")
                 return
             
-            parts = callback.data.split(":", 1)  # Разделяем только на 2 части
-            if len(parts) < 2:
-                logger.error(f"   ❌ Invalid callback data format: '{callback.data}' (split failed)")
-                try:
-                    await callback.message.answer("❌ Ошибка: неверный формат данных. Попробуйте снова.")
-                except Exception as send_error:
-                    logger.error(f"   ❌ Failed to send error message: {send_error}")
-                return
-            
-            tariff_str = parts[1].strip().lower()
-            logger.info(f"   Parsed tariff string: '{tariff_str}'")
+            # Supports both formats:
+            # - tariff:<tariff>
+            # - tariff:<program>:<tariff>
+            raw = callback.data[len("tariff:"):].strip()
+            program = None
+            tariff_str = raw.strip().lower()
+            if ":" in raw:
+                maybe_program, maybe_tariff = raw.split(":", 1)
+                program = maybe_program.strip().lower() or None
+                tariff_str = maybe_tariff.strip().lower()
+            logger.info(f"   Parsed program='{program}', tariff='{tariff_str}'")
             
             try:
                 tariff = Tariff(tariff_str)
@@ -1117,19 +1143,15 @@ class SalesBot:
                     logger.error(f"   ❌ Failed to send error message: {send_error}")
                 return
             
-            # Проверяем, что выбранный тариф доступен
-            available_tariffs = [Tariff.BASIC, Tariff.FEEDBACK, Tariff.PRACTIC]
-            if tariff not in available_tariffs:
-                logger.warning(f"   ⚠️ Tariff {tariff.value} not in available list: {[t.value for t in available_tariffs]}")
+            # Remember selected program for this user if provided
+            if program in ("online", "offline"):
+                self._selected_program[callback.from_user.id] = program
+
+            # Allow tariffs that have a configured price
+            if tariff not in PaymentService.TARIFF_PRICES:
+                logger.warning(f"   ⚠️ Tariff {tariff.value} not priced/configured")
                 try:
-                    await callback.message.answer(
-                        "❌ Этот тариф временно недоступен.\n\n"
-                        "Доступные тарифы:\n"
-                        "• 📚 БАЗОВЫЙ - 5000₽\n"
-                        "• 💬 С ОБРАТНОЙ СВЯЗЬЮ - 10000₽\n"
-                        "• 🎯 PRACTIC - 20000₽\n\n"
-                        "Используйте /start для выбора тарифа."
-                    )
+                    await callback.message.answer("❌ Этот тариф временно недоступен. Используйте /start для выбора тарифа.")
                 except Exception as send_error:
                     logger.error(f"   ❌ Failed to send error message: {send_error}")
                 return
@@ -1199,11 +1221,13 @@ class SalesBot:
             
             # Создаем клавиатуру с кнопками
             try:
+                prog = self._selected_program.get(callback.from_user.id)
+                pay_cb = f"pay:{tariff.value}" if not prog else f"pay:{prog}:{tariff.value}"
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [
                         InlineKeyboardButton(
                             text="🏧 Оплатить",
-                            callback_data=f"pay:{tariff.value}"
+                            callback_data=pay_cb
                         )
                     ],
                     [
@@ -1302,7 +1326,7 @@ class SalesBot:
             first_name = callback.from_user.first_name
             
             # Показываем список тарифов снова
-            await self._show_course_info(callback.message, None, first_name)
+            await self._show_program_tariff_menu(callback.message)
             
         except Exception as e:
             logger.error(f"❌ Error in handle_back_to_tariffs: {e}", exc_info=True)
@@ -1585,15 +1609,33 @@ class SalesBot:
             if not await self._ensure_legal_consent(callback.message.chat.id, callback.from_user.id):
                 # Remember desired payment action so we can continue after consent
                 try:
-                    tariff_str_pending = callback.data.split(":")[1]
+                    # supports pay:<tariff> and pay:<program>:<tariff>
+                    tariff_str_pending = callback.data[len("pay:"):]
                 except Exception:
                     tariff_str_pending = None
                 if tariff_str_pending:
-                    self._pending_after_legal[callback.from_user.id] = {"kind": "pay", "tariff": tariff_str_pending}
+                    prog = None
+                    tv = tariff_str_pending.strip()
+                    if ":" in tv:
+                        prog, tv = tv.split(":", 1)
+                        prog = (prog or "").strip().lower() or None
+                        tv = (tv or "").strip().lower()
+                    self._pending_after_legal[callback.from_user.id] = {"kind": "pay", "tariff": tv, "program": prog}
+                    if prog in ("online", "offline"):
+                        self._selected_program[callback.from_user.id] = prog
                 return
             
-            tariff_str = callback.data.split(":")[1]
+            # supports pay:<tariff> and pay:<program>:<tariff>
+            rest = callback.data[len("pay:"):]
+            prog = None
+            tariff_str = rest.strip()
+            if ":" in rest:
+                prog, tariff_str = rest.split(":", 1)
+                prog = (prog or "").strip().lower() or None
+                tariff_str = (tariff_str or "").strip().lower()
             tariff = Tariff(tariff_str)
+            if prog in ("online", "offline"):
+                self._selected_program[callback.from_user.id] = prog
             
             user_id = callback.from_user.id
             user = await self.user_service.get_or_create_user(
@@ -1607,7 +1649,7 @@ class SalesBot:
 
             # Receipt/email required for some YooKassa shops
             if self._receipt_required() and not getattr(user, "email", None):
-                self._awaiting_email[user_id] = {"kind": "pay", "tariff": tariff.value}
+                self._awaiting_email[user_id] = {"kind": "pay", "tariff": tariff.value, "program": self._selected_program.get(user_id)}
                 await callback.message.answer(
                     "✉️ Для оплаты нужен email для отправки чека.\n"
                     "Пожалуйста, отправьте ваш email одним сообщением (пример: name@gmail.com)."
@@ -1620,6 +1662,7 @@ class SalesBot:
                 tariff=tariff,
                 referral_partner_id=user.referral_partner_id,
                 customer_email=getattr(user, "email", None),
+                course_program=self._selected_program.get(user_id),
             )
             
             payment_id = payment_info["payment_id"]
@@ -1898,26 +1941,7 @@ class SalesBot:
     
     async def handle_keyboard_select_tariff(self, message: Message):
         """Handle 'Выбор тарифа' button from persistent keyboard - show only tariff descriptions."""
-        # Показываем только описание тарифов
-        tariff_message = (
-            f"{create_premium_separator()}\n"
-            f"💎 <b>ВЫБОР ТАРИФА</b>\n"
-            f"{create_premium_separator()}\n\n"
-            f"Выберите тариф, который подходит вам:\n\n"
-        )
-        
-        # Добавляем описание каждого тарифа
-        tariff_message += format_tariff_description(Tariff.BASIC) + "\n\n"
-        tariff_message += format_tariff_description(Tariff.FEEDBACK) + "\n\n"
-        tariff_message += format_tariff_description(Tariff.PRACTIC) + "\n\n"
-        
-        tariff_message += (
-            f"{create_premium_separator()}\n\n"
-            f"💳 <b>Выберите тариф для оплаты:</b>"
-        )
-        
-        keyboard = create_tariff_keyboard()
-        await message.answer(tariff_message, reply_markup=keyboard)
+        await self._show_program_tariff_menu(message)
     
     async def handle_keyboard_about_course(self, message: Message):
         """Handle 'О курсе' button from persistent keyboard."""
