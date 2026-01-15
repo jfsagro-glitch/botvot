@@ -27,6 +27,8 @@ import logging
 import os
 import re
 import html
+import shutil
+from datetime import datetime
 from html.parser import HTMLParser
 from dataclasses import dataclass
 from pathlib import Path
@@ -444,6 +446,25 @@ class DriveContentSync:
         db_path = Path(Config.DATABASE_PATH)
         return db_path.parent / "lessons.json"
 
+    @staticmethod
+    def _backup_file_if_exists(target: Path) -> Optional[Path]:
+        """
+        Create a timestamped backup copy next to the target, if it exists.
+        Returns backup path if created.
+        """
+        try:
+            if not target.exists() or not target.is_file():
+                return None
+            backups_dir = target.parent / "content_backups"
+            backups_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+            backup_path = backups_dir / f"{target.stem}.{ts}{target.suffix}"
+            shutil.copy2(target, backup_path)
+            return backup_path
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to backup {target}: {e}")
+            return None
+
     def sync_now(self) -> SyncResult:
         ok, reason = self._admin_ready()
         if not ok:
@@ -457,6 +478,7 @@ class DriveContentSync:
             compiled, media_downloaded = self._sync_from_master_doc(drive, warnings)
             target = self._target_lessons_path()
             target.parent.mkdir(parents=True, exist_ok=True)
+            self._backup_file_if_exists(target)
             tmp = target.with_suffix(".json.tmp")
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(compiled, f, ensure_ascii=False, indent=2)
@@ -585,6 +607,7 @@ class DriveContentSync:
 
         target = self._target_lessons_path()
         target.parent.mkdir(parents=True, exist_ok=True)
+        self._backup_file_if_exists(target)
         tmp = target.with_suffix(".json.tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(compiled, f, ensure_ascii=False, indent=2)
