@@ -26,6 +26,8 @@ import json
 import logging
 import os
 import re
+import html
+from html.parser import HTMLParser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
@@ -85,7 +87,7 @@ class DriveContentSync:
         Accepts: day_1, day-01, 01, 1, День 1, etc.
         """
         name = (name or "").strip()
-        m = re.search(r"(?i)(?:day[_-]?|день\\s*)?(\\d{1,2})\\b", name)
+        m = re.search(r"(?i)(?:day[_-]?|день\s*)?(\d{1,2})\b", name)
         if not m:
             return None
         day = int(m.group(1))
@@ -148,6 +150,113 @@ class DriveContentSync:
         with open(tmp, "wb") as f:
             f.write(fh.getvalue())
         os.replace(tmp, dest_path)
+
+    @staticmethod
+    def _sanitize_telegram_html(text: str) -> Tuple[str, List[str]]:
+        """
+        Telegram HTML is a strict subset. Editors will type tags directly in Google Docs.
+        This sanitizer keeps only safe Telegram tags and escapes everything else.
+
+        Allowed tags (Telegram HTML): b/strong, i/em, u/ins, s/strike/del, code, pre,
+        a (href only), tg-spoiler, blockquote.
+        Also supports span class="tg-spoiler" (Telegram spoiler).
+        """
+        warnings: List[str] = []
+
+        allowed = {
+            "b", "strong",
+            "i", "em",
+            "u", "ins",
+            "s", "strike", "del",
+            "code", "pre",
+            "a",
+            "tg-spoiler",
+            "blockquote",
+            "span",
+        }
+
+        class _Sanitizer(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=False)
+                self.out: List[str] = []
+
+            def handle_data(self, data: str) -> None:
+                self.out.append(data)
+
+            def handle_entityref(self, name: str) -> None:
+                self.out.append(f"&{name};")
+
+            def handle_charref(self, name: str) -> None:
+                self.out.append(f"&#{name};")
+
+            def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+                tag_l = (tag or "").lower()
+                if tag_l not in allowed:
+                    warnings.append(f"removed tag <{tag}>")
+                    self.out.append(html.escape(f"<{tag}>"))
+                    return
+
+                if tag_l == "a":
+                    href = ""
+                    for k, v in attrs:
+                        if (k or "").lower() == "href" and v:
+                            href = v
+                            break
+                    if not href:
+                        warnings.append("a tag without href removed")
+                        self.out.append(html.escape("<a>"))
+                        return
+                    safe_href = href.replace("\"", "&quot;")
+                    self.out.append(f"<a href=\"{safe_href}\">")
+                    return
+
+                if tag_l == "span":
+                    # allow only spoiler span
+                    cls = ""
+                    for k, v in attrs:
+                        if (k or "").lower() == "class" and v:
+                            cls = v
+                            break
+                    if cls != "tg-spoiler":
+                        warnings.append("span tag without class=tg-spoiler removed")
+                        self.out.append(html.escape("<span>"))
+                        return
+                    self.out.append("<span class=\"tg-spoiler\">")
+                    return
+
+                # other allowed tags with no attrs
+                self.out.append(f"<{tag_l}>")
+
+            def handle_endtag(self, tag: str) -> None:
+                tag_l = (tag or "").lower()
+                if tag_l not in allowed:
+                    self.out.append(html.escape(f"</{tag}>"))
+                    return
+                if tag_l == "strong":
+                    tag_l = "b"
+                if tag_l == "em":
+                    tag_l = "i"
+                if tag_l == "ins":
+                    tag_l = "u"
+                if tag_l == "strike":
+                    tag_l = "s"
+                self.out.append(f"</{tag_l}>")
+
+        parser = _Sanitizer()
+        try:
+            parser.feed(text or "")
+            parser.close()
+        except Exception as e:
+            # If parsing fails, escape everything to avoid Telegram parse errors
+            return html.escape(text or ""), [f"html parse error: {e}"]
+
+        sanitized = "".join(parser.out)
+
+        # If someone typed "1 < 2" it could be interpreted as a tag start; best-effort fix:
+        # escape any remaining "<" that doesn't look like a tag start.
+        sanitized = re.sub(r"<(?!/?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|tg-spoiler|blockquote|span)\b)", "&lt;", sanitized)
+
+        return sanitized, warnings
 
     @staticmethod
     def _pick_named(files: List[Dict[str, Any]], base: str) -> Optional[Dict[str, Any]]:
@@ -237,6 +346,15 @@ class DriveContentSync:
             task_text = ""
             if task_file:
                 task_text = self._download_text_file(drive, task_file["id"], task_file.get("mimeType", ""))
+
+            # Telegram HTML sanitizer (editors type tags directly in Google Docs)
+            lesson_text, w1 = self._sanitize_telegram_html(lesson_text or "")
+            if w1:
+                warnings.extend([f"day {day}: {w}" for w in w1])
+            if task_text:
+                task_text, w2 = self._sanitize_telegram_html(task_text or "")
+                if w2:
+                    warnings.extend([f"day {day}: {w}" for w in w2])
 
             meta: Dict[str, Any] = {}
             if meta_file and (meta_file.get("name") or "").lower().endswith(".json"):
