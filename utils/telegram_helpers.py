@@ -82,33 +82,16 @@ def create_tariff_keyboard() -> InlineKeyboardMarkup:
 
 def create_programs_tariff_keyboard() -> InlineKeyboardMarkup:
     """
-    Start menu keyboard: choose tariff for one of two programs (online/offline).
-
-    Callback format (backward-compatible with existing handlers):
-      - tariff:<program>:<tariff>
-        where program in {"online","offline"} and tariff in Tariff enum values.
+    Start menu keyboard: two URL buttons (open sites immediately) + tariff info buttons.
     """
-    basic_price = _TARIFF_PRICE_MAP.get(Tariff.BASIC, 0)
-    feedback_price = _TARIFF_PRICE_MAP.get(Tariff.FEEDBACK, 0)
-    premium_price = _TARIFF_PRICE_MAP.get(Tariff.PREMIUM, 0)
-    practic_price = _TARIFF_PRICE_MAP.get(Tariff.PRACTIC, 0)
-
-    landing_url = "https://sites.google.com/view/nikitinartem/education/main-hero"
+    online_url = "https://sites.google.com/view/nikitinartem/education/questions"
+    offline_url = "https://sites.google.com/view/nikitinartem/education/main-hero"
 
     return InlineKeyboardMarkup(inline_keyboard=[
-        # ONLINE: 3 tariffs
-        [InlineKeyboardButton(text=f"онлайн · BASIC — {basic_price:.0f}₽", callback_data="tariff:online:basic")],
-        [InlineKeyboardButton(text=f"онлайн · FEEDBACK — {feedback_price:.0f}₽", callback_data="tariff:online:feedback")],
-        [InlineKeyboardButton(text=f"онлайн · PRACTIC — {practic_price:.0f}₽", callback_data="tariff:online:practic")],
-
-        # OFFLINE: 4 tariffs
-        [InlineKeyboardButton(text=f"офлайн · BASIC — {basic_price:.0f}₽", callback_data="tariff:offline:basic")],
-        [InlineKeyboardButton(text=f"офлайн · FEEDBACK — {feedback_price:.0f}₽", callback_data="tariff:offline:feedback")],
-        [InlineKeyboardButton(text=f"офлайн · PREMIUM — {premium_price:.0f}₽", callback_data="tariff:offline:premium")],
-        [InlineKeyboardButton(text=f"офлайн · PRACTIC — {practic_price:.0f}₽", callback_data="tariff:offline:practic")],
-
-        # Links / info
-        [InlineKeyboardButton(text="🔗 Лендинг «Главный герой»", url=landing_url)],
+        [InlineKeyboardButton(text="онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ", url=online_url)],
+        [InlineKeyboardButton(text="Тарифы онлайн", callback_data="sales:tariffs:online")],
+        [InlineKeyboardButton(text="офлайн · ГЛАВНЫЙ ГЕРОЙ", url=offline_url)],
+        [InlineKeyboardButton(text="Тарифы офлайн", callback_data="sales:tariffs:offline")],
         [InlineKeyboardButton(text="📘 О курсе", callback_data="sales:about_course")],
     ])
 

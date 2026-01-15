@@ -186,6 +186,8 @@ class SalesBot:
         self.dp.callback_query.register(self.handle_cancel, F.data == "cancel")
         self.dp.callback_query.register(self.handle_talk_to_human, F.data == "sales:talk_to_human")
         self.dp.callback_query.register(self.handle_talk_to_human_stop, F.data == "sales:talk_to_human:stop")
+        self.dp.callback_query.register(self.handle_show_tariffs_online, F.data == "sales:tariffs:online")
+        self.dp.callback_query.register(self.handle_show_tariffs_offline, F.data == "sales:tariffs:offline")
         self.dp.callback_query.register(self.handle_about_course, F.data == "sales:about_course")
         
         # Универсальный обработчик для отладки необработанных callback (должен быть последним)
@@ -834,13 +836,103 @@ class SalesBot:
         """Compact start menu: greeting + programs/tariffs (no long course description)."""
         text = (
             "Привет! Я помогу тебе записаться на курс по искусству задавать вопросы и получать ответы.\n\n"
-            "Выбери программу и тариф:\n\n"
-            "<b>онлайн</b>\n"
-            "ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ\n\n"
-            "<b>офлайн</b>\n"
-            "ГЛАВНЫЙ ГЕРОЙ"
+            "Выбери программу и тариф:"
         )
         await message.answer(text, reply_markup=create_programs_tariff_keyboard(), disable_web_page_preview=True)
+
+    async def handle_show_tariffs_online(self, callback: CallbackQuery):
+        try:
+            await callback.answer()
+        except Exception:
+            pass
+
+        # Show online tariffs + pay buttons (existing payment flow)
+        text = (
+            "<b>онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ</b>\n\n"
+            "<b>BASIC</b>\n"
+            "<b>Что включено</b>\n"
+            "30 занятий\n\n"
+            "Ежедневные материалы (тексты, фото, видео, ссылки)\n\n"
+            "Практические задания к каждому уроку\n\n"
+            "Доступ к сообществу\n\n"
+            "<b>Особенности</b>\n"
+            "Полный доступ ко всему контенту\n\n"
+            "Выполняйте задания в своем темпе\n\n"
+            "Без обратной связи от лидера\n\n"
+            "5 000 ₽\n\n"
+            "<b>FEEDBACK</b>\n"
+            "<b>Что включено</b>\n"
+            "Всё из Базового тарифа\n\n"
+            "Персональная обратная связь от лидера\n\n"
+            "Проверка выполненных заданий\n\n"
+            "Ответы на ваши вопросы\n\n"
+            "<b>Особенности</b>\n"
+            "Лидер проверяет ваши задания\n\n"
+            "Персональные комментарии\n\n"
+            "Можно задавать вопросы и получать ответы\n\n"
+            "10 000 ₽\n\n"
+            "<b>PRACTIC</b>\n"
+            "<b>Что включено</b>\n"
+            "Всё из тарифов Basic + Feedback\n\n"
+            "Организация 3-х интервью онлайн\n\n"
+            "Видеозапись 3-х интервью\n\n"
+            "Профессиональный разбор 3-х интервью от лидера или куратора\n\n"
+            "<b>Особенности</b>\n"
+            "Каждое интервью до 15 мин\n\n"
+            "Подбор собеседника\n\n"
+            "Профессиональный формат\n\n"
+            "20 000 ₽\n\n"
+            "Выберите тариф для оплаты:"
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🏧 Оплатить BASIC", callback_data="pay:online:basic")],
+            [InlineKeyboardButton(text="🏧 Оплатить FEEDBACK", callback_data="pay:online:feedback")],
+            [InlineKeyboardButton(text="🏧 Оплатить PRACTIC", callback_data="pay:online:practic")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_tariffs")],
+        ])
+        await callback.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+
+    async def handle_show_tariffs_offline(self, callback: CallbackQuery):
+        try:
+            await callback.answer()
+        except Exception:
+            pass
+
+        text = (
+            "<b>офлайн · ГЛАВНЫЙ ГЕРОЙ</b>\n\n"
+            "<b>СЛУШАТЕЛЬ</b>\n"
+            "Присутствие\n\n"
+            "Лекционная часть\n\n"
+            "Обсуждение\n\n"
+            "Нетворкинг\n\n"
+            "6 000 ₽\n\n"
+            "<b>АКТИВИСТ</b>\n"
+            "Всё, что в прошлом тарифе\n\n"
+            "Берёт интервью как ведущий\n\n"
+            "Даёт интервью как спикер\n\n"
+            "Разбор от тренеров\n\n"
+            "12 000 ₽\n\n"
+            "<b>МЕДИА-ПЕРСОНА</b>\n"
+            "Всё, что в прошлом тарифе\n\n"
+            "Получает смонтированные видео\n\n"
+            "2 видеоинтервью по 10-15 мин\n\n"
+            "22 000 ₽\n\n"
+            "<b>ГЛАВНЫЙ ГЕРОЙ</b>\n"
+            "Всё, что в прошлом тарифе\n\n"
+            "10 рилсов для продвижения\n\n"
+            "Личная стратегическая онлайн-консультация\n\n"
+            "30 000 ₽"
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🔗 Открыть сайт «Главный герой»",
+                url="https://sites.google.com/view/nikitinartem/education/main-hero"
+            )],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_tariffs")],
+        ])
+        await callback.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
     
     async def handle_help(self, message: Message):
         """Handle /help command with premium styling."""
