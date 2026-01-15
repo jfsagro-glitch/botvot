@@ -140,8 +140,10 @@ class SalesBot:
         self.dp.message.register(self.handle_keyboard_upgrade, (F.text == "⬆️ Апгрейд тарифа") | (F.text == "🔷 Апгрейд тарифа"))
         self.dp.message.register(self.handle_keyboard_go_to_course, (F.text == "🧿 Перейти в курс") | (F.text == "📚 Перейти в курс"))
         self.dp.message.register(self.handle_keyboard_select_tariff, (F.text == "🗳️ Выбор тарифа") | (F.text == "🟦 Выбор тарифа") | (F.text == "📋 Выбор тарифа"))
-        self.dp.message.register(self.handle_keyboard_online, (F.text == "Онлайн") | (F.text == "онлайн"))
-        self.dp.message.register(self.handle_keyboard_offline, (F.text == "Офлайн") | (F.text == "офлайн"))
+        # Handle "Онлайн" button (with or without price in text)
+        self.dp.message.register(self.handle_keyboard_online, F.text.startswith("Онлайн"))
+        # Handle "Офлайн" button (with or without price in text)
+        self.dp.message.register(self.handle_keyboard_offline, F.text.startswith("Офлайн"))
         self.dp.message.register(self.handle_keyboard_talk_to_human, (F.text == "💬 Поговорить с человеком") | (F.text == "🔵 Поговорить с человеком"))
         self.dp.message.register(
             self.handle_forget_everything_button,
@@ -815,14 +817,16 @@ class SalesBot:
                 ])
                 
                 # Устанавливаем постоянную клавиатуру
-                persistent_keyboard = create_persistent_keyboard()
+                online_min_price = PaymentService.TARIFF_PRICES.get(Tariff.BASIC, 10.0)
+                persistent_keyboard = create_persistent_keyboard(online_min_price=online_min_price, offline_min_price=6000.0)
                 await message.answer(welcome_back, reply_markup=persistent_keyboard)
                 await send_animated_message(self.bot, message.chat.id, "", keyboard, 0.5)
                 return
             
             # No access -> show compact start menu (no duplicated long course info)
             logger.info("Showing program/tariff start menu...")
-            persistent_keyboard = create_persistent_keyboard()
+            online_min_price = PaymentService.TARIFF_PRICES.get(Tariff.BASIC, 10.0)
+            persistent_keyboard = create_persistent_keyboard(online_min_price=online_min_price, offline_min_price=6000.0)
             await message.answer("Используйте кнопки внизу для навигации 👇", reply_markup=persistent_keyboard)
             await self._show_program_tariff_menu(message)
             logger.info("Program/tariff menu shown successfully")
@@ -964,7 +968,8 @@ class SalesBot:
 
     async def handle_menu(self, message: Message):
         """Resend persistent keyboard (useful if user hid it)."""
-        persistent_keyboard = create_persistent_keyboard()
+        online_min_price = PaymentService.TARIFF_PRICES.get(Tariff.BASIC, 10.0)
+        persistent_keyboard = create_persistent_keyboard(online_min_price=online_min_price, offline_min_price=6000.0)
         await message.answer("✅ Кнопки внизу включены.", reply_markup=persistent_keyboard)
     
     async def handle_author(self, message: Message):

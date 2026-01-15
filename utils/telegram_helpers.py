@@ -23,8 +23,18 @@ except Exception:
     }
 
 
-def create_persistent_keyboard() -> ReplyKeyboardMarkup:
-    """Create persistent keyboard for sales bot with main buttons."""
+def create_persistent_keyboard(online_min_price: float = 10.0, offline_min_price: float = 6000.0) -> ReplyKeyboardMarkup:
+    """
+    Create persistent keyboard for sales bot with main buttons.
+    
+    Args:
+        online_min_price: Minimum price for online tariffs (default: 10.0 for test)
+        offline_min_price: Minimum price for offline tariffs (default: 6000.0)
+    """
+    # Format prices: 10 -> "10₽", 6000 -> "от 6000₽"
+    online_price_text = f"{int(online_min_price)}₽" if online_min_price < 100 else f"от {int(online_min_price)}₽"
+    offline_price_text = f"от {int(offline_min_price)}₽"
+    
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -33,8 +43,8 @@ def create_persistent_keyboard() -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text="🗳️ Выбор тарифа"),
-                KeyboardButton(text="Онлайн"),
-                KeyboardButton(text="Офлайн")
+                KeyboardButton(text=f"Онлайн ({online_price_text})"),
+                KeyboardButton(text=f"Офлайн ({offline_price_text})")
             ],
             [
                 KeyboardButton(text="💬 Поговорить с человеком"),
