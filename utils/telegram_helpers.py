@@ -33,7 +33,8 @@ def create_persistent_keyboard() -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text="🗳️ Выбор тарифа"),
-                KeyboardButton(text="📘 О курсе")
+                KeyboardButton(text="Онлайн"),
+                KeyboardButton(text="Офлайн")
             ],
             [
                 KeyboardButton(text="💬 Поговорить с человеком"),
@@ -92,7 +93,6 @@ def create_programs_tariff_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Тарифы онлайн", callback_data="sales:tariffs:online")],
         [InlineKeyboardButton(text="офлайн · ГЛАВНЫЙ ГЕРОЙ", url=offline_url)],
         [InlineKeyboardButton(text="Тарифы офлайн", callback_data="sales:tariffs:offline")],
-        [InlineKeyboardButton(text="📘 О курсе", callback_data="sales:about_course")],
     ])
 
 
