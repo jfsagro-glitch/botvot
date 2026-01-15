@@ -92,9 +92,9 @@ def create_programs_tariff_keyboard() -> InlineKeyboardMarkup:
 
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ →", url=online_url)],
-        [InlineKeyboardButton(text="Тарифы онлайн · от 10₽ →", callback_data="sales:tariffs:online")],
+        [InlineKeyboardButton(text="Тарифы онлайн →", callback_data="sales:tariffs:online")],
         [InlineKeyboardButton(text="Офлайн · ГЛАВНЫЙ ГЕРОЙ →", url=offline_url)],
-        [InlineKeyboardButton(text="Тарифы офлайн · от 6000₽ →", callback_data="sales:tariffs:offline")],
+        [InlineKeyboardButton(text="Тарифы офлайн →", callback_data="sales:tariffs:offline")],
     ])
 
 
