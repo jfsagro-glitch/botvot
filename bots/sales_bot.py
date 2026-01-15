@@ -791,6 +791,14 @@ class SalesBot:
         logger.info("=" * 60)
         
         try:
+            # Log session start
+            try:
+                from datetime import datetime
+                await self.db.log_user_session(message.from_user.id, "sales", datetime.utcnow())
+                await self.db.log_user_activity(message.from_user.id, "sales", "start", "main")
+            except Exception as e:
+                logger.warning(f"Failed to log user activity: {e}")
+            
             # Отправляем анимированное сообщение
             await send_typing_action(self.bot, message.chat.id, 0.8)
             await message.answer("✨ <b>Добро пожаловать!</b> ✨\n\n⏳ Обрабатываю ваш запрос...")
@@ -826,6 +834,15 @@ class SalesBot:
                     user_id, username, first_name, last_name
                 )
                 logger.info(f"User created/retrieved: {user.user_id}, has_access: {user.has_access()}")
+            except ValueError as e:
+                # User limit reached
+                logger.warning(f"User limit reached: {e}")
+                await message.answer(
+                    "❌ <b>Достигнут лимит пользователей</b>\n\n"
+                    "К сожалению, в данный момент регистрация новых пользователей временно недоступна.\n\n"
+                    "Попробуйте позже или свяжитесь с администратором."
+                )
+                return
             except Exception as e:
                 logger.error(f"Error creating user: {e}", exc_info=True)
                 await message.answer("❌ Ошибка при создании пользователя. Попробуйте позже.")
@@ -2523,6 +2540,12 @@ class SalesBot:
         )
         curator_message = await self.question_service.format_question_for_admin(question_data)
         curator_message += "\n\n📍 <b>Источник:</b> Бот оплаты (sales bot)"
+        
+        # Log question activity
+        try:
+            await self.db.log_user_activity(user_id, "sales", "question", "support")
+        except Exception:
+            pass
 
         # Target group per settings (supports web.telegram link formats)
         target_chat_id = await self._normalize_curator_chat_id()

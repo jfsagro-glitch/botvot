@@ -94,6 +94,11 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_reply_button, F.data.startswith("admin_reply:"))
         self.dp.callback_query.register(self.handle_assignment_reply_callback, F.data.startswith("reply_assignment:"))
         self.dp.callback_query.register(self.handle_question_reply_callback, F.data.startswith("reply_question:"))
+        self.dp.callback_query.register(self.handle_all_user_stats, F.data == "admin:all_user_stats")
+        self.dp.callback_query.register(self.handle_user_stats_detail, F.data.startswith("admin:user_stats:"))
+        
+        # Commands for user stats
+        self.dp.message.register(self.handle_user_stats, Command("user_stats"))
         
         # Persistent keyboard buttons
         self.dp.message.register(self.handle_stats_button, F.text == "📊 Статистика")
@@ -144,7 +149,7 @@ class AdminBot:
         return keyboard
     
     async def handle_stats(self, message: Message):
-        """Handle /stats command - show system statistics."""
+        """Handle /stats command - show system statistics and per-user details."""
         try:
             await self.db.connect()
             
@@ -160,39 +165,64 @@ class AdminBot:
             stats_text = (
                 "📊 <b>Статистика системы</b>\n\n"
                 f"👥 <b>Пользователи:</b>\n"
-                f"• Всего: {total_users}\n"
+                f"• Всего: {total_users}/200\n"
                 f"• Активных: {active_users}\n"
                 f"• С доступом: {users_with_access}\n\n"
                 f"📝 <b>Задания:</b>\n"
                 f"• Всего отправлено: {total_assignments}\n"
-                f"• Ожидают проверки: {pending_assignments}\n"
+                f"• Ожидают проверки: {pending_assignments}\n\n"
+                f"💡 <b>Для детальной статистики по пользователю:</b>\n"
+                f"Используйте /user_stats USER_ID"
             )
             
-            await message.answer(stats_text)
+            # Add keyboard with button to get all users stats
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="📋 Статистика всех пользователей",
+                        callback_data="admin:all_user_stats"
+                    )
+                ]
+            ])
+            
+            await message.answer(stats_text, reply_markup=keyboard)
         except Exception as e:
             logger.error(f"Error getting stats: {e}", exc_info=True)
             await message.answer("❌ Ошибка при получении статистики.")
     
     async def handle_users(self, message: Message):
-        """Handle /users command - show user list."""
+        """Handle /users command - show user list with stats buttons."""
         try:
             await self.db.connect()
-            users = await self._get_recent_users(limit=20)
+            users = await self._get_recent_users(limit=200)  # Show all users (max 200)
             
             if not users:
                 await message.answer("👥 Пользователи не найдены.")
                 return
             
-            text = "👥 <b>Последние пользователи</b> (макс. 20):\n\n"
-            for user in users:
+            text = f"👥 <b>Пользователи</b> (всего: {len(users)}/200):\n\n"
+            
+            # Show first 20 users with inline buttons for stats
+            keyboard_buttons = []
+            for i, user in enumerate(users[:20]):  # Telegram inline keyboard limit
                 tariff = user.tariff.value.upper() if user.tariff else "Нет"
                 text += (
                     f"• {user.first_name or 'Без имени'}"
                     f"{f' (@{user.username})' if user.username else ''}\n"
                     f"  ID: {user.user_id} | Тариф: {tariff} | День: {user.current_day}\n\n"
                 )
+                keyboard_buttons.append([
+                    InlineKeyboardButton(
+                        text=f"📊 {user.first_name or user.user_id}",
+                        callback_data=f"admin:user_stats:{user.user_id}"
+                    )
+                ])
             
-            await message.answer(text)
+            if len(users) > 20:
+                text += f"\n... и еще {len(users) - 20} пользователей. Используйте /user_stats USER_ID для просмотра статистики."
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons) if keyboard_buttons else None
+            await message.answer(text, reply_markup=keyboard)
         except Exception as e:
             logger.error(f"Error getting users: {e}", exc_info=True)
             await message.answer("❌ Ошибка при получении списка пользователей.")
@@ -496,6 +526,147 @@ class AdminBot:
                 if user:
                     users.append(user)
         return users
+    
+    async def handle_user_stats(self, message: Message):
+        """Handle /user_stats USER_ID command - show detailed stats for a user."""
+        try:
+            parts = message.text.split()
+            if len(parts) < 2:
+                await message.answer("❌ Использование: /user_stats USER_ID")
+                return
+            
+            user_id = int(parts[1])
+            await self._show_user_stats(message, user_id)
+        except ValueError:
+            await message.answer("❌ Неверный USER_ID. Используйте числовой ID.")
+        except Exception as e:
+            logger.error(f"Error getting user stats: {e}", exc_info=True)
+            await message.answer("❌ Ошибка при получении статистики пользователя.")
+    
+    async def handle_all_user_stats(self, callback: CallbackQuery):
+        """Handle callback to show all users stats."""
+        await callback.answer()
+        try:
+            await self.db.connect()
+            users = await self._get_recent_users(limit=200)  # Get all users (max 200)
+            
+            if not users:
+                await callback.message.answer("👥 Пользователи не найдены.")
+                return
+            
+            # Send stats for each user (split into multiple messages if needed)
+            text = "📊 <b>Статистика всех пользователей</b>\n\n"
+            for user in users:
+                stats = await self.db.get_user_statistics(user.user_id)
+                text += await self._format_user_stats_short(user, stats)
+                text += "\n" + "─" * 30 + "\n\n"
+                
+                # Telegram message limit is 4096 chars, send in batches
+                if len(text) > 3500:
+                    await callback.message.answer(text, parse_mode="HTML")
+                    text = ""
+            
+            if text:
+                await callback.message.answer(text, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error getting all user stats: {e}", exc_info=True)
+            await callback.message.answer("❌ Ошибка при получении статистики.")
+    
+    async def handle_user_stats_detail(self, callback: CallbackQuery):
+        """Handle callback to show detailed stats for a specific user."""
+        await callback.answer()
+        try:
+            user_id = int(callback.data.split(":")[2])
+            await self._show_user_stats(callback.message, user_id)
+        except Exception as e:
+            logger.error(f"Error getting user stats detail: {e}", exc_info=True)
+            await callback.message.answer("❌ Ошибка при получении статистики.")
+    
+    async def _show_user_stats(self, message_or_callback, user_id: int):
+        """Show detailed statistics for a user."""
+        user = await self.user_service.get_user(user_id)
+        if not user:
+            await message_or_callback.answer("❌ Пользователь не найден.")
+            return
+        
+        stats = await self.db.get_user_statistics(user_id)
+        stats_text = await self._format_user_stats_detailed(user, stats)
+        await message_or_callback.answer(stats_text, parse_mode="HTML")
+    
+    async def _format_user_stats_short(self, user: User, stats: dict) -> str:
+        """Format short user stats (for list view)."""
+        online_time = stats["total_online_time_seconds"]
+        hours = online_time // 3600
+        minutes = (online_time % 3600) // 60
+        
+        assignment_completion = 0
+        if stats["assignments_submitted"] > 0:
+            assignment_completion = (stats["assignments_completed"] / stats["assignments_submitted"]) * 100
+        
+        activity_percent = 0
+        total_actions = sum(stats["activity_by_action"].values())
+        if total_actions > 0:
+            # Simple activity calculation based on actions
+            activity_percent = min(100, (total_actions / 100) * 100)  # Normalize
+        
+        return (
+            f"👤 <b>{user.first_name or 'Без имени'}</b> "
+            f"{f'(@{user.username})' if user.username else ''}\n"
+            f"🆔 ID: {user.user_id}\n"
+            f"⏱️ Онлайн: {hours}ч {minutes}м\n"
+            f"🔢 Заходов: {stats['total_bot_visits']}\n"
+            f"❓ Вопросов: {stats['questions_count']}\n"
+            f"📝 Заданий: {stats['assignments_submitted']} (выполнено: {stats['assignments_completed']})\n"
+            f"📊 Активность: {activity_percent:.1f}%\n"
+            f"✅ Выполнение заданий: {assignment_completion:.1f}%"
+        )
+    
+    async def _format_user_stats_detailed(self, user: User, stats: dict) -> str:
+        """Format detailed user statistics."""
+        online_time = stats["total_online_time_seconds"]
+        hours = online_time // 3600
+        minutes = (online_time % 3600) // 60
+        seconds = online_time % 60
+        
+        assignment_completion = 0
+        if stats["assignments_submitted"] > 0:
+            assignment_completion = (stats["assignments_completed"] / stats["assignments_submitted"]) * 100
+        
+        activity_percent = 0
+        total_actions = sum(stats["activity_by_action"].values())
+        if total_actions > 0:
+            activity_percent = min(100, (total_actions / 50) * 100)  # Normalize based on expected activity
+        
+        # Top sections
+        top_sections = sorted(stats["activity_by_section"].items(), key=lambda x: x[1], reverse=True)[:5]
+        sections_text = "\n".join([f"  • {section}: {count}" for section, count in top_sections]) if top_sections else "  Нет данных"
+        
+        # Top actions
+        top_actions = sorted(stats["activity_by_action"].items(), key=lambda x: x[1], reverse=True)[:5]
+        actions_text = "\n".join([f"  • {action}: {count}" for action, count in top_actions]) if top_actions else "  Нет данных"
+        
+        return (
+            f"📊 <b>Детальная статистика пользователя</b>\n\n"
+            f"👤 <b>{user.first_name or 'Без имени'}</b> "
+            f"{f'(@{user.username})' if user.username else ''}\n"
+            f"🆔 ID: {user.user_id}\n"
+            f"📅 Тариф: {user.tariff.value.upper() if user.tariff else 'Нет'}\n"
+            f"📚 Текущий день: {user.current_day}\n\n"
+            f"⏱️ <b>Время онлайн:</b>\n"
+            f"  Всего: {hours}ч {minutes}м {seconds}с\n\n"
+            f"🔢 <b>Заходы в ботов:</b>\n"
+            f"  Всего: {stats['total_bot_visits']}\n"
+            f"  Продающий бот: {stats['sales_bot_visits']}\n"
+            f"  Курс-бот: {stats['course_bot_visits']}\n\n"
+            f"❓ <b>Вопросы:</b> {stats['questions_count']}\n\n"
+            f"📝 <b>Задания:</b>\n"
+            f"  Отправлено: {stats['assignments_submitted']}\n"
+            f"  Выполнено: {stats['assignments_completed']}\n"
+            f"  Процент выполнения: {assignment_completion:.1f}%\n\n"
+            f"📊 <b>Процент активности:</b> {activity_percent:.1f}%\n\n"
+            f"📂 <b>Популярные разделы:</b>\n{sections_text}\n\n"
+            f"🎯 <b>Популярные действия:</b>\n{actions_text}"
+        )
     
     async def start(self):
         """Start the admin bot."""

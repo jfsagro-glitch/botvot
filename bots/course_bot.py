@@ -341,6 +341,14 @@ class CourseBot:
             f"Используйте /lesson для просмотра текущего урока.",
             reply_markup=persistent_keyboard
         )
+        
+        # Log session start
+        try:
+            from datetime import datetime
+            await self.db.log_user_session(user_id, "course", datetime.utcnow())
+            await self.db.log_user_activity(user_id, "course", "start", "main")
+        except Exception as e:
+            logger.warning(f"Failed to log user activity: {e}")
     
     async def handle_current_lesson(self, message: Message):
         """Handle /lesson command - show current lesson."""
@@ -1611,6 +1619,11 @@ class CourseBot:
             pass
     
     async def handle_submit_assignment(self, callback: CallbackQuery):
+        # Log activity
+        try:
+            await self.db.log_user_activity(callback.from_user.id, "course", "submit_assignment_click", "assignments")
+        except Exception:
+            pass
         """Handle assignment submission button click."""
         await callback.answer()
         
@@ -2779,6 +2792,12 @@ class CourseBot:
             submission_text=message.text
         )
         
+        # Log assignment submission
+        try:
+            await self.db.log_user_activity(user_id, "course", "assignment_submitted", f"lesson_{assignment.day_number}")
+        except Exception:
+            pass
+        
         # Forward to admin
         admin_text = (
             f"📝 <b>Новое задание</b>\n\n"
@@ -2913,6 +2932,14 @@ class CourseBot:
             user=user,
             lesson=temp_lesson,
             submission_text=message.caption or "[Медиа файл]",
+            submission_media_ids=[message.photo[-1].file_id if message.photo else message.video.file_id if message.video else message.document.file_id if message.document else None]
+        )
+        
+        # Log assignment submission
+        try:
+            await self.db.log_user_activity(user_id, "course", "assignment_submitted", f"lesson_{assignment.day_number}")
+        except Exception:
+            pass
             submission_media_ids=media_ids
         )
         
@@ -3011,6 +3038,12 @@ class CourseBot:
             question_text=message.text,
             context=f"День {lesson_day}" if lesson_day else None
         )
+        
+        # Log question activity
+        try:
+            await self.db.log_user_activity(user_id, "course", "question", f"lesson_{lesson_day}" if lesson_day else "general")
+        except Exception:
+            pass
         
         # Форматируем вопрос для кураторов
         curator_message = await self.question_service.format_question_for_admin(question_data)
@@ -3334,6 +3367,10 @@ class CourseBot:
     
     async def handle_keyboard_navigator(self, message: Message):
         """Handle 'Навигатор' button from persistent keyboard."""
+        try:
+            await self.db.log_user_activity(message.from_user.id, "course", "navigator", "navigation")
+        except Exception:
+            pass
         await self._show_navigator(message.from_user.id, message)
     
     async def handle_keyboard_ask_question(self, message: Message):
@@ -3381,6 +3418,10 @@ class CourseBot:
     
     async def handle_keyboard_tariffs(self, message: Message):
         """Handle 'Тарифы' button from persistent keyboard - redirect to sales bot."""
+        try:
+            await self.db.log_user_activity(message.from_user.id, "course", "tariffs", "navigation")
+        except Exception:
+            pass
         # Создаем deep link в sales bot для открытия тарифов
         sales_bot_username = "StartNowQ_bot"  # Имя sales bot
         deep_link = f"https://t.me/{sales_bot_username}?start=tariffs"
@@ -3401,6 +3442,10 @@ class CourseBot:
     
     async def handle_keyboard_discussion(self, message: Message):
         """Handle 'Обсуждение' button from persistent keyboard - redirect to discussion group."""
+        try:
+            await self.db.log_user_activity(message.from_user.id, "course", "discussion", "community")
+        except Exception:
+            pass
         persistent_keyboard = self._create_persistent_keyboard()
         
         # Prefer configured invite link; fallback to group id/username heuristics.
@@ -3438,6 +3483,10 @@ class CourseBot:
     
     async def handle_keyboard_mentor(self, message: Message):
         """Handle 'Наставник' button from persistent keyboard - show mentor menu."""
+        try:
+            await self.db.log_user_activity(message.from_user.id, "course", "mentor", "navigation")
+        except Exception:
+            pass
         user_id = message.from_user.id
         user = await self.user_service.get_user(user_id)
         

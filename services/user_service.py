@@ -43,7 +43,17 @@ class UserService:
                 await self.db.update_user(user)
             return user
         
-        return await self.db.create_user(user_id, username, first_name, last_name)
+        try:
+            return await self.db.create_user(user_id, username, first_name, last_name)
+        except ValueError as e:
+            # Re-raise ValueError (user limit reached) as-is
+            raise
+        except Exception as e:
+            # Log other errors but don't fail silently
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error creating user {user_id}: {e}", exc_info=True)
+            raise
     
     async def grant_access(
         self,

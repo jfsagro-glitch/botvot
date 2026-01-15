@@ -212,6 +212,43 @@ class Database:
             )
         """)
         
+        # User sessions table (for tracking online time and bot visits)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                bot_type TEXT NOT NULL,
+                session_start TEXT NOT NULL,
+                session_end TEXT,
+                duration_seconds INTEGER,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+        
+        # User activity table (for tracking actions and sections)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_activity (
+                activity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                bot_type TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                section TEXT,
+                details TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+        
+        # Indexes for performance
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id
+            ON user_sessions(user_id)
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_activity_user_id
+            ON user_activity(user_id)
+        """)
+        
         await self.conn.commit()
 
     # Payment operations (webhook idempotency)
@@ -297,8 +334,16 @@ class Database:
     async def create_user(self, user_id: int, username: Optional[str] = None,
                          first_name: Optional[str] = None,
                          last_name: Optional[str] = None) -> User:
-        """Create a new user."""
+        """Create a new user. Raises ValueError if user limit (200) is reached."""
         await self._ensure_connection()
+        
+        # Check user limit (200 users max)
+        async with self.conn.execute("SELECT COUNT(*) FROM users") as cursor:
+            row = await cursor.fetchone()
+            total_users = row[0] if row else 0
+        
+        if total_users >= 200:
+            raise ValueError("Достигнут лимит пользователей (200). Регистрация новых пользователей временно недоступна.")
         
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
@@ -552,6 +597,116 @@ class Database:
             WHERE assignment_id = ?
         """, (assignment_id,))
         await self.conn.commit()
+    
+    # User statistics methods
+    async def log_user_session(self, user_id: int, bot_type: str, session_start: datetime, session_end: Optional[datetime] = None, duration_seconds: Optional[int] = None):
+        """Log user session (bot visit)."""
+        await self._ensure_connection()
+        await self.conn.execute("""
+            INSERT INTO user_sessions (user_id, bot_type, session_start, session_end, duration_seconds)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, bot_type, session_start.isoformat(), session_end.isoformat() if session_end else None, duration_seconds))
+        await self.conn.commit()
+    
+    async def log_user_activity(self, user_id: int, bot_type: str, action_type: str, section: Optional[str] = None, details: Optional[str] = None):
+        """Log user activity (action, section visited)."""
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        await self.conn.execute("""
+            INSERT INTO user_activity (user_id, bot_type, action_type, section, details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (user_id, bot_type, action_type, section, details, now))
+        await self.conn.commit()
+    
+    async def get_user_statistics(self, user_id: int) -> dict:
+        """Get detailed statistics for a user."""
+        await self._ensure_connection()
+        
+        stats = {
+            "user_id": user_id,
+            "total_online_time_seconds": 0,
+            "total_bot_visits": 0,
+            "sales_bot_visits": 0,
+            "course_bot_visits": 0,
+            "questions_count": 0,
+            "assignments_submitted": 0,
+            "assignments_completed": 0,
+            "activity_by_section": {},
+            "activity_by_action": {}
+        }
+        
+        # Total online time
+        async with self.conn.execute("""
+            SELECT SUM(duration_seconds) as total_time
+            FROM user_sessions
+            WHERE user_id = ? AND duration_seconds IS NOT NULL
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            stats["total_online_time_seconds"] = row[0] if row and row[0] else 0
+        
+        # Bot visits
+        async with self.conn.execute("""
+            SELECT bot_type, COUNT(*) as count
+            FROM user_sessions
+            WHERE user_id = ?
+            GROUP BY bot_type
+        """, (user_id,)) as cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
+                count = row[1]
+                stats["total_bot_visits"] += count
+                if row[0] == "sales":
+                    stats["sales_bot_visits"] = count
+                elif row[0] == "course":
+                    stats["course_bot_visits"] = count
+        
+        # Questions count - we'll need to track this separately, for now estimate from activity
+        async with self.conn.execute("""
+            SELECT COUNT(*) FROM user_activity
+            WHERE user_id = ? AND action_type = 'question'
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            stats["questions_count"] = row[0] if row else 0
+        
+        # Assignments
+        async with self.conn.execute("""
+            SELECT COUNT(*) FROM assignments WHERE user_id = ?
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            stats["assignments_submitted"] = row[0] if row else 0
+        
+        async with self.conn.execute("""
+            SELECT COUNT(*) FROM assignments
+            WHERE user_id = ? AND admin_feedback IS NOT NULL AND admin_feedback != ''
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            stats["assignments_completed"] = row[0] if row else 0
+        
+        # Activity by section
+        async with self.conn.execute("""
+            SELECT section, COUNT(*) as count
+            FROM user_activity
+            WHERE user_id = ? AND section IS NOT NULL
+            GROUP BY section
+            ORDER BY count DESC
+        """, (user_id,)) as cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
+                stats["activity_by_section"][row[0]] = row[1]
+        
+        # Activity by action
+        async with self.conn.execute("""
+            SELECT action_type, COUNT(*) as count
+            FROM user_activity
+            WHERE user_id = ?
+            GROUP BY action_type
+            ORDER BY count DESC
+        """, (user_id,)) as cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
+                stats["activity_by_action"][row[0]] = row[1]
+        
+        return stats
     
     # Helper methods for row conversion
     def _row_to_user(self, row) -> User:
