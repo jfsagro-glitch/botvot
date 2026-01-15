@@ -892,8 +892,7 @@ class SalesBot:
                 ])
                 
                 # Устанавливаем постоянную клавиатуру
-                online_min_price = PaymentService.TARIFF_PRICES.get(Tariff.BASIC, 10.0)
-                persistent_keyboard = create_persistent_keyboard(online_min_price=online_min_price, offline_min_price=6000.0)
+                persistent_keyboard = create_persistent_keyboard()
                 await message.answer(welcome_back, reply_markup=persistent_keyboard)
                 await send_animated_message(self.bot, message.chat.id, "", keyboard, 0.5)
                 return
