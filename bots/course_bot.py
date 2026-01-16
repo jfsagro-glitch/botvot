@@ -2523,6 +2523,39 @@ class CourseBot:
                 lesson_data_with_day["task"] = task
                 logger.info(f"   📝 Creating keyboard for task message, day={day} (type={type(day).__name__})")
                 keyboard = create_lesson_keyboard_from_json(lesson_data_with_day, user, Config.GENERAL_GROUP_ID)
+
+                # Ensure submit-assignment button is present under the task message.
+                try:
+                    has_submit = False
+                    if keyboard and hasattr(keyboard, "inline_keyboard"):
+                        for row in (keyboard.inline_keyboard or []):
+                            for btn in (row or []):
+                                cb = getattr(btn, "callback_data", None)
+                                if cb and str(cb).startswith("assignment:submit:"):
+                                    has_submit = True
+                                    break
+                            if has_submit:
+                                break
+
+                    if not has_submit:
+                        if not keyboard or not hasattr(keyboard, "inline_keyboard"):
+                            keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+                        keyboard.inline_keyboard.insert(
+                            0,
+                            [
+                                InlineKeyboardButton(
+                                    text="📝 Отправить задание",
+                                    callback_data=f"assignment:submit:lesson_{int(day)}",
+                                )
+                            ],
+                        )
+                except Exception:
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text="📝 Отправить задание",
+                            callback_data=f"assignment:submit:lesson_{int(day)}",
+                        )
+                    ]])
                 logger.info(f"   ✅ Keyboard created: {len(keyboard.inline_keyboard) if keyboard and hasattr(keyboard, 'inline_keyboard') else 0} button rows")
                 if day == 30:
                     logger.info(f"   🎊 Lesson 30: Keyboard should contain FINAL MESSAGE button")
