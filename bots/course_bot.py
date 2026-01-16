@@ -271,13 +271,14 @@ class CourseBot:
         
         # Общие обработчики сообщений (после команд!)
         # ВАЖНО: Используем F.text & ~F.command чтобы НЕ перехватывать команды
+        # IMPORTANT: register specific handlers first; fallbacks last.
+        self.dp.message.register(self.handle_assignment_media, F.photo | F.video | F.document | F.voice)
+        self.dp.message.register(self.handle_question_voice, F.voice)
+        self.dp.message.register(self.handle_assignment_text, F.text & ~F.command)
+        self.dp.message.register(self.handle_question_text, F.text & ~F.command)
         self.dp.message.register(self.handle_unclassified_voice, F.voice)
         self.dp.message.register(self.handle_unclassified_media, F.photo | F.video | F.document)
         self.dp.message.register(self.handle_unclassified_text, F.text & ~F.command)
-        self.dp.message.register(self.handle_assignment_text, F.text & ~F.command)
-        self.dp.message.register(self.handle_assignment_media, F.photo | F.video | F.document | F.voice)
-        self.dp.message.register(self.handle_question_voice, F.voice)
-        self.dp.message.register(self.handle_question_text, F.text & ~F.command)
         
         # Ответы кураторов/админов через course-bot отключены:
         # вопросы и задания обрабатываются только через ПУП (admin-bot).
@@ -2776,13 +2777,14 @@ class CourseBot:
     async def handle_assignment_text(self, message: Message):
         """Handle assignment text submission."""
         user_id = message.from_user.id
-        user = await self.user_service.get_user(user_id)
-        
-        if not user or not user.has_access():
-            raise SkipHandler()
 
         ctx = self._user_assignment_context.get(user_id) or {}
         if not ctx.get("waiting_for_assignment"):
+            raise SkipHandler()
+
+        user = await self.user_service.get_user(user_id)
+        
+        if not user or not user.has_access():
             raise SkipHandler()
         lesson_day = int(ctx.get("lesson_day") or user.current_day)
         self._user_assignment_context.pop(user_id, None)
@@ -2907,13 +2909,14 @@ class CourseBot:
     async def handle_assignment_media(self, message: Message):
         """Handle assignment media submission (photos, videos, documents)."""
         user_id = message.from_user.id
-        user = await self.user_service.get_user(user_id)
-        
-        if not user or not user.has_access():
-            raise SkipHandler()
 
         ctx = self._user_assignment_context.get(user_id) or {}
         if not ctx.get("waiting_for_assignment"):
+            raise SkipHandler()
+
+        user = await self.user_service.get_user(user_id)
+        
+        if not user or not user.has_access():
             raise SkipHandler()
         lesson_day = int(ctx.get("lesson_day") or user.current_day)
         self._user_assignment_context.pop(user_id, None)
@@ -3054,13 +3057,14 @@ class CourseBot:
     async def handle_question_text(self, message: Message):
         """Handle question text submission."""
         user_id = message.from_user.id
+
+        context = self._user_question_context.get(user_id) or {}
+        if not context.get("waiting_for_question"):
+            raise SkipHandler()
+
         user = await self.user_service.get_user(user_id)
         
         if not user or not user.has_access():
-            raise SkipHandler()
-        
-        context = self._user_question_context.get(user_id) or {}
-        if not context.get("waiting_for_question"):
             raise SkipHandler()
 
         lesson_day = int(context.get("lesson_day") or user.current_day)
@@ -3122,13 +3126,14 @@ class CourseBot:
     async def handle_question_voice(self, message: Message):
         """Handle voice question submission (when question flow is active)."""
         user_id = message.from_user.id
-        user = await self.user_service.get_user(user_id)
-
-        if not user or not user.has_access() or not message.voice:
-            raise SkipHandler()
 
         context = self._user_question_context.get(user_id) or {}
         if not context.get("waiting_for_question"):
+            raise SkipHandler()
+
+        user = await self.user_service.get_user(user_id)
+
+        if not user or not user.has_access() or not message.voice:
             raise SkipHandler()
 
         lesson_day = int(context.get("lesson_day") or user.current_day)

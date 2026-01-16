@@ -74,9 +74,36 @@ class AdminBot:
         # Compose-reply state (lets admin answer without replying to the original message):
         # {admin_user_id: {"kind": "question"|"assignment", ...}}
         self._compose_reply: dict[int, dict] = {}
+
+        # Cached bot clients for fast sends (same event loop only)
+        self._bot_clients_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._course_bot_client: Optional[Bot] = None
+        self._sales_bot_client: Optional[Bot] = None
         
         # Register handlers
         self._register_handlers()
+
+    def _get_course_bot_client(self) -> Bot:
+        from core.config import Config
+        if not Config.COURSE_BOT_TOKEN:
+            raise ValueError("COURSE_BOT_TOKEN not configured")
+        loop = asyncio.get_running_loop()
+        if self._course_bot_client is not None and self._bot_clients_loop is loop:
+            return self._course_bot_client
+        self._bot_clients_loop = loop
+        self._course_bot_client = Bot(token=Config.COURSE_BOT_TOKEN)
+        return self._course_bot_client
+
+    def _get_sales_bot_client(self) -> Bot:
+        from core.config import Config
+        if not Config.SALES_BOT_TOKEN:
+            raise ValueError("SALES_BOT_TOKEN not configured")
+        loop = asyncio.get_running_loop()
+        if self._sales_bot_client is not None and self._bot_clients_loop is loop:
+            return self._sales_bot_client
+        self._bot_clients_loop = loop
+        self._sales_bot_client = Bot(token=Config.SALES_BOT_TOKEN)
+        return self._sales_bot_client
     
     def _register_handlers(self):
         """Register all bot handlers."""
@@ -1318,20 +1345,13 @@ class AdminBot:
         if answer_text:
             feedback_message += f"\n\n{answer_text}"
 
-        from core.config import Config
-        from aiogram import Bot
-
-        if not Config.COURSE_BOT_TOKEN:
-            await admin_message.answer("❌ COURSE_BOT_TOKEN не настроен.")
-            return
-
         followup_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📝 Отправить дополнение", callback_data=f"assignment:submit:lesson_{assignment.day_number}")],
             [InlineKeyboardButton(text="❓ Задать вопрос", callback_data=f"question:ask:lesson_{assignment.day_number}")],
             [InlineKeyboardButton(text="🧭 Навигатор", callback_data="navigator:open")],
         ])
 
-        course_bot = Bot(token=Config.COURSE_BOT_TOKEN)
+        course_bot = self._get_course_bot_client()
         try:
             if voice_file_id:
                 await course_bot.send_voice(user.user_id, voice_file_id, caption=feedback_message, reply_markup=followup_kb)
@@ -1342,8 +1362,6 @@ class AdminBot:
         except Exception as e:
             logger.error(f"Error sending feedback to user: {e}", exc_info=True)
             await admin_message.answer(f"❌ Ошибка при отправке обратной связи: {e}")
-        finally:
-            await course_bot.session.close()
     
     async def _handle_assignment_reply(self, message: Message, reply_text: str, answer_text: str, voice_file_id: Optional[str] = None):
         """Handle reply to assignment."""
@@ -1385,49 +1403,14 @@ class AdminBot:
         if not assignment_id:
             await message.answer("❌ Не удалось найти ID задания. Убедитесь, что вы отвечаете на сообщение с заданием.")
             return
-        
-        assignment = await self.assignment_service.get_assignment(assignment_id)
-        if not assignment:
-            await message.answer("❌ Задание не найдено.")
-            return
-        
-        # Add feedback
-        await self.assignment_service.add_feedback(assignment_id, answer_text)
-        
-        # Send feedback to user via course bot
-        user = await self.user_service.get_user(assignment.user_id)
-        if user:
-            feedback_message = f"💬 <b>Обратная связь по вашему заданию</b>\n\nДень {assignment.day_number}"
-            if answer_text:
-                feedback_message += f"\n\n{answer_text}"
-            
-            # Send via course bot
-            from core.config import Config
-            from aiogram import Bot
-            if not Config.COURSE_BOT_TOKEN:
-                await message.answer("❌ COURSE_BOT_TOKEN не настроен.")
-                return
-            
-            course_bot = Bot(token=Config.COURSE_BOT_TOKEN)
-            try:
-                followup_kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="📝 Отправить дополнение", callback_data=f"assignment:submit:lesson_{assignment.day_number}")],
-                    [InlineKeyboardButton(text="❓ Задать вопрос", callback_data=f"question:ask:lesson_{assignment.day_number}")],
-                    [InlineKeyboardButton(text="🧭 Навигатор", callback_data="navigator:open")],
-                ])
-                if voice_file_id:
-                    await course_bot.send_voice(user.user_id, voice_file_id, caption=feedback_message, reply_markup=followup_kb)
-                else:
-                    await course_bot.send_message(user.user_id, feedback_message, reply_markup=followup_kb)
-                await self.assignment_service.mark_feedback_sent(assignment_id)
-                await message.answer("✅ Обратная связь отправлена пользователю в обучающий бот.")
-            except Exception as e:
-                logger.error(f"Error sending feedback to user: {e}", exc_info=True)
-                await message.answer(f"❌ Ошибка при отправке обратной связи: {e}")
-            finally:
-                await course_bot.session.close()
-        else:
-            await message.answer("❌ Пользователь не найден.")
+
+        await self._send_assignment_feedback_to_user(
+            admin_message=message,
+            assignment_id=int(assignment_id),
+            answer_text=answer_text,
+            voice_file_id=voice_file_id,
+        )
+        return
     
     async def _send_answer_to_user(
         self,
@@ -1438,7 +1421,6 @@ class AdminBot:
         voice_file_id: Optional[str] = None,
     ):
         """Send answer to user via appropriate bot."""
-        from core.config import Config
         from aiogram import Bot
 
         def _course_followup_keyboard(day: Optional[int]) -> InlineKeyboardMarkup:
@@ -1463,27 +1445,20 @@ class AdminBot:
         
         # Determine which bot to use
         if bot_type == "sales":
-            if not Config.SALES_BOT_TOKEN:
-                raise ValueError("SALES_BOT_TOKEN not configured")
-            target_bot = Bot(token=Config.SALES_BOT_TOKEN)
+            target_bot = self._get_sales_bot_client()
         else:
-            if not Config.COURSE_BOT_TOKEN:
-                raise ValueError("COURSE_BOT_TOKEN not configured")
-            target_bot = Bot(token=Config.COURSE_BOT_TOKEN)
+            target_bot = self._get_course_bot_client()
         
         answer_message = "💬 <b>Ответ на ваш вопрос</b>\n\n"
         if lesson_day is not None:
             answer_message += f"📚 Урок: День {lesson_day}\n\n"
         answer_message += (answer_text or "")
         
-        try:
-            reply_markup = _course_followup_keyboard(lesson_day) if bot_type != "sales" else None
-            if voice_file_id:
-                await target_bot.send_voice(user_id, voice_file_id, caption=answer_message, reply_markup=reply_markup)
-            else:
-                await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
-        finally:
-            await target_bot.session.close()
+        reply_markup = _course_followup_keyboard(lesson_day) if bot_type != "sales" else None
+        if voice_file_id:
+            await target_bot.send_voice(user_id, voice_file_id, caption=answer_message, reply_markup=reply_markup)
+        else:
+            await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
     
     async def handle_reply_button(self, callback: CallbackQuery):
         """Handle reply button click."""
