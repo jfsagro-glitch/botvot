@@ -22,6 +22,28 @@ def _get_env_value(key: str, default: str = "") -> str:
     return value.strip() if value else default
 
 
+def _parse_chat_id(raw: str) -> int:
+    """
+    Parse Telegram chat id from env formats:
+    - "-100123..." / "123" / "-123"
+    - "#-123456789" (web.telegram internal) -> "-100123456789"
+    """
+    s = (raw or "").strip()
+    if not s:
+        return 0
+
+    # web.telegram format: "#-<digits>"
+    if s.startswith("#-") and s[2:].isdigit():
+        digits = s[2:]
+        return int(f"-100{digits}")
+
+    # already numeric
+    try:
+        return int(s)
+    except Exception:
+        return 0
+
+
 class Config:
     """Application configuration."""
     
@@ -34,12 +56,7 @@ class Config:
     
     # Admin Chat ID (for assignment feedback)
     # Read as string first, then convert to int (supports negative IDs for groups)
-    _admin_chat_id_str = _get_env_value("ADMIN_CHAT_ID", "").strip()
-    try:
-        ADMIN_CHAT_ID: int = int(_admin_chat_id_str) if _admin_chat_id_str else 0
-    except ValueError:
-        # If invalid value, default to 0
-        ADMIN_CHAT_ID: int = 0
+    ADMIN_CHAT_ID: int = _parse_chat_id(_get_env_value("ADMIN_CHAT_ID", ""))
     
     # Curator Group ID (for questions from users)
     CURATOR_GROUP_ID: str = _get_env_value("CURATOR_GROUP_ID", "")
@@ -138,4 +155,3 @@ class Config:
             logger.warning(f"⚠️ Не удалось создать директорию для БД: {e}")
             # Пытаемся использовать текущую директорию
             cls.DATABASE_PATH = "course_platform.db"
-

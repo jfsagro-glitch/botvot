@@ -656,15 +656,13 @@ class SalesBot:
                 ]
             ])
 
-            # Send header text
-            sent_header = await send_to_admin_bot(header, reply_markup=keyboard)
-            # Send voice file
-            sent_voice = await send_to_admin_bot(
-                message_text="Голосовое сообщение от пользователя",
+            # Send voice with header as caption (single request)
+            sent = await send_to_admin_bot(
+                message_text=header,
                 voice_file_id=message.voice.file_id,
                 reply_markup=keyboard
             )
-            if not (sent_header and sent_voice):
+            if not sent:
                 raise RuntimeError("send_to_admin_bot returned False")
 
             await message.answer("✅ Голосовое отправлено в ПУП.", reply_markup=self._talk_mode_keyboard())

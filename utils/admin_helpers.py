@@ -3,11 +3,17 @@ Helper functions for sending messages to admin bot.
 """
 
 import logging
+import asyncio
 from typing import Optional
 from aiogram import Bot
 from core.config import Config
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
 logger = logging.getLogger(__name__)
+
+_ADMIN_BOT_CLIENT: Optional[Bot] = None
+_ADMIN_BOT_LOOP: Optional[asyncio.AbstractEventLoop] = None
 
 
 def is_admin_bot_configured() -> bool:
@@ -18,6 +24,18 @@ def is_admin_bot_configured() -> bool:
         True if both ADMIN_BOT_TOKEN and ADMIN_CHAT_ID are configured, False otherwise
     """
     return bool(Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID != 0)
+
+def _get_admin_bot_client() -> Bot:
+    global _ADMIN_BOT_CLIENT, _ADMIN_BOT_LOOP
+    loop = asyncio.get_running_loop()
+    if _ADMIN_BOT_CLIENT is not None and _ADMIN_BOT_LOOP is loop:
+        return _ADMIN_BOT_CLIENT
+    _ADMIN_BOT_LOOP = loop
+    _ADMIN_BOT_CLIENT = Bot(
+        token=Config.ADMIN_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    return _ADMIN_BOT_CLIENT
 
 
 async def send_to_admin_bot(
@@ -46,7 +64,7 @@ async def send_to_admin_bot(
         return False
     
     try:
-        admin_bot = Bot(token=Config.ADMIN_BOT_TOKEN)
+        admin_bot = _get_admin_bot_client()
         
         if photo_file_id:
             await admin_bot.send_photo(
@@ -82,8 +100,6 @@ async def send_to_admin_bot(
                 message_text,
                 reply_markup=reply_markup
             )
-        
-        await admin_bot.session.close()
         return True
     except Exception as e:
         logger.error(f"Error sending message to admin bot: {e}", exc_info=True)

@@ -273,7 +273,7 @@ class AdminBot:
         await self.db.connect()
 
         prices_text = await self._format_prices_text()
-        promos = await self.db.list_promo_codes(limit=5)
+        promos = await self.db.list_promo_codes(limit=5, active_only=True)
         promos_text = ""
         if promos:
             promos_text = "\n\n🎟 <b>Промокоды (последние):</b>\n" + "\n".join(
@@ -377,7 +377,7 @@ class AdminBot:
     async def handle_admin_promo_list(self, callback: CallbackQuery):
         await callback.answer()
         await self.db.connect()
-        promos = await self.db.list_promo_codes(limit=20)
+        promos = await self.db.list_promo_codes(limit=20, active_only=True)
         if not promos:
             await callback.message.answer("🎟 Промокодов пока нет.")
             return

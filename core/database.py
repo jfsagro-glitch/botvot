@@ -469,12 +469,14 @@ class Database:
         await self.conn.commit()
         return cursor.rowcount == 1
 
-    async def list_promo_codes(self, limit: int = 20) -> list[dict]:
+    async def list_promo_codes(self, limit: int = 20, *, active_only: bool = True) -> list[dict]:
         await self._ensure_connection()
+        where = "WHERE active = 1" if active_only else ""
         async with self.conn.execute(
-            """
+            f"""
             SELECT code, discount_type, discount_value, created_at, expires_at, max_uses, used_count, active
             FROM promo_codes
+            {where}
             ORDER BY created_at DESC
             LIMIT ?
             """,
