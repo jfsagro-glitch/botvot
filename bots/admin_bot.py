@@ -70,6 +70,10 @@ class AdminBot:
 
         # Simple admin "state machine" for settings flows (prices/promos)
         self._admin_state: dict[int, dict] = {}
+
+        # Compose-reply state (lets admin answer without replying to the original message):
+        # {admin_user_id: {"kind": "question"|"assignment", ...}}
+        self._compose_reply: dict[int, dict] = {}
         
         # Register handlers
         self._register_handlers()
@@ -83,6 +87,10 @@ class AdminBot:
         self.dp.message.register(self.handle_users, Command("users"))
         self.dp.message.register(self.handle_settings, Command("settings"))
         self.dp.message.register(self.handle_sync_content, Command("sync_content"))
+
+        # Compose-reply handlers (must be before settings input and before reply handlers)
+        self.dp.message.register(self.handle_compose_reply_voice, F.voice)
+        self.dp.message.register(self.handle_compose_reply_text, F.text & ~F.command)
 
         # Settings flows (non-command text input)
         self.dp.message.register(self.handle_admin_state_input, F.text & ~F.command)
@@ -104,6 +112,7 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_assignment_reply_callback, F.data.startswith("reply_assignment:"))
         self.dp.callback_query.register(self.handle_question_reply_callback, F.data.startswith("reply_question:"))
         self.dp.callback_query.register(self.handle_question_reply_callback, F.data.startswith("curator_reply:"))
+        self.dp.callback_query.register(self.handle_compose_reply_cancel, F.data == "admin:compose_reply:cancel")
         self.dp.callback_query.register(self.handle_all_user_stats, F.data == "admin:all_user_stats")
         self.dp.callback_query.register(self.handle_user_stats_detail, F.data.startswith("admin:user_stats:"))
         self.dp.callback_query.register(self.handle_restore_confirm, F.data.startswith("admin:restore_confirm:"))
@@ -945,6 +954,96 @@ class AdminBot:
                 "• GOOGLE_SERVICE_ACCOUNT_JSON"
             )
             return
+
+    def _compose_cancel_keyboard(self) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✖️ Отмена", callback_data="admin:compose_reply:cancel")]
+        ])
+
+    async def handle_compose_reply_cancel(self, callback: CallbackQuery):
+        await callback.answer()
+        self._compose_reply.pop(callback.from_user.id, None)
+        await callback.message.answer("✅ Отправка отменена.")
+
+    async def handle_compose_reply_text(self, message: Message):
+        if message.reply_to_message:
+            raise SkipHandler()
+
+        state = self._compose_reply.get(message.from_user.id)
+        if not state:
+            raise SkipHandler()
+
+        answer_text = (message.text or "").strip()
+        if not answer_text:
+            await message.answer("❌ Отправьте текст или голосовое.")
+            return
+
+        kind = state.get("kind")
+        if kind == "question":
+            await self._send_answer_to_user(
+                user_id=int(state["user_id"]),
+                answer_text=answer_text,
+                lesson_day=state.get("lesson_day"),
+                bot_type=str(state.get("bot_type") or "course"),
+            )
+            self._compose_reply.pop(message.from_user.id, None)
+            await message.answer("✅ Ответ отправлен пользователю.")
+            return
+
+        if kind == "assignment":
+            assignment_id = int(state["assignment_id"])
+            await self._send_assignment_feedback_to_user(
+                admin_message=message,
+                assignment_id=assignment_id,
+                answer_text=answer_text,
+                voice_file_id=None,
+            )
+            self._compose_reply.pop(message.from_user.id, None)
+            return
+
+        self._compose_reply.pop(message.from_user.id, None)
+        await message.answer("❌ Не удалось отправить: неизвестный тип ответа.")
+
+    async def handle_compose_reply_voice(self, message: Message):
+        if message.reply_to_message:
+            raise SkipHandler()
+
+        state = self._compose_reply.get(message.from_user.id)
+        if not state:
+            raise SkipHandler()
+
+        if not message.voice:
+            raise SkipHandler()
+
+        voice_file_id = message.voice.file_id
+        answer_text = (message.caption or "").strip()
+
+        kind = state.get("kind")
+        if kind == "question":
+            await self._send_answer_to_user(
+                user_id=int(state["user_id"]),
+                answer_text=answer_text,
+                lesson_day=state.get("lesson_day"),
+                bot_type=str(state.get("bot_type") or "course"),
+                voice_file_id=voice_file_id,
+            )
+            self._compose_reply.pop(message.from_user.id, None)
+            await message.answer("✅ Ответ отправлен пользователю.")
+            return
+
+        if kind == "assignment":
+            assignment_id = int(state["assignment_id"])
+            await self._send_assignment_feedback_to_user(
+                admin_message=message,
+                assignment_id=assignment_id,
+                answer_text=answer_text,
+                voice_file_id=voice_file_id,
+            )
+            self._compose_reply.pop(message.from_user.id, None)
+            return
+
+        self._compose_reply.pop(message.from_user.id, None)
+        await message.answer("❌ Не удалось отправить: неизвестный тип ответа.")
         
         # Show current document info
         doc_id = (Config.DRIVE_MASTER_DOC_ID or "").strip()
@@ -1003,6 +1102,63 @@ class AdminBot:
         if not answer_text and not voice_file_id:
             await message.answer("❌ Ответ не может быть пустым (текст или голосовое).")
             return
+
+        def _extract_callback_data(msg: Message) -> list[str]:
+            datas: list[str] = []
+            rm = getattr(msg, "reply_markup", None)
+            kb = getattr(rm, "inline_keyboard", None) if rm else None
+            if not kb:
+                return datas
+            for row in kb:
+                for btn in row:
+                    cd = getattr(btn, "callback_data", None)
+                    if cd:
+                        datas.append(cd)
+            return datas
+
+        # Prefer machine-readable routing from inline keyboard callback_data
+        for cd in _extract_callback_data(message.reply_to_message):
+            if cd.startswith("admin_reply:"):
+                try:
+                    assignment_id = int(cd.split(":")[1])
+                except Exception:
+                    continue
+                await self._send_assignment_feedback_to_user(
+                    admin_message=message,
+                    assignment_id=assignment_id,
+                    answer_text=answer_text,
+                    voice_file_id=voice_file_id,
+                )
+                return
+
+            if cd.startswith("curator_reply:") or cd.startswith("reply_question:"):
+                parts = cd.split(":")
+                if len(parts) < 2:
+                    continue
+                try:
+                    user_id = int(parts[1])
+                except Exception:
+                    continue
+
+                if cd.startswith("reply_question:"):
+                    bot_type = "sales"
+                    lesson_day = None
+                else:
+                    bot_type = "course"
+                    try:
+                        lesson_day = int(parts[2]) if len(parts) > 2 else None
+                    except Exception:
+                        lesson_day = None
+
+                await self._send_answer_to_user(
+                    user_id=user_id,
+                    answer_text=answer_text,
+                    lesson_day=lesson_day,
+                    bot_type=bot_type,
+                    voice_file_id=voice_file_id,
+                )
+                await message.answer("✅ Ответ отправлен пользователю.")
+                return
         
         # Check if this is a question or assignment
         # Questions: contain "❓", "Новый вопрос", "Вопрос:", "💭 Вопрос:"
@@ -1118,6 +1274,53 @@ class AdminBot:
         except Exception as e:
             logger.error(f"Error sending answer to user: {e}", exc_info=True)
             await message.answer(f"❌ Ошибка при отправке ответа: {e}")
+
+    async def _send_assignment_feedback_to_user(
+        self,
+        admin_message: Message,
+        assignment_id: int,
+        answer_text: str,
+        voice_file_id: Optional[str] = None,
+    ):
+        assignment = await self.assignment_service.get_assignment(assignment_id)
+        if not assignment:
+            await admin_message.answer("❌ Задание не найдено.")
+            return
+
+        await self.assignment_service.add_feedback(assignment_id, answer_text or "")
+
+        user = await self.user_service.get_user(assignment.user_id)
+        if not user:
+            await admin_message.answer("❌ Пользователь не найден.")
+            return
+
+        feedback_message = f"💬 <b>Обратная связь по вашему заданию</b>\n\nДень {assignment.day_number}"
+        if answer_text:
+            feedback_message += f"\n\n{answer_text}"
+
+        from core.config import Config
+        from aiogram import Bot
+
+        if not Config.COURSE_BOT_TOKEN:
+            await admin_message.answer("❌ COURSE_BOT_TOKEN не настроен.")
+            return
+
+        followup_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Отправить дополнение", callback_data=f"assignment:submit:lesson_{assignment.day_number}")],
+            [InlineKeyboardButton(text="❓ Задать вопрос", callback_data=f"question:ask:lesson_{assignment.day_number}")],
+            [InlineKeyboardButton(text="🧭 Навигатор", callback_data="navigator:open")],
+        ])
+
+        course_bot = Bot(token=Config.COURSE_BOT_TOKEN)
+        try:
+            if voice_file_id:
+                await course_bot.send_voice(user.user_id, voice_file_id, caption=feedback_message, reply_markup=followup_kb)
+            else:
+                await course_bot.send_message(user.user_id, feedback_message, reply_markup=followup_kb)
+            await self.assignment_service.mark_feedback_sent(assignment_id)
+            await admin_message.answer("✅ Обратная связь отправлена пользователю в обучающий бот.")
+        finally:
+            await course_bot.session.close()
     
     async def _handle_assignment_reply(self, message: Message, reply_text: str, answer_text: str, voice_file_id: Optional[str] = None):
         """Handle reply to assignment."""
@@ -1262,17 +1465,40 @@ class AdminBot:
     async def handle_reply_button(self, callback: CallbackQuery):
         """Handle reply button click."""
         await callback.answer()
-        # This can be used for inline reply buttons if needed
-        await callback.message.answer("💬 Ответьте на сообщение выше, чтобы отправить ответ пользователю.")
+        try:
+            assignment_id = int(callback.data.split(":")[1])
+        except Exception:
+            await callback.message.answer("❌ Не удалось распознать ID задания.")
+            return
+
+        self._compose_reply[callback.from_user.id] = {
+            "kind": "assignment",
+            "assignment_id": assignment_id,
+        }
+
+        await callback.message.answer(
+            "💬 <b>Ответ на задание</b>\n\n"
+            "Отправьте обратную связь <b>одним сообщением</b> (текстом или голосовым).\n"
+            "Можно <b>не отвечать</b> реплаем на исходное сообщение — просто отправьте сообщение сюда.\n\n"
+            "Для отмены нажмите кнопку ниже.",
+            reply_markup=self._compose_cancel_keyboard(),
+        )
     
     async def handle_assignment_reply_callback(self, callback: CallbackQuery):
         """Handle assignment reply button."""
         await callback.answer()
         assignment_id = int(callback.data.split(":")[1])
+        self._compose_reply[callback.from_user.id] = {
+            "kind": "assignment",
+            "assignment_id": assignment_id,
+        }
+
         await callback.message.answer(
             f"💬 <b>Ответ на задание</b>\n\n"
             f"Assignment ID: {assignment_id}\n\n"
-            f"Ответьте на это сообщение с вашим ответом."
+            "Отправьте обратную связь <b>одним сообщением</b> (текстом или голосовым).\n"
+            "Можно <b>не отвечать</b> реплаем на исходное сообщение — просто отправьте сообщение сюда.",
+            reply_markup=self._compose_cancel_keyboard(),
         )
     
     async def handle_question_reply_callback(self, callback: CallbackQuery):
@@ -1280,24 +1506,32 @@ class AdminBot:
         await callback.answer()
         parts = callback.data.split(":")
         user_id = int(parts[1])
-        lesson_day = int(parts[2]) if len(parts) > 2 else None
-        
-        # Check if question came from sales bot by looking at the original message
-        reply_text = callback.message.text or callback.message.caption or ""
-        is_sales_bot = (
-            "sales bot" in reply_text.lower() or 
-            "продающего бота" in reply_text.lower() or
-            "продающий бот" in reply_text.lower() or
-            "Источник: Продающий бот" in reply_text
-        )
-        bot_type = "sales" if is_sales_bot else "course"
-        
+        bot_type = "sales" if callback.data.startswith("reply_question:") else "course"
+
+        if bot_type == "sales":
+            lesson_day = None
+        else:
+            try:
+                lesson_day = int(parts[2]) if len(parts) > 2 else None
+            except Exception:
+                lesson_day = None
+
+        self._compose_reply[callback.from_user.id] = {
+            "kind": "question",
+            "user_id": user_id,
+            "lesson_day": lesson_day,
+            "bot_type": bot_type,
+        }
+
         await callback.message.answer(
-            f"💬 <b>Ответ на вопрос</b>\n\n"
+            "💬 <b>Ответ на вопрос</b>\n\n"
             f"👤 Пользователь ID: {user_id}\n"
-            f"{f'📚 Урок: День {lesson_day}' if lesson_day else ''}\n"
-            f"📍 Источник: {'Продающий бот' if is_sales_bot else 'Обучающий бот'}\n\n"
-            f"Ответьте на это сообщение с вашим ответом."
+            + (f"📚 Урок: День {lesson_day}\n" if lesson_day is not None else "")
+            + f"📍 Источник: {'Продающий бот' if bot_type == 'sales' else 'Обучающий бот'}\n\n"
+            "Отправьте ответ <b>одним сообщением</b> (текстом или голосовым).\n"
+            "Можно <b>не отвечать</b> реплаем на исходное сообщение — просто отправьте сообщение сюда.\n\n"
+            "Для отмены нажмите кнопку ниже.",
+            reply_markup=self._compose_cancel_keyboard(),
         )
     
     async def handle_stats_button(self, message: Message):
