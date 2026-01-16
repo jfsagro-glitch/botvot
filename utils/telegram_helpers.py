@@ -23,7 +23,10 @@ except Exception:
     }
 
 
-def create_persistent_keyboard() -> ReplyKeyboardMarkup:
+def create_persistent_keyboard(
+    online_min_price: Optional[float] = None,
+    offline_min_price: Optional[float] = None,
+) -> ReplyKeyboardMarkup:
     """
     Create persistent keyboard for sales bot with main buttons.
     """
@@ -39,7 +42,10 @@ def create_persistent_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="Офлайн")
             ],
             [
-                KeyboardButton(text="💬 Поговорить с человеком"),
+                KeyboardButton(text="🎟 Промокод"),
+                KeyboardButton(text="💬 Поговорить с человеком")
+            ],
+            [
                 KeyboardButton(text="🧊 Забыть все")
             ]
         ],
@@ -49,11 +55,12 @@ def create_persistent_keyboard() -> ReplyKeyboardMarkup:
     return keyboard
 
 
-def create_tariff_keyboard() -> InlineKeyboardMarkup:
+def create_tariff_keyboard(prices: Optional[dict] = None) -> InlineKeyboardMarkup:
     """Create keyboard for tariff selection with additional buttons."""
-    basic_price = _TARIFF_PRICE_MAP.get(Tariff.BASIC, 0)
-    feedback_price = _TARIFF_PRICE_MAP.get(Tariff.FEEDBACK, 0)
-    practic_price = _TARIFF_PRICE_MAP.get(Tariff.PRACTIC, 0)
+    price_map = prices or _TARIFF_PRICE_MAP
+    basic_price = float(price_map.get(Tariff.BASIC, 0) or 0)
+    feedback_price = float(price_map.get(Tariff.FEEDBACK, 0) or 0)
+    practic_price = float(price_map.get(Tariff.PRACTIC, 0) or 0)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -305,4 +312,3 @@ def format_tariff_description(tariff: Tariff) -> str:
         )
     }
     return descriptions.get(tariff, "")
-

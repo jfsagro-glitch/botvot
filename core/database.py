@@ -211,6 +211,30 @@ class Database:
                 updated_at TEXT NOT NULL
             )
         """)
+
+        # Promo codes (discounts applied in SalesBot / PaymentService)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code TEXT PRIMARY KEY,
+                discount_type TEXT NOT NULL,          -- 'percent' or 'amount'
+                discount_value REAL NOT NULL,         -- percent: 0-100, amount: currency units
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                max_uses INTEGER,
+                used_count INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER
+            )
+        """)
+
+        # Per-user active promo code (to "auto apply" until cleared)
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_promo_codes (
+                user_id INTEGER PRIMARY KEY,
+                promo_code TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+        """)
         
         # User sessions table (for tracking online time and bot visits)
         await self.conn.execute("""
@@ -331,6 +355,160 @@ class Database:
             """,
             (key, value, now),
         )
+        await self.conn.commit()
+
+    # Pricing settings (stored in app_settings)
+    @staticmethod
+    def _online_price_key(tariff_value: str) -> str:
+        return f"price:online:{(tariff_value or '').strip().lower()}"
+
+    @staticmethod
+    def _offline_price_key(tariff_key: str) -> str:
+        return f"price:offline:{(tariff_key or '').strip().lower()}"
+
+    async def get_online_tariff_price(self, tariff: Tariff, default: float) -> float:
+        raw = await self.get_setting(self._online_price_key(tariff.value))
+        if raw is None:
+            return float(default)
+        try:
+            return float(str(raw).strip())
+        except Exception:
+            return float(default)
+
+    async def set_online_tariff_price(self, tariff: Tariff, price: float):
+        await self.set_setting(self._online_price_key(tariff.value), str(float(price)))
+
+    async def get_offline_tariff_price(self, tariff_key: str, default: float) -> float:
+        raw = await self.get_setting(self._offline_price_key(tariff_key))
+        if raw is None:
+            return float(default)
+        try:
+            return float(str(raw).strip())
+        except Exception:
+            return float(default)
+
+    async def set_offline_tariff_price(self, tariff_key: str, price: float):
+        await self.set_setting(self._offline_price_key(tariff_key), str(float(price)))
+
+    # Promo codes
+    async def create_promo_code(
+        self,
+        code: str,
+        discount_type: str,
+        discount_value: float,
+        *,
+        max_uses: Optional[int] = None,
+        expires_at: Optional[datetime] = None,
+        created_by: Optional[int] = None,
+    ):
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        await self.conn.execute(
+            """
+            INSERT INTO promo_codes (code, discount_type, discount_value, created_at, expires_at, max_uses, used_count, active, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 1, ?)
+            """,
+            (
+                code.strip(),
+                discount_type.strip().lower(),
+                float(discount_value),
+                now,
+                expires_at.isoformat() if expires_at else None,
+                int(max_uses) if max_uses is not None else None,
+                int(created_by) if created_by is not None else None,
+            ),
+        )
+        await self.conn.commit()
+
+    async def get_valid_promo_code(self, code: str) -> Optional[dict]:
+        await self._ensure_connection()
+        code = (code or "").strip()
+        if not code:
+            return None
+        async with self.conn.execute(
+            """
+            SELECT code, discount_type, discount_value, created_at, expires_at, max_uses, used_count, active
+            FROM promo_codes
+            WHERE code = ?
+            """,
+            (code,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            if int(row["active"] or 0) != 1:
+                return None
+            if row["expires_at"]:
+                try:
+                    if datetime.fromisoformat(row["expires_at"]) < datetime.utcnow():
+                        return None
+                except Exception:
+                    return None
+            max_uses = row["max_uses"]
+            used_count = int(row["used_count"] or 0)
+            if max_uses is not None and used_count >= int(max_uses):
+                return None
+            return dict(row)
+
+    async def increment_promo_code_use(self, code: str) -> bool:
+        await self._ensure_connection()
+        code = (code or "").strip()
+        if not code:
+            return False
+        cursor = await self.conn.execute(
+            """
+            UPDATE promo_codes
+            SET used_count = used_count + 1
+            WHERE code = ?
+              AND active = 1
+              AND (max_uses IS NULL OR used_count < max_uses)
+              AND (expires_at IS NULL OR expires_at > ?)
+            """,
+            (code, datetime.utcnow().isoformat()),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def list_promo_codes(self, limit: int = 20) -> list[dict]:
+        await self._ensure_connection()
+        async with self.conn.execute(
+            """
+            SELECT code, discount_type, discount_value, created_at, expires_at, max_uses, used_count, active
+            FROM promo_codes
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    # User promo codes
+    async def set_user_promo_code(self, user_id: int, promo_code: str):
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        await self.conn.execute(
+            """
+            INSERT INTO user_promo_codes (user_id, promo_code, applied_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET promo_code=excluded.promo_code, applied_at=excluded.applied_at
+            """,
+            (int(user_id), (promo_code or "").strip(), now),
+        )
+        await self.conn.commit()
+
+    async def get_user_promo_code(self, user_id: int) -> Optional[str]:
+        await self._ensure_connection()
+        async with self.conn.execute(
+            "SELECT promo_code FROM user_promo_codes WHERE user_id = ?",
+            (int(user_id),),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return (row["promo_code"] if row else None) or None
+
+    async def clear_user_promo_code(self, user_id: int):
+        await self._ensure_connection()
+        await self.conn.execute("DELETE FROM user_promo_codes WHERE user_id = ?", (int(user_id),))
         await self.conn.commit()
     
     # User operations

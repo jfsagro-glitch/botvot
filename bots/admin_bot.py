@@ -11,9 +11,12 @@ Centralized admin interface for:
 import asyncio
 import logging
 from datetime import datetime
+import secrets
+import string
 from typing import Optional
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton
@@ -23,7 +26,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from core.config import Config
 from core.database import Database
-from core.models import User, Assignment
+from core.models import User, Assignment, Tariff
 from services.user_service import UserService
 from services.assignment_service import AssignmentService
 from services.question_service import QuestionService
@@ -64,6 +67,9 @@ class AdminBot:
         
         # Track pending replies: {message_id: {"user_id": int, "bot_type": "sales"|"course", "context": str}}
         self._pending_replies: dict[int, dict] = {}
+
+        # Simple admin "state machine" for settings flows (prices/promos)
+        self._admin_state: dict[int, dict] = {}
         
         # Register handlers
         self._register_handlers()
@@ -77,6 +83,9 @@ class AdminBot:
         self.dp.message.register(self.handle_users, Command("users"))
         self.dp.message.register(self.handle_settings, Command("settings"))
         self.dp.message.register(self.handle_sync_content, Command("sync_content"))
+
+        # Settings flows (non-command text input)
+        self.dp.message.register(self.handle_admin_state_input, F.text & ~F.command)
         
         # Reply handlers (for answering questions/assignments)
         self.dp.message.register(self.handle_reply, F.reply_to_message)
@@ -99,6 +108,12 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_user_stats_detail, F.data.startswith("admin:user_stats:"))
         self.dp.callback_query.register(self.handle_restore_confirm, F.data.startswith("admin:restore_confirm:"))
         self.dp.callback_query.register(self.handle_restore_cancel, F.data == "admin:restore_cancel")
+        self.dp.callback_query.register(self.handle_admin_prices_menu, F.data == "admin:prices")
+        self.dp.callback_query.register(self.handle_admin_promos_menu, F.data == "admin:promos")
+        self.dp.callback_query.register(self.handle_admin_promo_create, F.data == "admin:promo:create")
+        self.dp.callback_query.register(self.handle_admin_promo_create_free, F.data == "admin:promo:create_free")
+        self.dp.callback_query.register(self.handle_admin_promo_list, F.data == "admin:promo:list")
+        self.dp.callback_query.register(self.handle_admin_promo_send, F.data.startswith("admin:promo:send:"))
         
         # Commands for user stats
         self.dp.message.register(self.handle_user_stats, Command("user_stats"))
@@ -250,6 +265,16 @@ class AdminBot:
     
     async def handle_settings(self, message: Message):
         """Handle /settings command - show bot settings."""
+        await self.db.connect()
+
+        prices_text = await self._format_prices_text()
+        promos = await self.db.list_promo_codes(limit=5)
+        promos_text = ""
+        if promos:
+            promos_text = "\n\n🎟 <b>Промокоды (последние):</b>\n" + "\n".join(
+                [self._format_promo_row(p) for p in promos]
+            )
+
         settings_text = (
             "⚙️ <b>Настройки ботов</b>\n\n"
             f"📱 <b>Токены ботов:</b>\n"
@@ -261,8 +286,333 @@ class AdminBot:
             f"📁 <b>Google Drive:</b>\n"
             f"• Синхронизация: {'✅ Включена' if self.drive_sync and self.drive_sync._admin_ready() else '❌ Отключена'}\n"
             f"• Документ: {('https://docs.google.com/document/d/' + Config.DRIVE_MASTER_DOC_ID + '/edit') if Config.DRIVE_MASTER_DOC_ID else 'Не указан'}\n"
+            f"\n{prices_text}{promos_text}\n"
         )
-        await message.answer(settings_text)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💰 Цены", callback_data="admin:prices")],
+            [InlineKeyboardButton(text="🎟 Промокоды", callback_data="admin:promos")],
+        ])
+        await message.answer(settings_text, reply_markup=keyboard)
+
+    @staticmethod
+    def _promo_code_chars() -> str:
+        return string.ascii_uppercase + string.digits
+
+    def _generate_promo_code(self, length: int = 8) -> str:
+        return "".join(secrets.choice(self._promo_code_chars()) for _ in range(int(length)))
+
+    @staticmethod
+    def _format_promo_row(p: dict) -> str:
+        code = p.get("code")
+        discount_type = (p.get("discount_type") or "").strip().lower()
+        discount_value = p.get("discount_value")
+        used = int(p.get("used_count") or 0)
+        max_uses = p.get("max_uses")
+        active = "✅" if int(p.get("active") or 0) == 1 else "❌"
+        if discount_type == "percent":
+            disc = f"-{float(discount_value):g}%"
+        else:
+            disc = f"-{float(discount_value):g}"
+        cap = f"{used}/{max_uses}" if max_uses is not None else f"{used}"
+        return f"• {active} <code>{code}</code> {disc} (исп.: {cap})"
+
+    async def _format_prices_text(self) -> str:
+        online_defaults = {
+            Tariff.BASIC: 5000.0,
+            Tariff.FEEDBACK: 10000.0,
+            Tariff.PREMIUM: 8000.0,
+            Tariff.PRACTIC: 20000.0,
+        }
+        offline_defaults = {
+            "slushatel": 6000.0,
+            "aktivist": 12000.0,
+            "media_persona": 22000.0,
+            "glavnyi_geroi": 30000.0,
+        }
+
+        lines = ["💰 <b>Цены:</b>", "<b>Онлайн:</b>"]
+        for t in [Tariff.BASIC, Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]:
+            price = await self.db.get_online_tariff_price(t, online_defaults[t])
+            lines.append(f"• {t.value}: {price:.0f}")
+        lines.append("<b>Офлайн:</b>")
+        for k, default in offline_defaults.items():
+            price = await self.db.get_offline_tariff_price(k, default)
+            lines.append(f"• {k}: {price:.0f}")
+        return "\n".join(lines)
+
+    async def handle_admin_prices_menu(self, callback: CallbackQuery):
+        await callback.answer()
+        await self.db.connect()
+        text = (
+            "💰 <b>Изменение цен</b>\n\n"
+            "Отправьте одним сообщением пары <code>ключ=цена</code>.\n"
+            "Можно с новой строки или через пробел.\n\n"
+            "Ключи онлайн: <code>basic</code>, <code>feedback</code>, <code>premium</code>, <code>practic</code>\n"
+            "Ключи офлайн: <code>slushatel</code>, <code>aktivist</code>, <code>media_persona</code>, <code>glavnyi_geroi</code>\n\n"
+            "Пример:\n"
+            "<code>basic=5000\nfeedback=10000\nslushatel=6000</code>"
+        )
+        self._admin_state[callback.from_user.id] = {"type": "set_prices"}
+        await callback.message.answer(text)
+
+    async def handle_admin_promos_menu(self, callback: CallbackQuery):
+        await callback.answer()
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin:promo:create")],
+            [InlineKeyboardButton(text="🎁 Бесплатный промокод (100%)", callback_data="admin:promo:create_free")],
+            [InlineKeyboardButton(text="📋 Список промокодов", callback_data="admin:promo:list")],
+        ])
+        await callback.message.answer(
+            "🎟 <b>Промокоды</b>\n\n"
+            "Создайте промокод и разошлите его. В sales-боте есть кнопка «🎟 Промокод».",
+            reply_markup=keyboard,
+        )
+
+    async def handle_admin_promo_list(self, callback: CallbackQuery):
+        await callback.answer()
+        await self.db.connect()
+        promos = await self.db.list_promo_codes(limit=20)
+        if not promos:
+            await callback.message.answer("🎟 Промокодов пока нет.")
+            return
+        text = "🎟 <b>Промокоды:</b>\n" + "\n".join([self._format_promo_row(p) for p in promos])
+        await callback.message.answer(text)
+
+    async def handle_admin_promo_create(self, callback: CallbackQuery):
+        await callback.answer()
+        self._admin_state[callback.from_user.id] = {"type": "create_promo"}
+        await callback.message.answer(
+            "🎟 <b>Создание промокода</b>\n\n"
+            "Отправьте скидку и (опционально) код:\n"
+            "• <code>10%</code> или <code>-10%</code>\n"
+            "• <code>500</code> или <code>-500</code> (фикс. скидка)\n"
+            "• <code>CODE 10%</code>\n"
+            "Дополнительно можно указать лимит использований: <code>x10</code>\n"
+            "Пример: <code>HERO10 10% x50</code>"
+        )
+
+    async def handle_admin_promo_create_free(self, callback: CallbackQuery):
+        await callback.answer()
+        self._admin_state[callback.from_user.id] = {"type": "create_free_promo"}
+        await callback.message.answer(
+            "🎁 <b>Бесплатный промокод (100%)</b>\n\n"
+            "Отправьте (опционально) код и лимит использований:\n"
+            "• <code>CODE</code>\n"
+            "• <code>CODE x10</code>\n"
+            "• <code>x10</code> (код будет сгенерирован автоматически)\n\n"
+            "Пример: <code>FREEHERO x50</code>"
+        )
+
+    async def handle_admin_promo_send(self, callback: CallbackQuery):
+        await callback.answer()
+        parts = (callback.data or "").split(":")
+        if len(parts) < 5:
+            await callback.message.answer("❌ Неверная команда.")
+            return
+        target = parts[3]
+        code = parts[4]
+        await self.db.connect()
+        promo = await self.db.get_valid_promo_code(code)
+        if not promo:
+            await callback.message.answer("❌ Промокод не найден или неактивен.")
+            return
+
+        chat_id = None
+        if target == "general":
+            chat_id = Config.GENERAL_GROUP_ID
+        elif target == "premium":
+            chat_id = Config.PREMIUM_GROUP_ID
+
+        if not chat_id:
+            await callback.message.answer("❌ Целевой чат не настроен (GENERAL_GROUP_ID / PREMIUM_GROUP_ID).")
+            return
+
+        discount_type = (promo.get("discount_type") or "").strip().lower()
+        discount_value = float(promo.get("discount_value") or 0.0)
+        disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
+
+        await self.bot.send_message(
+            chat_id,
+            "🎟 <b>Промокод на скидку</b>\n\n"
+            f"Код: <code>{promo.get('code')}</code>\n"
+            f"Скидка: -{disc}\n\n"
+            "Откройте sales-бот и нажмите «🎟 Промокод», чтобы применить.",
+        )
+        await callback.message.answer("✅ Отправлено.")
+
+    async def handle_admin_state_input(self, message: Message):
+        state = self._admin_state.get(message.from_user.id)
+        if not state:
+            raise SkipHandler()
+
+        kind = state.get("type")
+        text = (message.text or "").strip()
+        if kind == "set_prices":
+            await self.db.connect()
+            updates = self._parse_price_updates(text)
+            if not updates:
+                await message.answer("❌ Не нашёл ни одной пары ключ=цена.")
+                return
+            for key, price in updates.items():
+                if key in ("basic", "feedback", "premium", "practic"):
+                    await self.db.set_online_tariff_price(Tariff(key), price)
+                else:
+                    await self.db.set_offline_tariff_price(key, price)
+            self._admin_state.pop(message.from_user.id, None)
+            await message.answer("✅ Цены обновлены.\n\n" + await self._format_prices_text())
+            return
+
+        if kind == "create_free_promo":
+            await self.db.connect()
+            code, max_uses = self._parse_free_promo_create(text)
+            code = code or self._generate_promo_code()
+            try:
+                await self.db.create_promo_code(
+                    code=code,
+                    discount_type="percent",
+                    discount_value=100.0,
+                    max_uses=max_uses,
+                    created_by=message.from_user.id,
+                )
+            except Exception as e:
+                await message.answer(f"❌ Не удалось создать промокод: {e}")
+                return
+
+            self._admin_state.pop(message.from_user.id, None)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📣 В общий чат", callback_data=f"admin:promo:send:general:{code}")],
+                [InlineKeyboardButton(text="📣 В премиум чат", callback_data=f"admin:promo:send:premium:{code}")],
+            ])
+            await message.answer(
+                "✅ <b>Бесплатный промокод создан</b>\n\n"
+                f"Код: <code>{code}</code>\n"
+                "Скидка: -100%\n\n"
+                "В sales-боте нажмите «🎟 Промокод» и введите этот код — доступ выдастся без оплаты.",
+                reply_markup=keyboard,
+            )
+            return
+
+        if kind == "create_promo":
+            await self.db.connect()
+            parsed = self._parse_promo_create(text)
+            if not parsed:
+                await message.answer("❌ Не понял формат. Пример: <code>HERO10 10% x50</code>")
+                return
+            code, discount_type, discount_value, max_uses = parsed
+            code = code or self._generate_promo_code()
+            try:
+                await self.db.create_promo_code(
+                    code=code,
+                    discount_type=discount_type,
+                    discount_value=discount_value,
+                    max_uses=max_uses,
+                    created_by=message.from_user.id,
+                )
+            except Exception as e:
+                await message.answer(f"❌ Не удалось создать промокод: {e}")
+                return
+
+            self._admin_state.pop(message.from_user.id, None)
+            disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📣 В общий чат", callback_data=f"admin:promo:send:general:{code}")],
+                [InlineKeyboardButton(text="📣 В премиум чат", callback_data=f"admin:promo:send:premium:{code}")],
+            ])
+            await message.answer(
+                "✅ <b>Промокод создан</b>\n\n"
+                f"Код: <code>{code}</code>\n"
+                f"Скидка: -{disc}\n\n"
+                "В sales-боте нажмите «🎟 Промокод» и введите этот код.",
+                reply_markup=keyboard,
+            )
+            return
+
+        raise SkipHandler()
+
+    @staticmethod
+    def _parse_price_updates(text: str) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for raw in (text or "").replace(",", ".").split():
+            if "=" not in raw:
+                continue
+            k, v = raw.split("=", 1)
+            k = (k or "").strip().lower()
+            v = (v or "").strip()
+            try:
+                out[k] = float(v)
+            except Exception:
+                continue
+        return out
+
+    @staticmethod
+    def _parse_free_promo_create(text: str) -> tuple[Optional[str], Optional[int]]:
+        tokens = (text or "").strip().split()
+        if not tokens:
+            return None, None
+
+        max_uses = None
+        for t in tokens[:]:
+            tl = t.lower().strip()
+            if tl.startswith("x") and tl[1:].isdigit():
+                max_uses = int(tl[1:])
+                tokens.remove(t)
+                break
+            if tl.startswith("max=") and tl[4:].isdigit():
+                max_uses = int(tl[4:])
+                tokens.remove(t)
+                break
+
+        code = tokens[0].strip().upper() if tokens else None
+        return code, max_uses
+
+    @staticmethod
+    def _parse_promo_create(text: str) -> Optional[tuple[Optional[str], str, float, Optional[int]]]:
+        tokens = (text or "").strip().split()
+        if not tokens:
+            return None
+
+        code = None
+        discount_token = None
+        max_uses = None
+
+        # detect max uses token: x10 or max=10
+        for t in tokens[:]:
+            tl = t.lower().strip()
+            if tl.startswith("x") and tl[1:].isdigit():
+                max_uses = int(tl[1:])
+                tokens.remove(t)
+                break
+            if tl.startswith("max=") and tl[4:].isdigit():
+                max_uses = int(tl[4:])
+                tokens.remove(t)
+                break
+
+        if len(tokens) == 1:
+            discount_token = tokens[0]
+        elif len(tokens) >= 2:
+            # CODE DISCOUNT
+            if "%" in tokens[1] or tokens[1].lstrip("+-").replace(".", "", 1).isdigit():
+                code = tokens[0].strip().upper()
+                discount_token = tokens[1]
+            else:
+                discount_token = tokens[0]
+
+        if not discount_token:
+            return None
+
+        dt = discount_token.strip()
+        if dt.endswith("%"):
+            try:
+                val = float(dt.strip("%").lstrip("+-"))
+            except Exception:
+                return None
+            return code, "percent", val, max_uses
+
+        try:
+            val = float(dt.lstrip("+-"))
+        except Exception:
+            return None
+        return code, "amount", val, max_uses
     
     async def handle_sync_content(self, message: Message):
         """Handle /sync_content command - sync content from Google Drive."""
@@ -340,7 +690,8 @@ class AdminBot:
             "❓" in reply_text or 
             "Новый вопрос" in reply_text or 
             "Вопрос:" in reply_text or
-            "💭 Вопрос:" in reply_text
+            "💭 Вопрос:" in reply_text or
+            "Ответ на вопрос" in reply_text
         )
         # Assignments: contain "📝", "Новое задание", "Задание", "ID задания:", "Assignment ID:"
         is_assignment = (

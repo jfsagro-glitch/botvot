@@ -75,6 +75,7 @@ class SalesBot:
         # In-memory contexts (good enough for sales flow; DB stores the resulting email)
         self._awaiting_email: dict[int, dict] = {}
         self._awaiting_forget_confirm: set[int] = set()
+        self._awaiting_promo: set[int] = set()
         # When enabled, all next messages from user are forwarded to curator group until stopped
         self._talk_mode_users: set[int] = set()
         # Remember action to continue after legal consent
@@ -144,6 +145,7 @@ class SalesBot:
         self.dp.message.register(self.handle_keyboard_online, F.text.startswith("Онлайн"))
         # Handle "Офлайн" button (with or without price in text)
         self.dp.message.register(self.handle_keyboard_offline, F.text.startswith("Офлайн"))
+        self.dp.message.register(self.handle_keyboard_promo, F.text == "🎟 Промокод")
         self.dp.message.register(self.handle_keyboard_talk_to_human, (F.text == "💬 Поговорить с человеком") | (F.text == "🔵 Поговорить с человеком"))
         self.dp.message.register(
             self.handle_forget_everything_button,
@@ -155,6 +157,9 @@ class SalesBot:
 
         # Email input (receipt requirement)
         self.dp.message.register(self.handle_email_input, F.text & ~F.command)
+
+        # Promo code input (should be BEFORE generic question handler)
+        self.dp.message.register(self.handle_promo_input, F.text & ~F.command)
 
         # Questions from sales bot (generic text) - should be LAST among text handlers
         self.dp.message.register(self.handle_question_from_sales, F.text & ~F.command)
@@ -170,6 +175,9 @@ class SalesBot:
         # Обработчик для upgrade:
         self.dp.callback_query.register(self.handle_upgrade_tariff_selection, F.data.startswith("upgrade:"))
         
+        # Free promo instant access (must be BEFORE generic handlers)
+        self.dp.callback_query.register(self.handle_free_promo_choice, F.data.startswith("free_promo:"))
+         
         # Обработчик для pay:
         self.dp.callback_query.register(self.handle_payment_initiate, F.data.startswith("pay:"))
         
@@ -297,18 +305,26 @@ class SalesBot:
                 await message.answer("❌ Ошибка: неверный офлайн тариф. Попробуйте снова.")
                 return
             
-            offline_price = OFFLINE_TARIFF_PRICES[tariff_str]
+            promo_code = await self._get_user_promo_code(user_id)
+            offline_base_price = await self.db.get_offline_tariff_price(tariff_str, OFFLINE_TARIFF_PRICES[tariff_str])
+            offline_price, promo = await self.payment_service._apply_promo_to_amount(offline_base_price, promo_code)
             offline_name = OFFLINE_TARIFF_NAMES[tariff_str]
             self._selected_program[user_id] = "offline"
             
             # Prepare metadata with email for receipt generation
             metadata = {
+                "user_id": user_id,
                 "tariff": f"offline_{tariff_str}",
                 "tariff_name": offline_name,
                 "course_program": "offline",
                 "offline_tariff": "true",
                 "customer_email": email  # For receipt generation
             }
+            if promo:
+                metadata["promo_code"] = promo.get("code")
+                metadata["promo_discount_type"] = promo.get("discount_type")
+                metadata["promo_discount_value"] = promo.get("discount_value")
+                metadata["base_amount"] = offline_base_price
             
             # Create payment with correct arguments
             payment_info = await self.payment_processor.create_payment(
@@ -333,9 +349,10 @@ class SalesBot:
                 f"💳 <b>Требуется оплата</b>\n\n"
                 f"Программа: <b>офлайн · ГЛАВНЫЙ ГЕРОЙ</b>\n"
                 f"Тариф: <b>{offline_name}</b>\n"
-                f"Сумма: {offline_price:.0f}{currency_symbol}\n\n"
-                f"Нажмите кнопку ниже для завершения оплаты:{payment_note}\n\n"
-                f"<i>Не забудьте после оплаты прислать свое имя в Телеграм на @niktatv, чтобы вас включили в рабочую группу.</i>",
+                + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
+                + f"Сумма: {offline_price:.0f}{currency_symbol}\n\n"
+                + f"Нажмите кнопку ниже для завершения оплаты:{payment_note}\n\n"
+                + f"<i>Не забудьте после оплаты прислать свое имя в Телеграм на @niktatv, чтобы вас включили в рабочую группу.</i>",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [
                         InlineKeyboardButton(
@@ -695,12 +712,14 @@ class SalesBot:
 
     async def _start_payment_flow(self, message: Message, user, tariff: Tariff):
         """Create payment and show payment URL (non-upgrade)."""
+        promo_code = await self._get_user_promo_code(user.user_id)
         payment_info = await self.payment_service.initiate_payment(
             user_id=user.user_id,
             tariff=tariff,
             referral_partner_id=user.referral_partner_id,
             customer_email=getattr(user, "email", None),
             course_program=self._selected_program.get(user.user_id),
+            promo_code=promo_code,
         )
         payment_id = payment_info["payment_id"]
         payment_url = payment_info["payment_url"]
@@ -711,13 +730,15 @@ class SalesBot:
         else:
             payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
 
-        price = PaymentService.TARIFF_PRICES[tariff]
+        base_price = await self.payment_service.get_tariff_base_price(tariff)
+        price, _ = await self.payment_service._apply_promo_to_amount(base_price, promo_code)
         currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
         await message.answer(
             f"💳 <b>Требуется оплата</b>\n\n"
             f"Тариф: <b>{tariff.value.upper()}</b>\n"
-            f"Сумма: {price:.0f}{currency_symbol}\n\n"
-            f"Нажмите кнопку ниже для завершения оплаты:{payment_note}",
+            + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
+            + f"Сумма: {price:.0f}{currency_symbol}\n\n"
+            + f"Нажмите кнопку ниже для завершения оплаты:{payment_note}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🏧 Оплатить", url=payment_url)],
                     [InlineKeyboardButton(text="🔎 Проверить оплату", callback_data=f"check_payment:{payment_id}")],
@@ -726,13 +747,18 @@ class SalesBot:
 
     async def _start_upgrade_payment_flow(self, message: Message, user, current_tariff: Tariff, new_tariff: Tariff, upgrade_price: float):
         """Create payment and show payment URL (upgrade)."""
+        promo_code = await self._get_user_promo_code(user.user_id)
+        upgrade_base_price = max(0.0, float(upgrade_price))
+        upgrade_to_pay, _ = await self.payment_service._apply_promo_to_amount(upgrade_base_price, promo_code)
+
         payment_info = await self.payment_service.initiate_payment(
             user_id=user.user_id,
             tariff=new_tariff,
             referral_partner_id=user.referral_partner_id,
             customer_email=getattr(user, "email", None),
             upgrade_from=current_tariff,
-            upgrade_price=upgrade_price,
+            promo_code=promo_code,
+            upgrade_price=upgrade_base_price,
         )
         payment_id = payment_info["payment_id"]
         payment_url = payment_info["payment_url"]
@@ -745,7 +771,8 @@ class SalesBot:
             f"{create_premium_separator()}\n\n"
             f"Текущий тариф: <b>{current_tariff.value.upper()}</b>\n"
             f"Новый тариф: <b>{new_tariff.value.upper()}</b>\n\n"
-            f"💰 К доплате: <b>{upgrade_price:.0f}{currency_symbol}</b>{payment_note}"
+            + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
+            + f"💰 К доплате: <b>{upgrade_to_pay:.0f}{currency_symbol}</b>{payment_note}"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🏧 Оплатить", url=payment_url)],
@@ -828,6 +855,21 @@ class SalesBot:
             if kind == "go_to_course":
                 await callback.message.answer("✅ Спасибо! Согласие принято. Перехожу в курс…")
                 await self.handle_keyboard_go_to_course(callback.message)
+                return
+
+            if kind == "free_promo":
+                program = pending.get("program")
+                tariff_key = pending.get("tariff")
+                if program in ("online", "offline"):
+                    self._selected_program[user_id] = program
+                await callback.message.answer("✅ Спасибо! Согласие принято. Выдаю бесплатный доступ…")
+                await self._process_free_promo_grant(
+                    callback.message,
+                    user_id,
+                    str(program or ""),
+                    str(tariff_key or ""),
+                    tg_user=callback.from_user,
+                )
                 return
 
         # Default confirmation and next step
@@ -1023,14 +1065,17 @@ class SalesBot:
         except Exception:
             pass
 
-        basic_price = PaymentService.TARIFF_PRICES.get(Tariff.BASIC, 0)
-        feedback_price = PaymentService.TARIFF_PRICES.get(Tariff.FEEDBACK, 0)
-        practic_price = PaymentService.TARIFF_PRICES.get(Tariff.PRACTIC, 0)
+        promo_code = await self._get_user_promo_code(callback.from_user.id)
+        prices = await self._get_online_prices_for_user(callback.from_user.id)
+        basic_price = prices.get(Tariff.BASIC, 0)
+        feedback_price = prices.get(Tariff.FEEDBACK, 0)
+        practic_price = prices.get(Tariff.PRACTIC, 0)
 
         # Show online tariffs + pay buttons (existing payment flow)
         text = (
             "💠 <b>онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ</b> 💠\n\n"
-            "💎 <b>BASIC</b>\n"
+            + (f"🎟 Промокод: <code>{promo_code}</code>\n\n" if promo_code else "")
+            + "💎 <b>BASIC</b>\n"
             "<b>Что включено</b>\n"
             "30 занятий\n\n"
             "Ежедневные материалы (тексты, фото, видео, ссылки)\n\n"
@@ -1080,38 +1125,46 @@ class SalesBot:
         except Exception:
             pass
 
+        promo_code = await self._get_user_promo_code(callback.from_user.id)
+        prices = await self._get_offline_prices_for_user(callback.from_user.id)
+        slushatel_price = prices.get("slushatel", 6000.0)
+        aktivist_price = prices.get("aktivist", 12000.0)
+        media_persona_price = prices.get("media_persona", 22000.0)
+        glavnyi_geroi_price = prices.get("glavnyi_geroi", 30000.0)
+
         text = (
             "🎬 <b>офлайн · ГЛАВНЫЙ ГЕРОЙ</b> 🎬\n\n"
-            "👂 <b>СЛУШАТЕЛЬ</b>\n"
+            + (f"🎟 Промокод: <code>{promo_code}</code>\n\n" if promo_code else "")
+            + "👂 <b>СЛУШАТЕЛЬ</b>\n"
             "• Присутствие\n"
             "• Лекционная часть\n"
             "• Обсуждение\n"
             "• Нетворкинг\n"
-            "💰 <b>6 000 ₽</b>\n\n"
+            f"💰 <b>{int(slushatel_price)} ₽</b>\n\n"
             "🎯 <b>АКТИВИСТ</b>\n"
             "• Всё, что в прошлом тарифе\n"
             "• Берёт интервью как ведущий\n"
             "• Даёт интервью как спикер\n"
             "• Разбор от тренеров\n"
-            "💰 <b>12 000 ₽</b>\n\n"
+            f"💰 <b>{int(aktivist_price)} ₽</b>\n\n"
             "📹 <b>МЕДИА-ПЕРСОНА</b>\n"
             "• Всё, что в прошлом тарифе\n"
             "• Получает смонтированные видео\n"
             "• 2 видеоинтервью по 10-15 мин\n"
-            "💰 <b>22 000 ₽</b>\n\n"
+            f"💰 <b>{int(media_persona_price)} ₽</b>\n\n"
             "👑 <b>ГЛАВНЫЙ ГЕРОЙ</b>\n"
             "• Всё, что в прошлом тарифе\n"
             "• 10 рилсов для продвижения\n"
             "• Личная стратегическая онлайн-консультация\n"
-            "💰 <b>30 000 ₽</b>\n\n"
+            f"💰 <b>{int(glavnyi_geroi_price)} ₽</b>\n\n"
             "✨ <b>Выберите тариф для оплаты:</b>"
         )
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="👂 Оплатить СЛУШАТЕЛЬ · 6000₽", callback_data="pay:offline:slushatel")],
-            [InlineKeyboardButton(text="🎯 Оплатить АКТИВИСТ · 12000₽", callback_data="pay:offline:aktivist")],
-            [InlineKeyboardButton(text="📹 Оплатить МЕДИА-ПЕРСОНА · 22000₽", callback_data="pay:offline:media_persona")],
-            [InlineKeyboardButton(text="👑 Оплатить ГЛАВНЫЙ ГЕРОЙ · 30000₽", callback_data="pay:offline:glavnyi_geroi")],
+            [InlineKeyboardButton(text=f"👂 Оплатить СЛУШАТЕЛЬ · {int(slushatel_price)}₽", callback_data="pay:offline:slushatel")],
+            [InlineKeyboardButton(text=f"🎯 Оплатить АКТИВИСТ · {int(aktivist_price)}₽", callback_data="pay:offline:aktivist")],
+            [InlineKeyboardButton(text=f"📹 Оплатить МЕДИА-ПЕРСОНА · {int(media_persona_price)}₽", callback_data="pay:offline:media_persona")],
+            [InlineKeyboardButton(text=f"👑 Оплатить ГЛАВНЫЙ ГЕРОЙ · {int(glavnyi_geroi_price)}₽", callback_data="pay:offline:glavnyi_geroi")],
             [InlineKeyboardButton(text="⬅️ Назад к описанию", callback_data="sales:offline_info")],
         ])
         await callback.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
@@ -1141,9 +1194,255 @@ class SalesBot:
 
     async def handle_menu(self, message: Message):
         """Resend persistent keyboard (useful if user hid it)."""
-        online_min_price = PaymentService.TARIFF_PRICES.get(Tariff.BASIC, 10.0)
+        online_min_price = await self.payment_service.get_tariff_base_price(Tariff.BASIC)
         persistent_keyboard = create_persistent_keyboard(online_min_price=online_min_price, offline_min_price=6000.0)
         await message.answer("✅ Кнопки внизу включены.", reply_markup=persistent_keyboard)
+
+    async def handle_keyboard_promo(self, message: Message):
+        """Persistent keyboard: enter promo-code input mode."""
+        user_id = message.from_user.id
+        self._awaiting_promo.add(user_id)
+        await message.answer(
+            "🎟 <b>Промокод</b>\n\n"
+            "Отправьте промокод одним сообщением.\n"
+            "Чтобы сбросить промокод — отправьте <code>сброс</code>.",
+        )
+
+    async def handle_promo_input(self, message: Message):
+        user_id = message.from_user.id
+        if user_id not in self._awaiting_promo:
+            raise SkipHandler()
+
+        text = (message.text or "").strip()
+        if not text:
+            await message.answer("❌ Пустой промокод.")
+            return
+
+        if text.lower() in ("сброс", "reset", "0", "отмена", "cancel"):
+            await self.db.clear_user_promo_code(user_id)
+            self._awaiting_promo.discard(user_id)
+            await message.answer("✅ Промокод сброшен.")
+            return
+
+        code = text.strip().upper()
+        promo = await self.db.get_valid_promo_code(code)
+        if not promo:
+            await message.answer("❌ Промокод не найден или неактивен.")
+            return
+
+        await self.db.set_user_promo_code(user_id, code)
+        self._awaiting_promo.discard(user_id)
+
+        discount_type = (promo.get("discount_type") or "").strip().lower()
+        discount_value = float(promo.get("discount_value") or 0.0)
+        disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
+
+        if self._is_free_access_promo(promo):
+            await message.answer(
+                "🎁 <b>Бесплатный доступ активирован</b>\n\n"
+                f"Промокод: <code>{code}</code> (скидка -{disc})\n\n"
+                "Выберите программу и тариф — доступ будет выдан сразу, без оплаты.",
+                reply_markup=self._free_promo_keyboard(),
+            )
+            return
+
+        await message.answer(f"✅ Промокод применён: <code>{code}</code> (скидка -{disc}).")
+
+    @staticmethod
+    def _is_free_access_promo(promo: dict) -> bool:
+        discount_type = (promo.get("discount_type") or "").strip().lower()
+        try:
+            discount_value = float(promo.get("discount_value") or 0.0)
+        except Exception:
+            discount_value = 0.0
+        return discount_type == "percent" and discount_value >= 100.0
+
+    @staticmethod
+    def _free_promo_keyboard() -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎁 Онлайн · BASIC", callback_data="free_promo:online:basic")],
+            [InlineKeyboardButton(text="🎁 Онлайн · FEEDBACK", callback_data="free_promo:online:feedback")],
+            [InlineKeyboardButton(text="🎁 Онлайн · PREMIUM", callback_data="free_promo:online:premium")],
+            [InlineKeyboardButton(text="🎁 Онлайн · PRACTIC", callback_data="free_promo:online:practic")],
+            [InlineKeyboardButton(text="🎁 Офлайн · СЛУШАТЕЛЬ", callback_data="free_promo:offline:slushatel")],
+            [InlineKeyboardButton(text="🎁 Офлайн · АКТИВИСТ", callback_data="free_promo:offline:aktivist")],
+            [InlineKeyboardButton(text="🎁 Офлайн · МЕДИА-ПЕРСОНА", callback_data="free_promo:offline:media_persona")],
+            [InlineKeyboardButton(text="🎁 Офлайн · ГЛАВНЫЙ ГЕРОЙ", callback_data="free_promo:offline:glavnyi_geroi")],
+            [InlineKeyboardButton(text="⬅️ Отмена", callback_data="cancel")],
+        ])
+
+    async def handle_free_promo_choice(self, callback: CallbackQuery):
+        """Grant instant access for 100% promo codes (no payment)."""
+        try:
+            await callback.answer()
+        except Exception:
+            pass
+
+        user_id = callback.from_user.id
+        parts = (callback.data or "").split(":")
+        if len(parts) < 3:
+            await callback.message.answer("❌ Неверная команда.")
+            return
+
+        program = (parts[1] or "").strip().lower()
+        tariff_key = (parts[2] or "").strip().lower()
+
+        # Legal consent required before granting access
+        if not await self._ensure_legal_consent(callback.message.chat.id, user_id):
+            self._pending_after_legal[user_id] = {"kind": "free_promo", "program": program, "tariff": tariff_key}
+            if program in ("online", "offline"):
+                self._selected_program[user_id] = program
+            return
+
+        await self._process_free_promo_grant(callback.message, user_id, program, tariff_key, tg_user=callback.from_user)
+
+    async def _process_free_promo_grant(
+        self,
+        message: Message,
+        user_id: int,
+        program: str,
+        tariff_key: str,
+        *,
+        tg_user: Optional[object] = None,
+    ):
+        promo_code = await self._get_user_promo_code(user_id)
+        if not promo_code:
+            await message.answer("❌ Промокод не найден. Нажмите «🎟 Промокод» и введите код заново.")
+            return
+
+        promo = await self.db.get_valid_promo_code(promo_code)
+        if not promo or not self._is_free_access_promo(promo):
+            await message.answer("❌ Этот промокод не даёт бесплатный доступ.")
+            return
+
+        if program == "online":
+            try:
+                tariff = Tariff(tariff_key)
+            except Exception:
+                await message.answer("❌ Неверный тариф.")
+                return
+
+            base_price = await self.payment_service.get_tariff_base_price(tariff)
+            final_price, _ = await self.payment_service._apply_promo_to_amount(base_price, promo_code)
+            if final_price > 0.01:
+                await message.answer("❌ Для выбранного тарифа промокод не даёт 100% скидку.")
+                return
+
+            try:
+                ok = await self.db.increment_promo_code_use(promo_code)
+                if not ok:
+                    await self.db.clear_user_promo_code(user_id)
+                    await message.answer("❌ Лимит использований промокода исчерпан.")
+                    return
+            except Exception:
+                pass
+
+            username = getattr(tg_user, "username", None) if tg_user is not None else None
+            first_name = getattr(tg_user, "first_name", None) if tg_user is not None else None
+            last_name = getattr(tg_user, "last_name", None) if tg_user is not None else None
+            user = await self.user_service.get_or_create_user(user_id, username, first_name, last_name)
+            is_upgrade = bool(user.has_access() and user.tariff != tariff)
+
+            if not user.has_access():
+                user = await self.user_service.grant_access(
+                    user_id=user_id,
+                    tariff=tariff,
+                    referral_partner_id=user.referral_partner_id,
+                )
+            else:
+                user.tariff = tariff
+                await self.db.update_user(user)
+
+            try:
+                await self.db.clear_user_promo_code(user_id)
+            except Exception:
+                pass
+
+            await self._grant_access_and_notify(message, user, is_upgrade=is_upgrade)
+            return
+
+        if program == "offline":
+            defaults = {
+                "slushatel": 6000.0,
+                "aktivist": 12000.0,
+                "media_persona": 22000.0,
+                "glavnyi_geroi": 30000.0,
+            }
+            if tariff_key not in defaults:
+                await message.answer("❌ Неверный офлайн-тариф.")
+                return
+
+            base_price = await self.db.get_offline_tariff_price(tariff_key, defaults[tariff_key])
+            final_price, _ = await self.payment_service._apply_promo_to_amount(base_price, promo_code)
+            if final_price > 0.01:
+                await message.answer("❌ Для выбранного тарифа промокод не даёт 100% скидку.")
+                return
+
+            try:
+                ok = await self.db.increment_promo_code_use(promo_code)
+                if not ok:
+                    await self.db.clear_user_promo_code(user_id)
+                    await message.answer("❌ Лимит использований промокода исчерпан.")
+                    return
+            except Exception:
+                pass
+            try:
+                await self.db.clear_user_promo_code(user_id)
+            except Exception:
+                pass
+
+            names = {
+                "slushatel": "СЛУШАТЕЛЬ",
+                "aktivist": "АКТИВИСТ",
+                "media_persona": "МЕДИА-ПЕРСОНА",
+                "glavnyi_geroi": "ГЛАВНЫЙ ГЕРОЙ",
+            }
+            await message.answer(
+                "✅ <b>Бесплатный доступ оформлен</b>\n\n"
+                "Программа: <b>офлайн · ГЛАВНЫЙ ГЕРОЙ</b>\n"
+                f"Тариф: <b>{names.get(tariff_key, tariff_key)}</b>\n\n"
+                "<i>Напишите @niktatv, чтобы вас добавили в рабочую группу.</i>"
+            )
+            return
+
+        await message.answer("❌ Неизвестная программа.")
+
+    async def _get_user_promo_code(self, user_id: int) -> Optional[str]:
+        code = (await self.db.get_user_promo_code(user_id) or "").strip()
+        if not code:
+            return None
+        promo = await self.db.get_valid_promo_code(code)
+        if not promo:
+            try:
+                await self.db.clear_user_promo_code(user_id)
+            except Exception:
+                pass
+            return None
+        return code
+
+    async def _get_online_prices_for_user(self, user_id: int) -> dict[Tariff, float]:
+        promo_code = await self._get_user_promo_code(user_id)
+        out: dict[Tariff, float] = {}
+        for t in [Tariff.BASIC, Tariff.FEEDBACK, Tariff.PRACTIC]:
+            base = await self.payment_service.get_tariff_base_price(t)
+            amount, _ = await self.payment_service._apply_promo_to_amount(base, promo_code)
+            out[t] = amount
+        return out
+
+    async def _get_offline_prices_for_user(self, user_id: int) -> dict[str, float]:
+        promo_code = await self._get_user_promo_code(user_id)
+        defaults = {
+            "slushatel": 6000.0,
+            "aktivist": 12000.0,
+            "media_persona": 22000.0,
+            "glavnyi_geroi": 30000.0,
+        }
+        out: dict[str, float] = {}
+        for k, default in defaults.items():
+            base = await self.db.get_offline_tariff_price(k, default)
+            amount, _ = await self.payment_service._apply_promo_to_amount(base, promo_code)
+            out[k] = amount
+        return out
     
     async def handle_author(self, message: Message):
         """Handle /author command - show information about course author."""
@@ -1277,20 +1576,25 @@ class SalesBot:
             f"💎 <b>Выберите тариф ниже:</b>"
         )
         
-        keyboard = create_tariff_keyboard()
+        promo_code = await self._get_user_promo_code(message.from_user.id)
+        if promo_code:
+            final_message += f"\n\n🎟 Промокод применён: <code>{promo_code}</code>"
+
+        prices = await self._get_online_prices_for_user(message.from_user.id)
+        keyboard = create_tariff_keyboard(prices=prices)
         await send_animated_message(self.bot, message.chat.id, final_message, keyboard, 0.8)
     
     async def _show_upgrade_menu(self, message: Message, user, first_name: str):
         """Show tariff upgrade menu for user with access."""
         try:
             current_tariff = user.tariff
-            current_price = PaymentService.TARIFF_PRICES[current_tariff]
+            current_price = await self.payment_service.get_tariff_base_price(current_tariff)
             
             # Определяем доступные тарифы для апгрейда
             available_upgrades = []
             if current_tariff == Tariff.BASIC:
                 available_upgrades = [
-                    (Tariff.FEEDBACK, PaymentService.TARIFF_PRICES[Tariff.FEEDBACK])
+                    (Tariff.FEEDBACK, await self.payment_service.get_tariff_base_price(Tariff.FEEDBACK))
                 ]
             elif current_tariff == Tariff.FEEDBACK:
                 await message.answer(
@@ -1422,8 +1726,10 @@ class SalesBot:
             if program in ("online", "offline"):
                 self._selected_program[callback.from_user.id] = program
 
-            # Allow tariffs that have a configured price
-            if tariff not in PaymentService.TARIFF_PRICES:
+            # Ensure tariff has a valid configured price (DB override or default)
+            try:
+                await self.payment_service.get_tariff_base_price(tariff)
+            except Exception:
                 logger.warning(f"   ⚠️ Tariff {tariff.value} not priced/configured")
                 try:
                     await callback.message.answer("❌ Этот тариф временно недоступен. Используйте /start для выбора тарифа.")
@@ -1647,19 +1953,15 @@ class SalesBot:
                 return
             
             current_tariff = user.tariff
-            current_price = PaymentService.TARIFF_PRICES[current_tariff]
+            promo_code = await self._get_user_promo_code(user_id)
+            current_price = await self.payment_service.get_tariff_base_price(current_tariff)
             
             # Определяем доступные тарифы для апгрейда
-            available_upgrades = []
+            available_upgrades: list[Tariff] = []
             if current_tariff == Tariff.BASIC:
-                available_upgrades = [
-                    (Tariff.FEEDBACK, PaymentService.TARIFF_PRICES[Tariff.FEEDBACK]),
-                    (Tariff.PRACTIC, PaymentService.TARIFF_PRICES[Tariff.PRACTIC])
-                ]
+                available_upgrades = [Tariff.FEEDBACK, Tariff.PRACTIC]
             elif current_tariff == Tariff.FEEDBACK:
-                available_upgrades = [
-                    (Tariff.PRACTIC, PaymentService.TARIFF_PRICES[Tariff.PRACTIC])
-                ]
+                available_upgrades = [Tariff.PRACTIC]
             elif current_tariff == Tariff.PRACTIC:
                 await callback.message.answer(
                     "✅ У вас уже максимальный доступный тариф!\n\n"
@@ -1681,14 +1983,18 @@ class SalesBot:
                 f"{create_premium_separator()}\n"
                 f"🔄 <b>СМЕНА ТАРИФА (АПГРЕЙД)</b>\n"
                 f"{create_premium_separator()}\n\n"
-                f"Ваш текущий тариф: <b>{current_tariff.value.upper()}</b> ({current_price:.0f}₽)\n\n"
-                f"Доступные тарифы для апгрейда:\n\n"
+                f"Ваш текущий тариф: <b>{current_tariff.value.upper()}</b> ({current_price:.0f}₽)\n"
+                + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
+                + "\n"
+                + f"Доступные тарифы для апгрейда:\n\n"
             )
             
             # Создаем клавиатуру с доступными тарифами
             keyboard_buttons = []
-            for tariff, price in available_upgrades:
-                price_diff = price - current_price
+            for tariff in available_upgrades:
+                price = await self.payment_service.get_tariff_base_price(tariff)
+                price_diff_base = max(0.0, float(price) - float(current_price))
+                price_diff, _ = await self.payment_service._apply_promo_to_amount(price_diff_base, promo_code)
                 tariff_name = tariff.value.upper()
                 if tariff == Tariff.FEEDBACK:
                     tariff_name = "С ОБРАТНОЙ СВЯЗЬЮ"
@@ -1769,14 +2075,15 @@ class SalesBot:
                 )
                 return
             
-            # Вычисляем разницу в цене
-            current_price = PaymentService.TARIFF_PRICES[current_tariff]
-            new_price = PaymentService.TARIFF_PRICES[new_tariff]
-            price_diff = new_price - current_price
+            promo_code = await self._get_user_promo_code(user_id)
+            current_price = await self.payment_service.get_tariff_base_price(current_tariff)
+            new_price = await self.payment_service.get_tariff_base_price(new_tariff)
+            price_diff_base = max(0.0, float(new_price) - float(current_price))
+            price_diff, _ = await self.payment_service._apply_promo_to_amount(price_diff_base, promo_code)
             
             logger.info(f"   Current: {current_tariff.value} ({current_price}₽)")
             logger.info(f"   New: {new_tariff.value} ({new_price}₽)")
-            logger.info(f"   Difference: {price_diff}₽")
+            logger.info(f"   Difference: {price_diff}₽ (base={price_diff_base}₽)")
             
             # Receipt/email required for some YooKassa shops
             if self._receipt_required() and not getattr(user, "email", None):
@@ -1784,7 +2091,7 @@ class SalesBot:
                     "kind": "upgrade",
                     "current_tariff": current_tariff.value,
                     "new_tariff": new_tariff.value,
-                    "upgrade_price": float(price_diff),
+                    "upgrade_price": float(price_diff_base),
                 }
                 await callback.message.answer(
                     "✉️ Для оплаты нужен email для отправки чека.\n"
@@ -1799,7 +2106,8 @@ class SalesBot:
                 referral_partner_id=user.referral_partner_id,
                 customer_email=getattr(user, "email", None),
                 upgrade_from=current_tariff,  # Старый тариф для справки
-                upgrade_price=price_diff  # Цена апгрейда
+                promo_code=promo_code,
+                upgrade_price=price_diff_base,  # Базовая цена апгрейда (скидка применится внутри PaymentService)
             )
             
             payment_id = payment_info["payment_id"]
@@ -1820,7 +2128,8 @@ class SalesBot:
                 f"{create_premium_separator()}\n\n"
                 f"Текущий тариф: <b>{current_tariff.value.upper()}</b> ({current_price:.0f}₽)\n"
                 f"Новый тариф: <b>{new_tariff.value.upper()}</b> ({new_price:.0f}₽)\n\n"
-                f"💰 К доплате: <b>{price_diff:.0f}{currency_symbol}</b>{payment_note}"
+                + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
+                + f"💰 К доплате: <b>{price_diff:.0f}{currency_symbol}</b>{payment_note}"
             )
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -1969,14 +2278,24 @@ class SalesBot:
                 # Since PaymentService expects a Tariff enum, we'll use a workaround
                 # Create payment directly with payment processor
                 payment_processor = self.payment_processor
+
+                promo_code = await self._get_user_promo_code(user_id)
+                offline_base_price = await self.db.get_offline_tariff_price(tariff_str, OFFLINE_TARIFF_PRICES[tariff_str])
+                offline_price, promo = await self.payment_service._apply_promo_to_amount(offline_base_price, promo_code)
                 
                 # Prepare metadata
                 metadata = {
+                    "user_id": user_id,
                     "tariff": f"offline_{tariff_str}",
                     "tariff_name": offline_name,
                     "course_program": "offline",
                     "offline_tariff": "true"
                 }
+                if promo:
+                    metadata["promo_code"] = promo.get("code")
+                    metadata["promo_discount_type"] = promo.get("discount_type")
+                    metadata["promo_discount_value"] = promo.get("discount_value")
+                    metadata["base_amount"] = offline_base_price
                 
                 # Add email to metadata if available (for receipt generation)
                 if getattr(user, "email", None):
@@ -2008,9 +2327,10 @@ class SalesBot:
                     f"💳 <b>Требуется оплата</b>\n\n"
                     f"Программа: <b>офлайн · ГЛАВНЫЙ ГЕРОЙ</b>\n"
                     f"Тариф: <b>{offline_name}</b>\n"
-                    f"Сумма: {offline_price:.0f}{currency_symbol}\n\n"
-                    f"Нажмите кнопку ниже для завершения оплаты:{payment_note}\n\n"
-                    f"<i>Не забудьте после оплаты прислать свое имя в Телеграм на @niktatv, чтобы вас включили в рабочую группу.</i>",
+                    + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
+                    + f"Сумма: {offline_price:.0f}{currency_symbol}\n\n"
+                    + f"Нажмите кнопку ниже для завершения оплаты:{payment_note}\n\n"
+                    + f"<i>Не забудьте после оплаты прислать свое имя в Телеграм на @niktatv, чтобы вас включили в рабочую группу.</i>",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [
                             InlineKeyboardButton(
@@ -2039,6 +2359,8 @@ class SalesBot:
                     )
                     return
                 
+                promo_code = await self._get_user_promo_code(user_id)
+
                 # Initiate payment
                 payment_info = await self.payment_service.initiate_payment(
                     user_id=user_id,
@@ -2046,6 +2368,7 @@ class SalesBot:
                     referral_partner_id=user.referral_partner_id,
                     customer_email=getattr(user, "email", None),
                     course_program=self._selected_program.get(user_id),
+                    promo_code=promo_code,
                 )
                 
                 payment_id = payment_info["payment_id"]
@@ -2060,15 +2383,16 @@ class SalesBot:
                 else:
                     payment_note = "\n\n<i>После оплаты нажмите кнопку 'Проверить статус оплаты' для подтверждения.</i>"
                 
-                # Форматируем цену с валютой
-                price = PaymentService.TARIFF_PRICES[tariff]
+                base_price = await self.payment_service.get_tariff_base_price(tariff)
+                price, _ = await self.payment_service._apply_promo_to_amount(base_price, promo_code)
                 currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
                 
                 await callback.message.edit_text(
                     f"💳 <b>Требуется оплата</b>\n\n"
                     f"Тариф: <b>{tariff.value.upper()}</b>\n"
-                    f"Сумма: {price:.0f}{currency_symbol}\n\n"
-                    f"Нажмите кнопку ниже для завершения оплаты:{payment_note}",
+                    + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
+                    + f"Сумма: {price:.0f}{currency_symbol}\n\n"
+                    + f"Нажмите кнопку ниже для завершения оплаты:{payment_note}",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [
                             InlineKeyboardButton(
@@ -2227,19 +2551,15 @@ class SalesBot:
         
         # Используем логику из handle_upgrade_tariff
         current_tariff = user.tariff
-        current_price = PaymentService.TARIFF_PRICES[current_tariff]
+        promo_code = await self._get_user_promo_code(user_id)
+        current_price = await self.payment_service.get_tariff_base_price(current_tariff)
         
         # Определяем доступные тарифы для апгрейда
-        available_upgrades = []
+        available_upgrades: list[Tariff] = []
         if current_tariff == Tariff.BASIC:
-            available_upgrades = [
-                (Tariff.FEEDBACK, PaymentService.TARIFF_PRICES[Tariff.FEEDBACK]),
-                (Tariff.PRACTIC, PaymentService.TARIFF_PRICES[Tariff.PRACTIC])
-            ]
+            available_upgrades = [Tariff.FEEDBACK, Tariff.PRACTIC]
         elif current_tariff == Tariff.FEEDBACK:
-            available_upgrades = [
-                (Tariff.PRACTIC, PaymentService.TARIFF_PRICES[Tariff.PRACTIC])
-            ]
+            available_upgrades = [Tariff.PRACTIC]
         elif current_tariff == Tariff.PRACTIC:
             await message.answer(
                 "✅ У вас уже максимальный доступный тариф!\n\n"
@@ -2261,14 +2581,18 @@ class SalesBot:
             f"{create_premium_separator()}\n"
             f"🔄 <b>СМЕНА ТАРИФА (АПГРЕЙД)</b>\n"
             f"{create_premium_separator()}\n\n"
-            f"Ваш текущий тариф: <b>{current_tariff.value.upper()}</b> ({current_price:.0f}₽)\n\n"
-            f"Доступные тарифы для апгрейда:\n\n"
+            f"Ваш текущий тариф: <b>{current_tariff.value.upper()}</b> ({current_price:.0f}₽)\n"
+            + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
+            + "\n"
+            + f"Доступные тарифы для апгрейда:\n\n"
         )
         
         # Создаем клавиатуру с доступными тарифами
         keyboard_buttons = []
-        for tariff, price in available_upgrades:
-            price_diff = price - current_price
+        for tariff in available_upgrades:
+            price = await self.payment_service.get_tariff_base_price(tariff)
+            price_diff_base = max(0.0, float(price) - float(current_price))
+            price_diff, _ = await self.payment_service._apply_promo_to_amount(price_diff_base, promo_code)
             tariff_name = tariff.value.upper()
             if tariff == Tariff.FEEDBACK:
                 tariff_name = "С ОБРАТНОЙ СВЯЗЬЮ"
@@ -2667,6 +2991,57 @@ class SalesBot:
             
             if status == PaymentStatus.COMPLETED:
                 logger.info(f"   Payment completed! Processing access...")
+
+                # Offline payments are created directly via payment_processor with custom metadata.
+                # They are not processed by PaymentService (Tariff enum doesn't include offline_*).
+                payment_details = None
+                metadata = {}
+                try:
+                    if hasattr(self.payment_processor, "get_payment_details"):
+                        payment_details = await self.payment_processor.get_payment_details(payment_id)
+                except Exception:
+                    payment_details = None
+
+                if isinstance(payment_details, dict):
+                    metadata = (
+                        payment_details.get("metadata")
+                        or (payment_details.get("payment") or {}).get("metadata")
+                        or {}
+                    )
+
+                is_offline = False
+                try:
+                    offline_flag = str(metadata.get("offline_tariff", "")).strip().lower()
+                    tariff_key = str(metadata.get("tariff", "")).strip().lower()
+                    is_offline = offline_flag in ("true", "1", "yes") or tariff_key.startswith("offline_")
+                except Exception:
+                    is_offline = False
+
+                if is_offline:
+                    offline_name = metadata.get("tariff_name") or "ОФЛАЙН"
+                    promo_code = str(metadata.get("promo_code") or "").strip()
+                    safe_user_id = int(metadata.get("user_id") or callback.from_user.id)
+
+                    if promo_code:
+                        try:
+                            await self.db.increment_promo_code_use(promo_code)
+                        except Exception:
+                            logger.warning("Failed to increment promo usage for offline payment", exc_info=True)
+                        try:
+                            await self.db.clear_user_promo_code(safe_user_id)
+                        except Exception:
+                            logger.warning("Failed to clear user promo code for offline payment", exc_info=True)
+
+                    await callback.message.edit_text(
+                        "✅ <b>Оплата подтверждена!</b>\n\n"
+                        "Программа: <b>офлайн · ГЛАВНЫЙ ГЕРОЙ</b>\n"
+                        f"Тариф: <b>{offline_name}</b>\n"
+                        + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
+                        + "\n"
+                        + "<i>Не забудьте после оплаты прислать свое имя в Телеграм на @niktatv, чтобы вас включили в рабочую группу.</i>"
+                    )
+                    return
+
                 # Process payment completion
                 result = await self.payment_service.process_payment_completion(payment_id)
                 
