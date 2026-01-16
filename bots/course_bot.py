@@ -2525,6 +2525,12 @@ class CourseBot:
                 keyboard = create_lesson_keyboard_from_json(lesson_data_with_day, user, Config.GENERAL_GROUP_ID)
 
                 # Ensure submit-assignment button is present under the task message.
+                submit_row = [
+                    InlineKeyboardButton(
+                        text="📝 Отправить задание",
+                        callback_data=f"assignment:submit:lesson_{int(day)}",
+                    )
+                ]
                 try:
                     has_submit = False
                     if keyboard and hasattr(keyboard, "inline_keyboard"):
@@ -2540,22 +2546,9 @@ class CourseBot:
                     if not has_submit:
                         if not keyboard or not hasattr(keyboard, "inline_keyboard"):
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[])
-                        keyboard.inline_keyboard.insert(
-                            0,
-                            [
-                                InlineKeyboardButton(
-                                    text="📝 Отправить задание",
-                                    callback_data=f"assignment:submit:lesson_{int(day)}",
-                                )
-                            ],
-                        )
+                        keyboard.inline_keyboard.insert(0, submit_row)
                 except Exception:
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(
-                            text="📝 Отправить задание",
-                            callback_data=f"assignment:submit:lesson_{int(day)}",
-                        )
-                    ]])
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[submit_row])
                 logger.info(f"   ✅ Keyboard created: {len(keyboard.inline_keyboard) if keyboard and hasattr(keyboard, 'inline_keyboard') else 0} button rows")
                 if day == 30:
                     logger.info(f"   🎊 Lesson 30: Keyboard should contain FINAL MESSAGE button")
@@ -2573,14 +2566,11 @@ class CourseBot:
                             )
                         ]
                         
-                        # Добавляем кнопку к существующей клавиатуре
-                        if keyboard and hasattr(keyboard, 'inline_keyboard') and keyboard.inline_keyboard:
-                            keyboard.inline_keyboard.append(download_button)
-                            logger.info(f"   ✅ Added download button to existing keyboard for lesson 21")
-                        else:
-                            # Если клавиатуры нет, создаем новую
-                            keyboard = InlineKeyboardMarkup(inline_keyboard=[download_button])
-                            logger.info(f"   ✅ Created new keyboard with download button for lesson 21")
+                        # Добавляем кнопку к существующей клавиатуре (не затирая submit-кнопку)
+                        if not keyboard or not hasattr(keyboard, "inline_keyboard"):
+                            keyboard = InlineKeyboardMarkup(inline_keyboard=[submit_row])
+                        keyboard.inline_keyboard.append(download_button)
+                        logger.info(f"   ✅ Added download button to task keyboard for lesson 21")
                 
                 logger.info(f"   Sending task message to user {user.user_id}, day {day}")
                 logger.info(f"   Task message length: {len(task_message)} characters")
@@ -2614,17 +2604,33 @@ class CourseBot:
                                 logger.warning(f"   Skipped empty task part {i}/{len(message_parts)}")
 
                         # Отправляем последнюю непустую часть с клавиатурой
-                        await self.bot.send_message(
+                        sent = await self.bot.send_message(
                             user.user_id,
                             message_parts[last_non_empty_idx],
                             reply_markup=keyboard,
                         )
+                        try:
+                            await self.bot.edit_message_reply_markup(
+                                chat_id=user.user_id,
+                                message_id=sent.message_id,
+                                reply_markup=keyboard,
+                            )
+                        except Exception:
+                            pass
                         logger.info(
                             f"   Sent task part {last_non_empty_idx + 1}/{len(message_parts)} with keyboard"
                         )
                 else:
                     # Если сообщение короткое, отправляем как есть
-                    await self.bot.send_message(user.user_id, task_message, reply_markup=keyboard)
+                    sent = await self.bot.send_message(user.user_id, task_message, reply_markup=keyboard)
+                    try:
+                        await self.bot.edit_message_reply_markup(
+                            chat_id=user.user_id,
+                            message_id=sent.message_id,
+                            reply_markup=keyboard,
+                        )
+                    except Exception:
+                        pass
             else:
                 # Если задания нет, отправляем только клавиатуру
                 lesson_data_with_day = lesson_data.copy()
