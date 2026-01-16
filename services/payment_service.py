@@ -19,7 +19,7 @@ class PaymentService:
     
     # Tariff prices (in your currency - adjust as needed)
     TARIFF_PRICES = {
-        Tariff.BASIC: 10.0,        # Базовый тариф - ТЕСТОВАЯ ЦЕНА (поменять обратно на 5000.0 для боя)
+        Tariff.BASIC: 5000.0,     # Базовый тариф
         Tariff.FEEDBACK: 10000.0,  # С обратной связью от лидера - проверка заданий, ответы на вопросы
         Tariff.PREMIUM: 8000.0,    # Обратная связь + премиум сообщество
         Tariff.PRACTIC: 20000.0,   # Всё из Basic + Feedback + 3 онлайн интервью с разбором
