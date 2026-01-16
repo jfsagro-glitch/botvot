@@ -105,7 +105,10 @@ class PaymentService:
         metadata = {
             "tariff": tariff.value,
             "user_id": user_id,
-            "referral_partner_id": referral_partner_id
+            "referral_partner_id": referral_partner_id,
+            "currency": currency,
+            # Snapshot for analytics / validation; keeps stats stable even if prices change later.
+            "base_amount": base_amount,
         }
 
         if customer_email:
@@ -118,7 +121,6 @@ class PaymentService:
             metadata["promo_code"] = promo.get("code")
             metadata["promo_discount_type"] = promo.get("discount_type")
             metadata["promo_discount_value"] = promo.get("discount_value")
-            metadata["base_amount"] = base_amount
         
         # Добавляем информацию об апгрейде в метаданные
         if upgrade_from is not None:
@@ -324,6 +326,53 @@ class PaymentService:
             )
         
         logger.info(f"   ✅ Access granted successfully to user {user_id}")
+
+        # Record sales event (best-effort; should not block granting access)
+        try:
+            from core.config import Config
+
+            course_program = (metadata.get("course_program") or "online").strip().lower()
+            currency = (metadata.get("currency") or Config.PAYMENT_CURRENCY or "").strip().upper() or None
+
+            base_amount_meta = metadata.get("base_amount")
+            if base_amount_meta is None and metadata.get("is_upgrade", False):
+                base_amount_meta = metadata.get("upgrade_base_amount") or metadata.get("base_amount")
+
+            try:
+                base_amount_f = float(base_amount_meta) if base_amount_meta is not None else None
+            except Exception:
+                base_amount_f = None
+
+            try:
+                paid_amount_f = float(payment_data.get("amount")) if payment_data.get("amount") is not None else None
+            except Exception:
+                paid_amount_f = None
+
+            promo_code = (metadata.get("promo_code") or "").strip() or None
+            promo_discount_type = metadata.get("promo_discount_type")
+            promo_discount_value = metadata.get("promo_discount_value")
+
+            promo_discount_amount = None
+            if promo_code and base_amount_f is not None and paid_amount_f is not None:
+                promo_discount_amount = max(0.0, float(base_amount_f) - float(paid_amount_f))
+
+            await self.db.record_payment_event(
+                payment_id=processed_payment_id,
+                user_id=int(user_id),
+                course_program=course_program,
+                tariff=tariff.value,
+                is_upgrade=bool(metadata.get("is_upgrade", False)),
+                base_amount=base_amount_f,
+                paid_amount=paid_amount_f,
+                currency=currency,
+                promo_code=promo_code,
+                promo_discount_type=promo_discount_type,
+                promo_discount_value=promo_discount_value,
+                promo_discount_amount=promo_discount_amount,
+                source="payment",
+            )
+        except Exception:
+            pass
         
         if processed_payment_id:
             try:

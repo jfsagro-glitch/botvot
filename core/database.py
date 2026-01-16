@@ -203,6 +203,41 @@ class Database:
             )
         """)
 
+        # Payment events (sales / promo analytics)
+        # NOTE: processed_payments only tracks idempotency; this table stores business metrics.
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS payment_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payment_id TEXT UNIQUE,
+                user_id INTEGER NOT NULL,
+                course_program TEXT NOT NULL DEFAULT 'online', -- 'online' | 'offline' | etc
+                tariff TEXT NOT NULL,
+                is_upgrade INTEGER NOT NULL DEFAULT 0,
+                base_amount REAL,
+                paid_amount REAL,
+                currency TEXT,
+                promo_code TEXT,
+                promo_discount_type TEXT,
+                promo_discount_value REAL,
+                promo_discount_amount REAL,
+                source TEXT NOT NULL DEFAULT 'payment', -- 'payment' | 'free_promo' | etc
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_payment_events_created_at
+            ON payment_events(created_at)
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_payment_events_tariff
+            ON payment_events(course_program, tariff)
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_payment_events_promo
+            ON payment_events(promo_code)
+        """)
+
         # Simple key-value settings storage (for runtime binding like curator group chat_id)
         await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -311,6 +346,164 @@ class Database:
         )
         await self.conn.commit()
         return cursor.rowcount == 1
+
+    # Payment analytics / sales events
+    async def record_payment_event(
+        self,
+        *,
+        payment_id: Optional[str],
+        user_id: int,
+        course_program: str,
+        tariff: str,
+        is_upgrade: bool,
+        base_amount: Optional[float],
+        paid_amount: Optional[float],
+        currency: Optional[str],
+        promo_code: Optional[str] = None,
+        promo_discount_type: Optional[str] = None,
+        promo_discount_value: Optional[float] = None,
+        promo_discount_amount: Optional[float] = None,
+        source: str = "payment",
+        created_at: Optional[str] = None,
+    ) -> bool:
+        await self._ensure_connection()
+        now = (created_at or datetime.utcnow().isoformat())
+        pid = (payment_id or "").strip() or None
+        program = (course_program or "online").strip().lower() or "online"
+        tariff_norm = (tariff or "").strip().lower()
+        if not tariff_norm:
+            return False
+
+        promo = (promo_code or "").strip() or None
+        promo_type = (promo_discount_type or "").strip().lower() or None
+        try:
+            promo_val = float(promo_discount_value) if promo_discount_value is not None else None
+        except Exception:
+            promo_val = None
+        try:
+            promo_amt = float(promo_discount_amount) if promo_discount_amount is not None else None
+        except Exception:
+            promo_amt = None
+
+        try:
+            b = float(base_amount) if base_amount is not None else None
+        except Exception:
+            b = None
+        try:
+            p = float(paid_amount) if paid_amount is not None else None
+        except Exception:
+            p = None
+
+        try:
+            cur = (currency or "").strip().upper() or None
+            await self.conn.execute(
+                """
+                INSERT OR IGNORE INTO payment_events (
+                    payment_id, user_id, course_program, tariff, is_upgrade,
+                    base_amount, paid_amount, currency,
+                    promo_code, promo_discount_type, promo_discount_value, promo_discount_amount,
+                    source, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    pid,
+                    int(user_id),
+                    program,
+                    tariff_norm,
+                    1 if is_upgrade else 0,
+                    b,
+                    p,
+                    cur,
+                    promo,
+                    promo_type,
+                    promo_val,
+                    promo_amt,
+                    (source or "payment").strip().lower(),
+                    now,
+                ),
+            )
+            await self.conn.commit()
+            return True
+        except Exception:
+            return False
+
+    async def get_sales_overview(self, *, top_promos: int = 10, top_tariffs: int = 20) -> dict:
+        await self._ensure_connection()
+
+        async with self.conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_events,
+                COUNT(DISTINCT user_id) AS users_total,
+                SUM(CASE WHEN COALESCE(paid_amount, 0) > 0.01 THEN 1 ELSE 0 END) AS paid_events,
+                SUM(CASE WHEN COALESCE(paid_amount, 0) > 0.01 THEN COALESCE(paid_amount, 0) ELSE 0 END) AS paid_total,
+                SUM(COALESCE(base_amount, 0)) AS base_total,
+                SUM(COALESCE(promo_discount_amount, 0)) AS promo_discount_total,
+                SUM(CASE WHEN promo_code IS NOT NULL AND promo_code != '' THEN 1 ELSE 0 END) AS promo_applied_events,
+                COUNT(DISTINCT CASE WHEN promo_code IS NOT NULL AND promo_code != '' THEN promo_code END) AS promo_unique_codes,
+                MIN(created_at) AS first_event_at,
+                MAX(created_at) AS last_event_at
+            FROM payment_events
+            """
+        ) as c:
+            row = await c.fetchone()
+
+        async with self.conn.execute(
+            """
+            SELECT
+                course_program,
+                tariff,
+                COUNT(*) AS cnt,
+                COUNT(DISTINCT user_id) AS users,
+                SUM(COALESCE(paid_amount, 0)) AS paid_total,
+                SUM(COALESCE(base_amount, 0)) AS base_total,
+                SUM(COALESCE(promo_discount_amount, 0)) AS discount_total
+            FROM payment_events
+            GROUP BY course_program, tariff
+            ORDER BY paid_total DESC, cnt DESC
+            LIMIT ?
+            """,
+            (int(top_tariffs),),
+        ) as c:
+            by_tariff = [dict(r) for r in await c.fetchall()]
+
+        async with self.conn.execute(
+            """
+            SELECT
+                promo_code,
+                COUNT(*) AS cnt,
+                COUNT(DISTINCT user_id) AS users,
+                SUM(COALESCE(promo_discount_amount, 0)) AS discount_total,
+                SUM(COALESCE(paid_amount, 0)) AS paid_total
+            FROM payment_events
+            WHERE promo_code IS NOT NULL AND promo_code != ''
+            GROUP BY promo_code
+            ORDER BY cnt DESC, discount_total DESC
+            LIMIT ?
+            """,
+            (int(top_promos),),
+        ) as c:
+            promos = [dict(r) for r in await c.fetchall()]
+
+        # Promo codes table overview (may differ from events if events weren't recorded historically)
+        async with self.conn.execute(
+            """
+            SELECT
+                COUNT(*) AS promo_codes_total,
+                SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS promo_codes_active,
+                SUM(COALESCE(used_count, 0)) AS promo_codes_used_total
+            FROM promo_codes
+            """
+        ) as c:
+            promo_table = await c.fetchone()
+
+        return {
+            "overview": dict(row) if row else {},
+            "by_tariff": by_tariff,
+            "top_promos": promos,
+            "promo_table": dict(promo_table) if promo_table else {},
+        }
 
     async def reset_user_data(self, user_id: int):
         """

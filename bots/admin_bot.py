@@ -254,7 +254,67 @@ class AdminBot:
             # Get assignment statistics
             total_assignments = await self._get_total_assignments()
             pending_assignments = await self._get_pending_assignments()
-            
+
+            # Sales / promo analytics (best-effort)
+            sales_text = ""
+            try:
+                from core.config import Config
+
+                sales = await self.db.get_sales_overview(top_promos=10, top_tariffs=20)
+                ov = (sales or {}).get("overview") or {}
+                promo_table = (sales or {}).get("promo_table") or {}
+
+                def _money(v: object) -> str:
+                    try:
+                        x = float(v or 0.0)
+                    except Exception:
+                        x = 0.0
+                    sym = "₽" if str(Config.PAYMENT_CURRENCY).upper() == "RUB" else str(Config.PAYMENT_CURRENCY).upper()
+                    return f"{x:.0f}{sym}"
+
+                if int(ov.get("total_events") or 0) > 0:
+                    sales_text = (
+                        "\n\n💰 <b>Продажи и промокоды:</b>\n"
+                        f"• Событий: {int(ov.get('total_events') or 0)} (платных: {int(ov.get('paid_events') or 0)})\n"
+                        f"• Покупателей (уник.): {int(ov.get('users_total') or 0)}\n"
+                        f"• Итого оплачено: {_money(ov.get('paid_total'))}\n"
+                        f"• Скидки по промокодам: {_money(ov.get('promo_discount_total'))} "
+                        f"(применений: {int(ov.get('promo_applied_events') or 0)}, кодов: {int(ov.get('promo_unique_codes') or 0)})\n"
+                        f"• Промокодов всего/активных: {int(promo_table.get('promo_codes_total') or 0)}/{int(promo_table.get('promo_codes_active') or 0)} "
+                        f"(использований по счетчику: {int(promo_table.get('promo_codes_used_total') or 0)})"
+                    )
+
+                    by_tariff = (sales or {}).get("by_tariff") or []
+                    if by_tariff:
+                        lines = []
+                        for row in by_tariff[:12]:
+                            program = (row.get("course_program") or "online")
+                            tariff = (row.get("tariff") or "")
+                            cnt = int(row.get("cnt") or 0)
+                            paid_total = _money(row.get("paid_total"))
+                            disc_total = _money(row.get("discount_total"))
+                            lines.append(f"  • {program}/{tariff}: {cnt} | {paid_total} | скидки {disc_total}")
+                        sales_text += "\n\n📦 <b>По тарифам:</b>\n" + "\n".join(lines)
+
+                    top_promos = (sales or {}).get("top_promos") or []
+                    if top_promos:
+                        lines = []
+                        for row in top_promos[:10]:
+                            code = row.get("promo_code")
+                            cnt = int(row.get("cnt") or 0)
+                            disc_total = _money(row.get("discount_total"))
+                            paid_total = _money(row.get("paid_total"))
+                            lines.append(f"  • {code}: {cnt} | скидки {disc_total} | оплачено {paid_total}")
+                        sales_text += "\n\n🎟 <b>Топ промокодов:</b>\n" + "\n".join(lines)
+                else:
+                    sales_text = (
+                        "\n\n💰 <b>Продажи и промокоды:</b>\n"
+                        "• Пока нет событий оплат/промокодов в статистике.\n"
+                        "• Данные начнут собираться после этого деплоя."
+                    )
+            except Exception:
+                pass
+             
             stats_text = (
                 "📊 <b>Статистика системы</b>\n\n"
                 f"👥 <b>Пользователи:</b>\n"
@@ -267,7 +327,10 @@ class AdminBot:
                 f"💡 <b>Для детальной статистики по пользователю:</b>\n"
                 f"Используйте /user_stats USER_ID"
             )
-            
+
+            if sales_text:
+                stats_text += sales_text
+             
             # Add keyboard with button to get all users stats
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [

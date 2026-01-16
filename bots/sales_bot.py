@@ -1323,6 +1323,28 @@ class SalesBot:
                 user.tariff = tariff
                 await self.db.update_user(user)
 
+            # Record analytics event (best-effort)
+            try:
+                from core.config import Config
+                base_amount_f = float(base_price) if base_price is not None else None
+                await self.db.record_payment_event(
+                    payment_id=None,
+                    user_id=int(user_id),
+                    course_program="online",
+                    tariff=tariff.value,
+                    is_upgrade=is_upgrade,
+                    base_amount=base_amount_f,
+                    paid_amount=0.0,
+                    currency=Config.PAYMENT_CURRENCY,
+                    promo_code=promo_code,
+                    promo_discount_type=promo.get("discount_type"),
+                    promo_discount_value=promo.get("discount_value"),
+                    promo_discount_amount=base_amount_f,
+                    source="free_promo",
+                )
+            except Exception:
+                pass
+
             try:
                 await self.db.clear_user_promo_code(user_id)
             except Exception:
@@ -1358,6 +1380,28 @@ class SalesBot:
                 pass
             try:
                 await self.db.clear_user_promo_code(user_id)
+            except Exception:
+                pass
+
+            # Record analytics event (best-effort)
+            try:
+                from core.config import Config
+                base_amount_f = float(base_price) if base_price is not None else None
+                await self.db.record_payment_event(
+                    payment_id=None,
+                    user_id=int(user_id),
+                    course_program="offline",
+                    tariff=tariff_key,
+                    is_upgrade=False,
+                    base_amount=base_amount_f,
+                    paid_amount=0.0,
+                    currency=Config.PAYMENT_CURRENCY,
+                    promo_code=promo_code,
+                    promo_discount_type=promo.get("discount_type"),
+                    promo_discount_value=promo.get("discount_value"),
+                    promo_discount_amount=base_amount_f,
+                    source="free_promo",
+                )
             except Exception:
                 pass
 
