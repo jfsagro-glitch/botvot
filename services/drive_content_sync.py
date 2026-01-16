@@ -164,7 +164,7 @@ class DriveContentSync:
             # Split lesson into posts:
             # 1. By manual markers: ---POST--- or [POST] or ---
             # 2. Automatically by length (>4000 chars)
-            lesson_posts = self._split_lesson_into_posts(lesson)
+            lesson_posts = DriveContentSync._split_lesson_into_posts(lesson)
             
             # If lesson was split into multiple posts, store as list; otherwise as string (backward compatible)
             if len(lesson_posts) > 1:
