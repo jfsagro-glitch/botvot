@@ -558,7 +558,9 @@ class SalesBot:
                     + f"\n🆔 ID: {user_id}\n\n"
                     f"📍 <b>Источник:</b> Продающий бот"
                 )
-                await send_to_admin_bot(test_message)
+                sent = await send_to_admin_bot(test_message)
+                if not sent:
+                    raise RuntimeError("send_to_admin_bot returned False")
                 logger.info(f"✅ Test message sent to admin bot (PUP) from sales bot user {user_id}")
             except Exception as e:
                 logger.error(f"❌ Cannot send to admin bot (PUP): {e}", exc_info=True)
@@ -643,13 +645,15 @@ class SalesBot:
                 ])
                 
                 # Send header text
-                await send_to_admin_bot(header, reply_markup=keyboard)
+                sent_header = await send_to_admin_bot(header, reply_markup=keyboard)
                 # Send voice file
-                await send_to_admin_bot(
+                sent_voice = await send_to_admin_bot(
                     message_text="Голосовое сообщение от пользователя",
                     voice_file_id=message.voice.file_id,
                     reply_markup=keyboard
                 )
+                if not (sent_header and sent_voice):
+                    raise RuntimeError("send_to_admin_bot returned False")
                 
                 await message.answer("✅ Голосовое отправлено в ПУП.", reply_markup=self._talk_mode_keyboard())
                 logger.info(f"✅ Voice question from sales bot sent to admin bot (PUP) from user {user_id}")
@@ -2616,7 +2620,9 @@ class SalesBot:
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
         if is_admin_bot_configured():
             try:
-                await send_to_admin_bot(admin_message, reply_markup=keyboard)
+                sent = await send_to_admin_bot(admin_message, reply_markup=keyboard)
+                if not sent:
+                    raise RuntimeError("send_to_admin_bot returned False")
                 logger.info(f"✅ Question from sales bot sent to admin bot (PUP) from user {user_id}")
             except Exception as e:
                 logger.error(f"Error sending to admin bot: {e}, falling back", exc_info=True)

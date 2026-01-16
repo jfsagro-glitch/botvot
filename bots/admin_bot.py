@@ -328,9 +328,10 @@ class AdminBot:
         
         reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
         answer_text = message.text or message.caption or ""
+        voice_file_id = message.voice.file_id if message.voice else None
         
-        if not answer_text:
-            await message.answer("❌ Ответ не может быть пустым.")
+        if not answer_text and not voice_file_id:
+            await message.answer("❌ Ответ не может быть пустым (текст или голосовое).")
             return
         
         # Check if this is a question or assignment
@@ -352,13 +353,13 @@ class AdminBot:
         )
         
         if is_question:
-            await self._handle_question_reply(message, reply_text, answer_text)
+            await self._handle_question_reply(message, reply_text, answer_text, voice_file_id=voice_file_id)
         elif is_assignment:
-            await self._handle_assignment_reply(message, reply_text, answer_text)
+            await self._handle_assignment_reply(message, reply_text, answer_text, voice_file_id=voice_file_id)
         else:
             await message.answer("❌ Не удалось определить тип сообщения. Ответьте на вопрос или задание.")
     
-    async def _handle_question_reply(self, message: Message, reply_text: str, answer_text: str):
+    async def _handle_question_reply(self, message: Message, reply_text: str, answer_text: str, voice_file_id: Optional[str] = None):
         """Handle reply to question."""
         # Extract user_id from message - try multiple formats
         user_id = None
@@ -440,14 +441,14 @@ class AdminBot:
         
         # Send answer to user via appropriate bot (determined by bot_type)
         try:
-            await self._send_answer_to_user(user_id, answer_text, lesson_day, bot_type)
+            await self._send_answer_to_user(user_id, answer_text, lesson_day, bot_type, voice_file_id=voice_file_id)
             bot_name = "продающий бот" if bot_type == "sales" else "обучающий бот"
             await message.answer(f"✅ Ответ отправлен пользователю в {bot_name}.")
         except Exception as e:
             logger.error(f"Error sending answer to user: {e}", exc_info=True)
             await message.answer(f"❌ Ошибка при отправке ответа: {e}")
     
-    async def _handle_assignment_reply(self, message: Message, reply_text: str, answer_text: str):
+    async def _handle_assignment_reply(self, message: Message, reply_text: str, answer_text: str, voice_file_id: Optional[str] = None):
         """Handle reply to assignment."""
         # Extract assignment_id - try multiple formats
         assignment_id = None
@@ -499,11 +500,9 @@ class AdminBot:
         # Send feedback to user via course bot
         user = await self.user_service.get_user(assignment.user_id)
         if user:
-            feedback_message = (
-                f"💬 <b>Обратная связь по вашему заданию</b>\n\n"
-                f"День {assignment.day_number}\n\n"
-                f"{answer_text}"
-            )
+            feedback_message = f"💬 <b>Обратная связь по вашему заданию</b>\n\nДень {assignment.day_number}"
+            if answer_text:
+                feedback_message += f"\n\n{answer_text}"
             
             # Send via course bot
             from core.config import Config
@@ -514,7 +513,10 @@ class AdminBot:
             
             course_bot = Bot(token=Config.COURSE_BOT_TOKEN)
             try:
-                await course_bot.send_message(user.user_id, feedback_message)
+                if voice_file_id:
+                    await course_bot.send_voice(user.user_id, voice_file_id, caption=feedback_message)
+                else:
+                    await course_bot.send_message(user.user_id, feedback_message)
                 await self.assignment_service.mark_feedback_sent(assignment_id)
                 await message.answer("✅ Обратная связь отправлена пользователю в обучающий бот.")
             except Exception as e:
@@ -525,7 +527,14 @@ class AdminBot:
         else:
             await message.answer("❌ Пользователь не найден.")
     
-    async def _send_answer_to_user(self, user_id: int, answer_text: str, lesson_day: Optional[int] = None, bot_type: str = "course"):
+    async def _send_answer_to_user(
+        self,
+        user_id: int,
+        answer_text: str,
+        lesson_day: Optional[int] = None,
+        bot_type: str = "course",
+        voice_file_id: Optional[str] = None,
+    ):
         """Send answer to user via appropriate bot."""
         from core.config import Config
         from aiogram import Bot
@@ -543,10 +552,13 @@ class AdminBot:
         answer_message = "💬 <b>Ответ на ваш вопрос</b>\n\n"
         if lesson_day:
             answer_message += f"📚 Урок: День {lesson_day}\n\n"
-        answer_message += answer_text
+        answer_message += (answer_text or "")
         
         try:
-            await target_bot.send_message(user_id, answer_message)
+            if voice_file_id:
+                await target_bot.send_voice(user_id, voice_file_id, caption=answer_message)
+            else:
+                await target_bot.send_message(user_id, answer_message)
         finally:
             await target_bot.session.close()
     
