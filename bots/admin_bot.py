@@ -1759,7 +1759,7 @@ class AdminBot:
         """Get number of pending assignments."""
         await self.db._ensure_connection()
         async with self.db.conn.execute(
-            "SELECT COUNT(*) FROM assignments WHERE feedback IS NULL OR feedback = ''"
+            "SELECT COUNT(*) FROM assignments WHERE status = 'submitted' AND (admin_feedback IS NULL OR admin_feedback = '')"
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 0
