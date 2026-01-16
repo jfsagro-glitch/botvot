@@ -1108,10 +1108,6 @@ class SalesBot:
             [InlineKeyboardButton(text="🎯 Оплатить АКТИВИСТ · 12000₽", callback_data="pay:offline:aktivist")],
             [InlineKeyboardButton(text="📹 Оплатить МЕДИА-ПЕРСОНА · 22000₽", callback_data="pay:offline:media_persona")],
             [InlineKeyboardButton(text="👑 Оплатить ГЛАВНЫЙ ГЕРОЙ · 30000₽", callback_data="pay:offline:glavnyi_geroi")],
-            [InlineKeyboardButton(
-                text="🔗 Открыть сайт «Главный герой»",
-                url="https://sites.google.com/view/nikitinartem/education/main-hero"
-            )],
             [InlineKeyboardButton(text="⬅️ Назад к описанию", callback_data="sales:offline_info")],
         ])
         await callback.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
@@ -2474,12 +2470,6 @@ class SalesBot:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔗 Открыть сайт «Главный герой»",
-                    url="https://sites.google.com/view/nikitinartem/education/main-hero"
-                )
-            ],
-            [
-                InlineKeyboardButton(
                     text="💎 Тарифы офлайн",
                     callback_data="sales:tariffs:offline"
                 )
@@ -2574,12 +2564,6 @@ class SalesBot:
         )
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔗 Открыть сайт «Главный герой»",
-                    url="https://sites.google.com/view/nikitinartem/education/main-hero"
-                )
-            ],
             [
                 InlineKeyboardButton(
                     text="💎 Тарифы офлайн",
@@ -2971,4 +2955,3 @@ if __name__ == "__main__":
     print("  python run_all_bots.py")
     print("=" * 60)
     sys.exit(1)
-
