@@ -113,6 +113,10 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_admin_promo_create, F.data == "admin:promo:create")
         self.dp.callback_query.register(self.handle_admin_promo_create_free, F.data == "admin:promo:create_free")
         self.dp.callback_query.register(self.handle_admin_promo_list, F.data == "admin:promo:list")
+        self.dp.callback_query.register(self.handle_admin_promo_wizard_start, F.data == "admin:promo:wiz")
+        self.dp.callback_query.register(self.handle_admin_promo_wizard_action, F.data.startswith("admin:promo:wiz:"))
+        self.dp.callback_query.register(self.handle_admin_promo_view, F.data.startswith("admin:promo:view:"))
+        self.dp.callback_query.register(self.handle_admin_promo_share, F.data.startswith("admin:promo:share:"))
         self.dp.callback_query.register(self.handle_admin_promo_send, F.data.startswith("admin:promo:send:"))
         
         # Commands for user stats
@@ -358,7 +362,8 @@ class AdminBot:
     async def handle_admin_promos_menu(self, callback: CallbackQuery):
         await callback.answer()
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Создать промокод", callback_data="admin:promo:create")],
+            [InlineKeyboardButton(text="🎛 Создать кнопками", callback_data="admin:promo:wiz")],
+            [InlineKeyboardButton(text="➕ Создать (вручную)", callback_data="admin:promo:create")],
             [InlineKeyboardButton(text="🎁 Бесплатный промокод (100%)", callback_data="admin:promo:create_free")],
             [InlineKeyboardButton(text="📋 Список промокодов", callback_data="admin:promo:list")],
         ])
@@ -376,7 +381,12 @@ class AdminBot:
             await callback.message.answer("🎟 Промокодов пока нет.")
             return
         text = "🎟 <b>Промокоды:</b>\n" + "\n".join([self._format_promo_row(p) for p in promos])
-        await callback.message.answer(text)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"{p.get('code')} →", callback_data=f"admin:promo:view:{p.get('code')}")]
+            for p in promos
+            if p.get("code")
+        ] + [[InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:promos")]])
+        await callback.message.answer(text, reply_markup=keyboard)
 
     async def handle_admin_promo_create(self, callback: CallbackQuery):
         await callback.answer()
@@ -422,6 +432,8 @@ class AdminBot:
             chat_id = Config.GENERAL_GROUP_ID
         elif target == "premium":
             chat_id = Config.PREMIUM_GROUP_ID
+        elif target == "me":
+            chat_id = callback.from_user.id
 
         if not chat_id:
             await callback.message.answer("❌ Целевой чат не настроен (GENERAL_GROUP_ID / PREMIUM_GROUP_ID).")
@@ -433,12 +445,264 @@ class AdminBot:
 
         await self.bot.send_message(
             chat_id,
-            "🎟 <b>Промокод на скидку</b>\n\n"
-            f"Код: <code>{promo.get('code')}</code>\n"
-            f"Скидка: -{disc}\n\n"
-            "Откройте sales-бот и нажмите «🎟 Промокод», чтобы применить.",
+            self._promo_share_text(promo, disc),
         )
         await callback.message.answer("✅ Отправлено.")
+
+    @staticmethod
+    def _promo_share_text(promo: dict, disc: str) -> str:
+        is_free = False
+        try:
+            is_free = (str(promo.get("discount_type") or "").strip().lower() == "percent") and (float(promo.get("discount_value") or 0) >= 100.0)
+        except Exception:
+            is_free = False
+        title = "🎁 <b>Бесплатный доступ</b>" if is_free else "🎟 <b>Промокод</b>"
+        return (
+            f"{title}\n\n"
+            f"Код: <code>{promo.get('code')}</code>\n"
+            f"Скидка: -{disc}\n\n"
+            "Откройте sales-бот и нажмите «🎟 Промокод», чтобы применить."
+        )
+
+    def _get_promo_wizard(self, admin_id: int) -> dict:
+        state = self._admin_state.get(admin_id)
+        if not state or state.get("type") != "promo_wizard":
+            state = {
+                "type": "promo_wizard",
+                "discount_type": "percent",
+                "discount_value": 10.0,
+                "max_uses": None,
+                "code": None,
+            }
+            self._admin_state[admin_id] = state
+        return state
+
+    def _promo_wizard_text(self, state: dict) -> str:
+        discount_type = (state.get("discount_type") or "").strip().lower()
+        discount_value = float(state.get("discount_value") or 0.0)
+        max_uses = state.get("max_uses")
+        code = state.get("code")
+        disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
+        uses = "∞" if max_uses in (None, "", 0) else str(int(max_uses))
+        code_text = code or "🎲 (будет сгенерирован)"
+        return (
+            "🎛 <b>Создание промокода (кнопками)</b>\n\n"
+            f"Скидка: <b>-{disc}</b>\n"
+            f"Лимит использований: <b>{uses}</b>\n"
+            f"Код: <b>{code_text}</b>\n\n"
+            "Выберите параметры и нажмите «✅ Создать»."
+        )
+
+    def _promo_wizard_keyboard(self, state: dict) -> InlineKeyboardMarkup:
+        discount_type = (state.get("discount_type") or "").strip().lower()
+
+        type_row = [
+            InlineKeyboardButton(text="%", callback_data="admin:promo:wiz:type:percent"),
+            InlineKeyboardButton(text="₽", callback_data="admin:promo:wiz:type:amount"),
+            InlineKeyboardButton(text="🎁 100%", callback_data="admin:promo:wiz:type:free"),
+        ]
+
+        if discount_type == "amount":
+            values = [500, 1000, 2000, 5000, 10000]
+            value_rows = [
+                [
+                    InlineKeyboardButton(text=str(v), callback_data=f"admin:promo:wiz:val:{v}")
+                    for v in values[:3]
+                ],
+                [
+                    InlineKeyboardButton(text=str(v), callback_data=f"admin:promo:wiz:val:{v}")
+                    for v in values[3:]
+                ],
+                [InlineKeyboardButton(text="✍️ Другая сумма", callback_data="admin:promo:wiz:val:custom")],
+            ]
+        else:
+            # percent or free
+            values = [5, 10, 15, 20, 25, 30, 50, 100]
+            value_rows = [
+                [
+                    InlineKeyboardButton(text=f"{v}%", callback_data=f"admin:promo:wiz:val:{v}")
+                    for v in values[:4]
+                ],
+                [
+                    InlineKeyboardButton(text=f"{v}%", callback_data=f"admin:promo:wiz:val:{v}")
+                    for v in values[4:]
+                ],
+                [InlineKeyboardButton(text="✍️ Другой %", callback_data="admin:promo:wiz:val:custom")],
+            ]
+
+        max_rows = [
+            [
+                InlineKeyboardButton(text="∞", callback_data="admin:promo:wiz:max:unlim"),
+                InlineKeyboardButton(text="1", callback_data="admin:promo:wiz:max:1"),
+                InlineKeyboardButton(text="5", callback_data="admin:promo:wiz:max:5"),
+                InlineKeyboardButton(text="10", callback_data="admin:promo:wiz:max:10"),
+            ],
+            [
+                InlineKeyboardButton(text="50", callback_data="admin:promo:wiz:max:50"),
+                InlineKeyboardButton(text="100", callback_data="admin:promo:wiz:max:100"),
+            ],
+        ]
+
+        code_rows = [
+            [
+                InlineKeyboardButton(text="🎲 Код авто", callback_data="admin:promo:wiz:code:auto"),
+                InlineKeyboardButton(text="✍️ Ввести код", callback_data="admin:promo:wiz:code:custom"),
+            ]
+        ]
+
+        action_rows = [
+            [InlineKeyboardButton(text="✅ Создать", callback_data="admin:promo:wiz:create")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:promos")],
+        ]
+
+        return InlineKeyboardMarkup(inline_keyboard=[type_row] + value_rows + max_rows + code_rows + action_rows)
+
+    async def handle_admin_promo_wizard_start(self, callback: CallbackQuery):
+        await callback.answer()
+        state = self._get_promo_wizard(callback.from_user.id)
+        text = self._promo_wizard_text(state)
+        kb = self._promo_wizard_keyboard(state)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            await callback.message.answer(text, reply_markup=kb)
+
+    async def handle_admin_promo_wizard_action(self, callback: CallbackQuery):
+        await callback.answer()
+        admin_id = callback.from_user.id
+        state = self._get_promo_wizard(admin_id)
+        parts = (callback.data or "").split(":")
+        # admin:promo:wiz:<cmd>:<arg>
+        cmd = parts[3] if len(parts) > 3 else None
+        arg = parts[4] if len(parts) > 4 else None
+
+        if cmd == "type":
+            if arg == "amount":
+                state["discount_type"] = "amount"
+                state["discount_value"] = 500.0
+            elif arg == "free":
+                state["discount_type"] = "percent"
+                state["discount_value"] = 100.0
+            else:
+                state["discount_type"] = "percent"
+                state["discount_value"] = 10.0
+
+        elif cmd == "val":
+            if arg == "custom":
+                self._admin_state[admin_id] = {"type": "promo_wizard_value_input", "wizard": state}
+                await callback.message.answer(
+                    "✍️ Отправьте значение скидки одним сообщением.\n"
+                    "Примеры: <code>10%</code>, <code>25</code>, <code>500</code>"
+                )
+                return
+            try:
+                state["discount_value"] = float(arg)
+            except Exception:
+                pass
+
+        elif cmd == "max":
+            if arg == "unlim":
+                state["max_uses"] = None
+            else:
+                try:
+                    state["max_uses"] = int(arg)
+                except Exception:
+                    pass
+
+        elif cmd == "code":
+            if arg == "auto":
+                state["code"] = None
+            elif arg == "custom":
+                self._admin_state[admin_id] = {"type": "promo_wizard_code_input", "wizard": state}
+                await callback.message.answer("✍️ Отправьте код промокода (латиница/цифры), пример: <code>HERO100</code>")
+                return
+
+        elif cmd == "create":
+            await self.db.connect()
+            code = (state.get("code") or "").strip().upper() or self._generate_promo_code()
+            discount_type = (state.get("discount_type") or "percent").strip().lower()
+            discount_value = float(state.get("discount_value") or 0.0)
+            max_uses = state.get("max_uses")
+            try:
+                await self.db.create_promo_code(
+                    code=code,
+                    discount_type=discount_type,
+                    discount_value=discount_value,
+                    max_uses=max_uses,
+                    created_by=admin_id,
+                )
+            except Exception as e:
+                await callback.message.answer(f"❌ Не удалось создать промокод: {e}")
+                return
+
+            # Reset wizard state
+            self._admin_state.pop(admin_id, None)
+            disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📣 В общий чат", callback_data=f"admin:promo:send:general:{code}")],
+                [InlineKeyboardButton(text="📣 В премиум чат", callback_data=f"admin:promo:send:premium:{code}")],
+                [InlineKeyboardButton(text="📩 Мне (для пересылки)", callback_data=f"admin:promo:send:me:{code}")],
+                [InlineKeyboardButton(text="📨 Сообщение для пересылки", callback_data=f"admin:promo:share:{code}")],
+            ])
+            await callback.message.answer(
+                "✅ <b>Промокод создан</b>\n\n"
+                f"Код: <code>{code}</code>\n"
+                f"Скидка: -{disc}\n\n"
+                "В sales-боте нажмите «🎟 Промокод» и введите этот код.",
+                reply_markup=keyboard,
+            )
+            return
+
+        # Refresh wizard UI
+        self._admin_state[admin_id] = state
+        text = self._promo_wizard_text(state)
+        kb = self._promo_wizard_keyboard(state)
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            await callback.message.answer(text, reply_markup=kb)
+
+    async def handle_admin_promo_view(self, callback: CallbackQuery):
+        await callback.answer()
+        parts = (callback.data or "").split(":")
+        code = parts[3] if len(parts) > 3 else ""
+        await self.db.connect()
+        promo = await self.db.get_valid_promo_code(code)
+        if not promo:
+            await callback.message.answer("❌ Промокод не найден или неактивен.")
+            return
+        discount_type = (promo.get("discount_type") or "").strip().lower()
+        discount_value = float(promo.get("discount_value") or 0.0)
+        disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
+        text = (
+            "🎟 <b>Промокод</b>\n\n"
+            f"Код: <code>{promo.get('code')}</code>\n"
+            f"Скидка: -{disc}\n"
+            f"Лимит: {promo.get('max_uses') or '∞'}\n"
+            f"Использовано: {promo.get('used_count') or 0}\n"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📣 В общий чат", callback_data=f"admin:promo:send:general:{promo.get('code')}")],
+            [InlineKeyboardButton(text="📣 В премиум чат", callback_data=f"admin:promo:send:premium:{promo.get('code')}")],
+            [InlineKeyboardButton(text="📩 Мне (для пересылки)", callback_data=f"admin:promo:send:me:{promo.get('code')}")],
+            [InlineKeyboardButton(text="📨 Сообщение для пересылки", callback_data=f"admin:promo:share:{promo.get('code')}")],
+            [InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:promo:list")],
+        ])
+        await callback.message.answer(text, reply_markup=keyboard)
+
+    async def handle_admin_promo_share(self, callback: CallbackQuery):
+        await callback.answer()
+        parts = (callback.data or "").split(":")
+        code = parts[3] if len(parts) > 3 else ""
+        await self.db.connect()
+        promo = await self.db.get_valid_promo_code(code)
+        if not promo:
+            await callback.message.answer("❌ Промокод не найден или неактивен.")
+            return
+        discount_type = (promo.get("discount_type") or "").strip().lower()
+        discount_value = float(promo.get("discount_value") or 0.0)
+        disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
+        await callback.message.answer(self._promo_share_text(promo, disc))
 
     async def handle_admin_state_input(self, message: Message):
         state = self._admin_state.get(message.from_user.id)
@@ -490,6 +754,42 @@ class AdminBot:
                 "В sales-боте нажмите «🎟 Промокод» и введите этот код — доступ выдастся без оплаты.",
                 reply_markup=keyboard,
             )
+            return
+
+        if kind in ("promo_wizard_code_input", "promo_wizard_value_input"):
+            wizard = state.get("wizard")
+            if not isinstance(wizard, dict):
+                self._admin_state.pop(message.from_user.id, None)
+                await message.answer("❌ Сессия настройки промокода устарела. Откройте «🎛 Создать кнопками» заново.")
+                return
+
+            if kind == "promo_wizard_code_input":
+                code = (text or "").strip().upper()
+                if not code or any(ch not in self._promo_code_chars() for ch in code):
+                    await message.answer("❌ Код может содержать только латиницу и цифры. Попробуйте снова.")
+                    return
+                wizard["code"] = code
+            else:
+                raw = (text or "").strip().replace(",", ".")
+                try:
+                    if raw.endswith("%"):
+                        val = float(raw.strip("%"))
+                        wizard["discount_type"] = "percent"
+                        wizard["discount_value"] = abs(val)
+                    else:
+                        val = float(raw)
+                        if (wizard.get("discount_type") or "").strip().lower() == "amount":
+                            wizard["discount_value"] = abs(val)
+                        else:
+                            # default to percent if not amount
+                            wizard["discount_type"] = "percent"
+                            wizard["discount_value"] = abs(val)
+                except Exception:
+                    await message.answer("❌ Не понял число. Пример: <code>10%</code> или <code>500</code>")
+                    return
+
+            self._admin_state[message.from_user.id] = wizard
+            await message.answer(self._promo_wizard_text(wizard), reply_markup=self._promo_wizard_keyboard(wizard))
             return
 
         if kind == "create_promo":
