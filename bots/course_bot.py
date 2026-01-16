@@ -266,25 +266,8 @@ class CourseBot:
         self.dp.message.register(self.handle_assignment_media, F.photo | F.video | F.document)
         self.dp.message.register(self.handle_question_text, F.text & ~F.command)
         
-        # Обработка ответов кураторов на вопросы (в группе кураторов или админ-чате)
-        curator_chat_ids = []
-        if Config.CURATOR_GROUP_ID:
-            try:
-                curator_chat_ids.append(int(Config.CURATOR_GROUP_ID))
-            except (ValueError, TypeError):
-                pass
-        if Config.ADMIN_CHAT_ID != 0:
-            curator_chat_ids.append(Config.ADMIN_CHAT_ID)
-        
-        if curator_chat_ids:
-            for chat_id in curator_chat_ids:
-                self.dp.message.register(
-                    self.handle_curator_feedback,
-                    F.chat.id == chat_id,
-                    F.reply_to_message
-                )
-        
-        self.dp.message.register(self.handle_admin_feedback, F.chat.id == Config.ADMIN_CHAT_ID, F.reply_to_message)
+        # Ответы кураторов/админов через course-bot отключены:
+        # вопросы и задания обрабатываются только через ПУП (admin-bot).
     
     async def handle_start(self, message: Message):
         """Handle /start command - check access and show current lesson."""
@@ -2487,6 +2470,8 @@ class CourseBot:
                 # Передаем day в lesson_data для создания клавиатуры
                 lesson_data_with_day = lesson_data.copy()
                 lesson_data_with_day["day_number"] = day
+                # Ensure submit-assignment button appears (keyboard checks lesson_data["task*"])
+                lesson_data_with_day["task"] = task
                 logger.info(f"   📝 Creating keyboard for task message, day={day} (type={type(day).__name__})")
                 keyboard = create_lesson_keyboard_from_json(lesson_data_with_day, user, Config.GENERAL_GROUP_ID)
                 logger.info(f"   ✅ Keyboard created: {len(keyboard.inline_keyboard) if keyboard and hasattr(keyboard, 'inline_keyboard') else 0} button rows")
@@ -2836,39 +2821,15 @@ class CourseBot:
             f"✍️ <b>Ответ:</b>\n{safe_message_text}"
         )
         
-        # Send to admin bot if configured, otherwise to admin chat
+        # Send ONLY to PUP (admin bot)
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-        if is_admin_bot_configured():
-            try:
-                await send_to_admin_bot(
-                    admin_text,
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text=f"💬 Ответить пользователю",
-                                callback_data=f"admin_reply:{assignment.assignment_id}"
-                            )
-                        ]
-                    ])
-                )
-            except Exception as e:
-                logger.error(f"Error sending to admin bot: {e}, falling back to admin chat")
-                # Fallback to admin chat
-                await self.bot.send_message(
-                    Config.ADMIN_CHAT_ID,
-                    admin_text,
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text=f"💬 Ответить пользователю",
-                                callback_data=f"admin_reply:{assignment.assignment_id}"
-                            )
-                        ]
-                    ])
-                )
-        elif Config.ADMIN_CHAT_ID != 0:
-            await self.bot.send_message(
-                Config.ADMIN_CHAT_ID,
+        if not is_admin_bot_configured():
+            logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward assignment.")
+            await message.answer("❌ Не удалось отправить задание на проверку: ПУП не настроен.")
+            return
+
+        try:
+            await send_to_admin_bot(
                 admin_text,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [
@@ -2879,11 +2840,15 @@ class CourseBot:
                     ]
                 ])
             )
+        except Exception as e:
+            logger.error(f"Error sending to admin bot: {e}", exc_info=True)
+            await message.answer("❌ Не удалось отправить задание в ПУП. Попробуйте позже.")
+            return
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
             "✅ <b>Задание отправлено!</b>\n\n"
-            "📤 Ваше задание отправлено нашей команде на проверку 👥.\n"
+            "📤 Ваше задание отправлено в ПУП 👥.\n"
             "⏳ Вы получите обратную связь в ближайшее время 💬.",
             reply_markup=persistent_keyboard
         )
@@ -2975,35 +2940,32 @@ class CourseBot:
             admin_text += f"\n\n✍️ <b>Подпись:</b>\n{safe_caption}"
         
         # Forward media to admin
-        if message.photo:
-            await self.bot.send_photo(Config.ADMIN_CHAT_ID, message.photo[-1].file_id, caption=admin_text)
-        elif message.video:
-            # Send to admin bot if configured
-            from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-            if is_admin_bot_configured():
-                try:
-                    await send_to_admin_bot(admin_text, video_file_id=message.video.file_id)
-                except Exception as e:
-                    logger.error(f"Error sending to admin bot: {e}, falling back")
-                    await self.bot.send_video(Config.ADMIN_CHAT_ID, message.video.file_id, caption=admin_text)
-            elif Config.ADMIN_CHAT_ID != 0:
-                await self.bot.send_video(Config.ADMIN_CHAT_ID, message.video.file_id, caption=admin_text)
-        elif message.document:
-            # Send to admin bot if configured
-            from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-            if is_admin_bot_configured():
-                try:
-                    await send_to_admin_bot(admin_text, document_file_id=message.document.file_id)
-                except Exception as e:
-                    logger.error(f"Error sending to admin bot: {e}, falling back")
-                    await self.bot.send_document(Config.ADMIN_CHAT_ID, message.document.file_id, caption=admin_text)
-            elif Config.ADMIN_CHAT_ID != 0:
-                await self.bot.send_document(Config.ADMIN_CHAT_ID, message.document.file_id, caption=admin_text)
+        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+        if not is_admin_bot_configured():
+            logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward assignment media.")
+            await message.answer("❌ Не удалось отправить задание на проверку: ПУП не настроен.")
+            return
+
+        reply_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Ответить пользователю", callback_data=f"admin_reply:{assignment.assignment_id}")]
+        ])
+
+        try:
+            if message.photo:
+                await send_to_admin_bot(admin_text, photo_file_id=message.photo[-1].file_id, reply_markup=reply_kb)
+            elif message.video:
+                await send_to_admin_bot(admin_text, video_file_id=message.video.file_id, reply_markup=reply_kb)
+            elif message.document:
+                await send_to_admin_bot(admin_text, document_file_id=message.document.file_id, reply_markup=reply_kb)
+        except Exception as e:
+            logger.error(f"Error sending assignment media to admin bot: {e}", exc_info=True)
+            await message.answer("❌ Не удалось отправить задание в ПУП. Попробуйте позже.")
+            return
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
             "✅ <b>Задание отправлено!</b>\n\n"
-            "📤 Ваше задание отправлено нашей команде на проверку 👥.\n"
+            "📤 Ваше задание отправлено в ПУП 👥.\n"
             "⏳ Вы получите обратную связь в ближайшее время 💬.",
             reply_markup=persistent_keyboard
         )
@@ -3062,7 +3024,7 @@ class CourseBot:
         # Форматируем вопрос для кураторов
         curator_message = await self.question_service.format_question_for_admin(question_data)
         
-        # Send to admin bot if configured, otherwise to curator group or admin chat
+        # Send ONLY to PUP (admin bot)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(
@@ -3072,35 +3034,24 @@ class CourseBot:
             ]
         ])
         
-        # Send to admin bot if configured
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-        if is_admin_bot_configured():
-            try:
-                await send_to_admin_bot(curator_message, reply_markup=keyboard)
-                logger.info(f"✅ Question sent to admin bot from user {user_id}")
-            except Exception as e:
-                logger.error(f"Error sending to admin bot: {e}, falling back")
-                # Fallback to curator group or admin chat
-                target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
-                if target_chat_id:
-                    await self.bot.send_message(target_chat_id, curator_message, reply_markup=keyboard)
-        else:
-            # Send to curator group or admin chat
-            target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
-            if target_chat_id:
-                try:
-                    await self.bot.send_message(target_chat_id, curator_message, reply_markup=keyboard)
-                    logger.info(f"✅ Question sent to curator group from user {user_id}")
-                except Exception as e:
-                    logger.error(f"❌ Error sending question: {e}")
-            else:
-                logger.warning("⚠️ No curator group or admin chat configured!")
+        if not is_admin_bot_configured():
+            logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward question.")
+            await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
+            return
+
+        try:
+            await send_to_admin_bot(curator_message, reply_markup=keyboard)
+            logger.info(f"✅ Question sent to admin bot from user {user_id}")
+        except Exception as e:
+            logger.error(f"Error sending question to admin bot: {e}", exc_info=True)
+            await message.answer("❌ Не удалось отправить вопрос в ПУП. Попробуйте позже.")
+            return
         
-        persistent_keyboard = self._create_persistent_keyboard()
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
             "✅ <b>Вопрос отправлен!</b>\n\n"
-            "📤 Ваш вопрос отправлен кураторам 👥.\n"
+            "📤 Ваш вопрос отправлен в ПУП 👥.\n"
             "⏳ Мы ответим вам как можно скорее 💬.",
             reply_markup=persistent_keyboard
         )

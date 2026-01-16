@@ -483,6 +483,19 @@ class Database:
             rows = await cursor.fetchall()
             return [dict(r) for r in rows]
 
+    async def deactivate_promo_code(self, code: str) -> bool:
+        """Soft-delete: mark promo code inactive."""
+        await self._ensure_connection()
+        code = (code or "").strip()
+        if not code:
+            return False
+        cursor = await self.conn.execute(
+            "UPDATE promo_codes SET active = 0 WHERE code = ?",
+            (code,),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
     # User promo codes
     async def set_user_promo_code(self, user_id: int, promo_code: str):
         await self._ensure_connection()

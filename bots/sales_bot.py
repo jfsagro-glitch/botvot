@@ -566,44 +566,32 @@ class SalesBot:
         
         # Try sending a test message to admin bot (PUP) if configured
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-        if is_admin_bot_configured():
-            try:
-                test_message = (
-                    f"🟢 <b>Новый диалог (sales bot)</b>\n"
-                    f"👤 {message.from_user.first_name or 'Пользователь'}"
-                    + (f" (@{message.from_user.username})" if message.from_user.username else "")
-                    + f"\n🆔 ID: {user_id}\n\n"
-                    f"📍 <b>Источник:</b> Продающий бот"
-                )
-                sent = await send_to_admin_bot(test_message)
-                if not sent:
-                    raise RuntimeError("send_to_admin_bot returned False")
-                logger.info(f"✅ Test message sent to admin bot (PUP) from sales bot user {user_id}")
-            except Exception as e:
-                logger.error(f"❌ Cannot send to admin bot (PUP): {e}", exc_info=True)
-                await message.answer(
-                    "❌ Не могу отправить сообщение в ПУП.\n\n"
-                    "Проверьте настройки ADMIN_BOT_TOKEN и ADMIN_CHAT_ID."
-                )
-                return
-        else:
-            # Fallback to curator group if admin bot not configured
-            target_chat_id = await self._normalize_curator_chat_id()
-            try:
-                await self.bot.send_message(
-                    target_chat_id,
-                    f"🟢 <b>Новый диалог (sales bot)</b>\n"
-                    f"👤 {message.from_user.first_name or 'Пользователь'}"
-                    + (f" (@{message.from_user.username})" if message.from_user.username else "")
-                    + f"\n🆔 {user_id}"
-                )
-            except Exception as e:
-                logger.error(f"❌ Cannot send to curator group {target_chat_id}: {e}", exc_info=True)
-                await message.answer(
-                    "❌ Не могу отправить сообщение.\n\n"
-                    "Проверьте настройки бота."
-                )
-                return
+        if not is_admin_bot_configured():
+            await message.answer(
+                "❌ Сейчас поддержка недоступна: не настроен ПУП.\n\n"
+                "Проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID."
+            )
+            return
+
+        try:
+            test_message = (
+                f"🟢 <b>Новый диалог (sales bot)</b>\n"
+                f"👤 {message.from_user.first_name or 'Пользователь'}"
+                + (f" (@{message.from_user.username})" if message.from_user.username else "")
+                + f"\n🆔 ID: {user_id}\n\n"
+                f"📍 <b>Источник:</b> Продающий бот"
+            )
+            sent = await send_to_admin_bot(test_message)
+            if not sent:
+                raise RuntimeError("send_to_admin_bot returned False")
+            logger.info(f"✅ Test message sent to admin bot (PUP) from sales bot user {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Cannot send to admin bot (PUP): {e}", exc_info=True)
+            await message.answer(
+                "❌ Не могу отправить сообщение в ПУП.\n\n"
+                "Проверьте настройки ADMIN_BOT_TOKEN и ADMIN_CHAT_ID."
+            )
+            return
 
         self._talk_mode_users.add(user_id)
 
@@ -648,67 +636,46 @@ class SalesBot:
         # Send to admin bot (PUP) if configured
         # Check both token and chat_id (chat_id can be negative for groups, so check != 0)
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-        if is_admin_bot_configured():
-            try:
-                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-                
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="💬 Ответить",
-                            callback_data=f"reply_question:{user_id}:0"
-                        )
-                    ]
-                ])
-                
-                # Send header text
-                sent_header = await send_to_admin_bot(header, reply_markup=keyboard)
-                # Send voice file
-                sent_voice = await send_to_admin_bot(
-                    message_text="Голосовое сообщение от пользователя",
-                    voice_file_id=message.voice.file_id,
-                    reply_markup=keyboard
-                )
-                if not (sent_header and sent_voice):
-                    raise RuntimeError("send_to_admin_bot returned False")
-                
-                await message.answer("✅ Голосовое отправлено в ПУП.", reply_markup=self._talk_mode_keyboard())
-                logger.info(f"✅ Voice question from sales bot sent to admin bot (PUP) from user {user_id}")
-            except Exception as e:
-                logger.error(f"Error sending voice to admin bot: {e}, falling back", exc_info=True)
-                # Fallback to curator group
-                target_chat_id = await self._normalize_curator_chat_id()
-                try:
-                    await self.bot.send_message(target_chat_id, header)
-                    await self.bot.send_voice(
-                        target_chat_id,
-                        voice=message.voice.file_id,
-                        caption="(переслано из продающего бота)"
+        if not is_admin_bot_configured():
+            await message.answer(
+                "❌ Сейчас поддержка недоступна: не настроен ПУП.\n\n"
+                "Проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
+                reply_markup=self._talk_mode_keyboard()
+            )
+            return
+
+        try:
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💬 Ответить",
+                        callback_data=f"reply_question:{user_id}:0"
                     )
-                    await message.answer("✅ Голосовое отправлено куратору.", reply_markup=self._talk_mode_keyboard())
-                except Exception as fallback_error:
-                    logger.error(f"❌ Error forwarding voice to curator group: {fallback_error}", exc_info=True)
-                    await message.answer(
-                        "❌ Не удалось отправить голосовое.\n\n"
-                        "Проверьте настройки бота."
-                    )
-        else:
-            # Fallback to curator group if admin bot not configured
-            target_chat_id = await self._normalize_curator_chat_id()
-            try:
-                await self.bot.send_message(target_chat_id, header)
-                await self.bot.send_voice(
-                    target_chat_id,
-                    voice=message.voice.file_id,
-                    caption="(переслано из продающего бота)"
-                )
-                await message.answer("✅ Голосовое отправлено куратору.", reply_markup=self._talk_mode_keyboard())
-            except Exception as e:
-                logger.error(f"❌ Error forwarding voice to curator group: {e}", exc_info=True)
-                await message.answer(
-                    "❌ Не удалось отправить голосовое.\n\n"
-                    "Проверьте настройки бота."
-                )
+                ]
+            ])
+
+            # Send header text
+            sent_header = await send_to_admin_bot(header, reply_markup=keyboard)
+            # Send voice file
+            sent_voice = await send_to_admin_bot(
+                message_text="Голосовое сообщение от пользователя",
+                voice_file_id=message.voice.file_id,
+                reply_markup=keyboard
+            )
+            if not (sent_header and sent_voice):
+                raise RuntimeError("send_to_admin_bot returned False")
+
+            await message.answer("✅ Голосовое отправлено в ПУП.", reply_markup=self._talk_mode_keyboard())
+            logger.info(f"✅ Voice question from sales bot sent to admin bot (PUP) from user {user_id}")
+        except Exception as e:
+            logger.error(f"Error sending voice to admin bot: {e}", exc_info=True)
+            await message.answer(
+                "❌ Не удалось отправить голосовое в ПУП.\n\n"
+                "Проверьте настройки ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
+                reply_markup=self._talk_mode_keyboard()
+            )
 
     async def _start_payment_flow(self, message: Message, user, tariff: Tariff):
         """Create payment and show payment URL (non-upgrade)."""
@@ -2942,33 +2909,31 @@ class SalesBot:
         # Send to admin bot (PUP) if configured
         # Check both token and chat_id (chat_id can be negative for groups, so check != 0)
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-        if is_admin_bot_configured():
-            try:
-                sent = await send_to_admin_bot(admin_message, reply_markup=keyboard)
-                if not sent:
-                    raise RuntimeError("send_to_admin_bot returned False")
-                logger.info(f"✅ Question from sales bot sent to admin bot (PUP) from user {user_id}")
-            except Exception as e:
-                logger.error(f"Error sending to admin bot: {e}, falling back", exc_info=True)
-                # Fallback to curator group or admin chat
-                target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
-                if target_chat_id:
-                    await self.bot.send_message(target_chat_id, admin_message, reply_markup=keyboard)
-        else:
-            # Fallback: Send to curator group or admin chat
-            target_chat_id = Config.CURATOR_GROUP_ID if Config.CURATOR_GROUP_ID else Config.ADMIN_CHAT_ID
-            if target_chat_id:
-                try:
-                    await self.bot.send_message(target_chat_id, admin_message, reply_markup=keyboard)
-                    logger.info(f"✅ Question from sales bot sent to curator group from user {user_id}")
-                except Exception as e:
-                    logger.error(f"❌ Error sending question: {e}")
-            else:
-                logger.warning("⚠️ No admin bot or curator group configured!")
+        if not is_admin_bot_configured():
+            await message.answer(
+                "❌ Сейчас поддержка недоступна: не настроен ПУП.\n\n"
+                "Проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
+                reply_markup=self._talk_mode_keyboard()
+            )
+            return
+
+        try:
+            sent = await send_to_admin_bot(admin_message, reply_markup=keyboard)
+            if not sent:
+                raise RuntimeError("send_to_admin_bot returned False")
+            logger.info(f"✅ Question from sales bot sent to admin bot (PUP) from user {user_id}")
+        except Exception as e:
+            logger.error(f"Error sending to admin bot: {e}", exc_info=True)
+            await message.answer(
+                "❌ Не удалось отправить сообщение в ПУП.\n\n"
+                "Проверьте настройки ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
+                reply_markup=self._talk_mode_keyboard()
+            )
+            return
         
         await message.answer(
             "✅ <b>Сообщение отправлено!</b>\n\n"
-            "📤 Я переслал сообщение кураторам 👥.\n"
+            "📤 Я переслал сообщение в ПУП 👥.\n"
             "⏳ Мы ответим вам как можно скорее.\n\n"
             "Чтобы завершить диалог — нажмите «✅ Завершить».",
             reply_markup=self._talk_mode_keyboard()

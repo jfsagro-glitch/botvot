@@ -117,6 +117,7 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_admin_promo_wizard_action, F.data.startswith("admin:promo:wiz:"))
         self.dp.callback_query.register(self.handle_admin_promo_view, F.data.startswith("admin:promo:view:"))
         self.dp.callback_query.register(self.handle_admin_promo_share, F.data.startswith("admin:promo:share:"))
+        self.dp.callback_query.register(self.handle_admin_promo_delete, F.data.startswith("admin:promo:delete:"))
         self.dp.callback_query.register(self.handle_admin_promo_send, F.data.startswith("admin:promo:send:"))
         
         # Commands for user stats
@@ -686,6 +687,7 @@ class AdminBot:
             [InlineKeyboardButton(text="📣 В премиум чат", callback_data=f"admin:promo:send:premium:{promo.get('code')}")],
             [InlineKeyboardButton(text="📩 Мне (для пересылки)", callback_data=f"admin:promo:send:me:{promo.get('code')}")],
             [InlineKeyboardButton(text="📨 Сообщение для пересылки", callback_data=f"admin:promo:share:{promo.get('code')}")],
+            [InlineKeyboardButton(text="🗑 Удалить промокод", callback_data=f"admin:promo:delete:{promo.get('code')}")],
             [InlineKeyboardButton(text="⬅️ К списку", callback_data="admin:promo:list")],
         ])
         await callback.message.answer(text, reply_markup=keyboard)
@@ -703,6 +705,21 @@ class AdminBot:
         discount_value = float(promo.get("discount_value") or 0.0)
         disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
         await callback.message.answer(self._promo_share_text(promo, disc))
+
+    async def handle_admin_promo_delete(self, callback: CallbackQuery):
+        await callback.answer()
+        parts = (callback.data or "").split(":")
+        code = parts[3] if len(parts) > 3 else ""
+        code = (code or "").strip().upper()
+        if not code:
+            await callback.message.answer("❌ Неверный код.")
+            return
+        await self.db.connect()
+        ok = await self.db.deactivate_promo_code(code)
+        if not ok:
+            await callback.message.answer("❌ Не удалось удалить промокод (возможно, уже удалён).")
+            return
+        await callback.message.answer(f"✅ Промокод <code>{code}</code> удалён (деактивирован).")
 
     async def handle_admin_state_input(self, message: Message):
         state = self._admin_state.get(message.from_user.id)
