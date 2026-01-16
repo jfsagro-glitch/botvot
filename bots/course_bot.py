@@ -1671,20 +1671,6 @@ class CourseBot:
         except Exception as e:
             logger.warning(f"   ⚠️ Could not mark assignment intent for user={user_id} day={day_from_callback}: {e}")
         
-        # Check if user can submit assignments (BASIC tariff cannot)
-        if not user.can_receive_feedback():
-            upgrade_keyboard = create_upgrade_tariff_keyboard()
-            await callback.message.answer(
-                "ℹ️ <b>Обратная связь не включена</b>\n\n"
-                "📋 В вашем текущем тарифе (BASIC) задания не проверяются.\n\n"
-                "✅ Вы можете выполнять задания для себя, "
-                "но они не будут проверяться нашей командой 👥.\n\n"
-                "⬆️ Для получения обратной связи обновитесь до тарифа FEEDBACK 💬.\n\n"
-                "💬 Но вы можете обсудить задания в общем пространстве участников 👇",
-                reply_markup=upgrade_keyboard
-            )
-            return
-        
         # Получаем информацию об уроке из JSON
         lesson_data = self.lesson_loader.get_lesson(day_from_callback)
         lesson_title = lesson_data.get("title", f"День {day_from_callback}") if lesson_data else f"День {day_from_callback}"
@@ -1704,18 +1690,6 @@ class CourseBot:
         
         if not user or not user.has_access():
             await callback.message.answer("❌ У вас нет доступа к этому курсу.")
-            return
-        
-        # Проверяем тариф - вопросы доступны только для FEEDBACK, PREMIUM, PRACTIC тарифов
-        if user.tariff not in [Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]:
-            upgrade_keyboard = create_upgrade_tariff_keyboard()
-            await callback.message.answer(
-                "ℹ️ <b>Вопросы доступны только для тарифа с обратной связью</b>\n\n"
-                "📋 В вашем текущем тарифе (BASIC) функция задавать вопросы не включена.\n\n"
-                "⬆️ Для возможности задавать вопросы обновитесь до тарифа FEEDBACK 💬.\n\n"
-                "💬 Но вы можете обсудить вопросы в общем пространстве участников 👇",
-                reply_markup=upgrade_keyboard
-            )
             return
         
         # Парсим lesson_id из callback
@@ -3073,11 +3047,6 @@ class CourseBot:
         user = await self.user_service.get_user(user_id)
         
         if not user or not user.has_access():
-            return
-        
-        # Проверяем тариф - вопросы доступны только для FEEDBACK, PREMIUM, PRACTIC тарифов
-        if user.tariff not in [Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]:
-            # Не отвечаем на сообщения от пользователей с базовым тарифом
             return
         
         # Проверяем, ожидаем ли мы вопрос от этого пользователя

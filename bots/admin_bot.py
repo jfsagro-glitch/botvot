@@ -94,6 +94,7 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_reply_button, F.data.startswith("admin_reply:"))
         self.dp.callback_query.register(self.handle_assignment_reply_callback, F.data.startswith("reply_assignment:"))
         self.dp.callback_query.register(self.handle_question_reply_callback, F.data.startswith("reply_question:"))
+        self.dp.callback_query.register(self.handle_question_reply_callback, F.data.startswith("curator_reply:"))
         self.dp.callback_query.register(self.handle_all_user_stats, F.data == "admin:all_user_stats")
         self.dp.callback_query.register(self.handle_user_stats_detail, F.data.startswith("admin:user_stats:"))
         self.dp.callback_query.register(self.handle_restore_confirm, F.data.startswith("admin:restore_confirm:"))
