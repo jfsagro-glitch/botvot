@@ -980,25 +980,35 @@ class AdminBot:
 
         kind = state.get("kind")
         if kind == "question":
-            await self._send_answer_to_user(
-                user_id=int(state["user_id"]),
-                answer_text=answer_text,
-                lesson_day=state.get("lesson_day"),
-                bot_type=str(state.get("bot_type") or "course"),
-            )
-            self._compose_reply.pop(message.from_user.id, None)
-            await message.answer("✅ Ответ отправлен пользователю.")
+            try:
+                await self._send_answer_to_user(
+                    user_id=int(state["user_id"]),
+                    answer_text=answer_text,
+                    lesson_day=state.get("lesson_day"),
+                    bot_type=str(state.get("bot_type") or "course"),
+                )
+            except Exception as e:
+                await message.answer(f"❌ Не удалось отправить ответ: {e}")
+                return
+            else:
+                self._compose_reply.pop(message.from_user.id, None)
+                await message.answer("✅ Ответ отправлен пользователю.")
             return
 
         if kind == "assignment":
             assignment_id = int(state["assignment_id"])
-            await self._send_assignment_feedback_to_user(
-                admin_message=message,
-                assignment_id=assignment_id,
-                answer_text=answer_text,
-                voice_file_id=None,
-            )
-            self._compose_reply.pop(message.from_user.id, None)
+            try:
+                await self._send_assignment_feedback_to_user(
+                    admin_message=message,
+                    assignment_id=assignment_id,
+                    answer_text=answer_text,
+                    voice_file_id=None,
+                )
+            except Exception as e:
+                await message.answer(f"❌ Не удалось отправить обратную связь: {e}")
+                return
+            else:
+                self._compose_reply.pop(message.from_user.id, None)
             return
 
         self._compose_reply.pop(message.from_user.id, None)
@@ -1020,26 +1030,36 @@ class AdminBot:
 
         kind = state.get("kind")
         if kind == "question":
-            await self._send_answer_to_user(
-                user_id=int(state["user_id"]),
-                answer_text=answer_text,
-                lesson_day=state.get("lesson_day"),
-                bot_type=str(state.get("bot_type") or "course"),
-                voice_file_id=voice_file_id,
-            )
-            self._compose_reply.pop(message.from_user.id, None)
-            await message.answer("✅ Ответ отправлен пользователю.")
+            try:
+                await self._send_answer_to_user(
+                    user_id=int(state["user_id"]),
+                    answer_text=answer_text,
+                    lesson_day=state.get("lesson_day"),
+                    bot_type=str(state.get("bot_type") or "course"),
+                    voice_file_id=voice_file_id,
+                )
+            except Exception as e:
+                await message.answer(f"❌ Не удалось отправить ответ: {e}")
+                return
+            else:
+                self._compose_reply.pop(message.from_user.id, None)
+                await message.answer("✅ Ответ отправлен пользователю.")
             return
 
         if kind == "assignment":
             assignment_id = int(state["assignment_id"])
-            await self._send_assignment_feedback_to_user(
-                admin_message=message,
-                assignment_id=assignment_id,
-                answer_text=answer_text,
-                voice_file_id=voice_file_id,
-            )
-            self._compose_reply.pop(message.from_user.id, None)
+            try:
+                await self._send_assignment_feedback_to_user(
+                    admin_message=message,
+                    assignment_id=assignment_id,
+                    answer_text=answer_text,
+                    voice_file_id=voice_file_id,
+                )
+            except Exception as e:
+                await message.answer(f"❌ Не удалось отправить обратную связь: {e}")
+                return
+            else:
+                self._compose_reply.pop(message.from_user.id, None)
             return
 
         self._compose_reply.pop(message.from_user.id, None)
@@ -1319,6 +1339,9 @@ class AdminBot:
                 await course_bot.send_message(user.user_id, feedback_message, reply_markup=followup_kb)
             await self.assignment_service.mark_feedback_sent(assignment_id)
             await admin_message.answer("✅ Обратная связь отправлена пользователю в обучающий бот.")
+        except Exception as e:
+            logger.error(f"Error sending feedback to user: {e}", exc_info=True)
+            await admin_message.answer(f"❌ Ошибка при отправке обратной связи: {e}")
         finally:
             await course_bot.session.close()
     

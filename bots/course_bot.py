@@ -2866,6 +2866,18 @@ class CourseBot:
             if not ok:
                 await message.answer("❌ Не удалось отправить задание в ПУП. Откройте ПУП и нажмите /start.")
                 return
+
+            # Some Telegram clients may hide inline keyboards under certain media/message types.
+            # Send a short extra message with the same reply button to guarantee visibility.
+            try:
+                await send_to_admin_bot(
+                    f"📝 Задание #{assignment.assignment_id} — ответить:",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="💬 Ответить", callback_data=f"admin_reply:{assignment.assignment_id}")]
+                    ]),
+                )
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Error sending to admin bot: {e}", exc_info=True)
             await message.answer("❌ Не удалось отправить задание в ПУП. Попробуйте позже.")
@@ -3004,6 +3016,17 @@ class CourseBot:
             if not ok:
                 await message.answer("❌ Не удалось отправить задание в ПУП. Откройте ПУП и нажмите /start.")
                 return
+
+            # Extra helper message with reply button (see comment in text handler).
+            try:
+                await send_to_admin_bot(
+                    f"📝 Задание #{assignment.assignment_id} — ответить:",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="💬 Ответить", callback_data=f"admin_reply:{assignment.assignment_id}")]
+                    ]),
+                )
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Error sending assignment media to admin bot: {e}", exc_info=True)
             await message.answer("❌ Не удалось отправить задание в ПУП. Попробуйте позже.")
