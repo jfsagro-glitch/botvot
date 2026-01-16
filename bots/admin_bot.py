@@ -9,17 +9,19 @@ Centralized admin interface for:
 """
 
 import asyncio
+import io
 import logging
 from datetime import datetime
 import secrets
 import string
 from typing import Optional
+from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton
+    ReplyKeyboardMarkup, KeyboardButton, BufferedInputFile
 )
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -85,25 +87,46 @@ class AdminBot:
 
     def _get_course_bot_client(self) -> Bot:
         from core.config import Config
+        from aiogram.enums import ParseMode
+        from aiogram.client.default import DefaultBotProperties
         if not Config.COURSE_BOT_TOKEN:
             raise ValueError("COURSE_BOT_TOKEN not configured")
         loop = asyncio.get_running_loop()
         if self._course_bot_client is not None and self._bot_clients_loop is loop:
             return self._course_bot_client
         self._bot_clients_loop = loop
-        self._course_bot_client = Bot(token=Config.COURSE_BOT_TOKEN)
+        self._course_bot_client = Bot(
+            token=Config.COURSE_BOT_TOKEN,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
         return self._course_bot_client
 
     def _get_sales_bot_client(self) -> Bot:
         from core.config import Config
+        from aiogram.enums import ParseMode
+        from aiogram.client.default import DefaultBotProperties
         if not Config.SALES_BOT_TOKEN:
             raise ValueError("SALES_BOT_TOKEN not configured")
         loop = asyncio.get_running_loop()
         if self._sales_bot_client is not None and self._bot_clients_loop is loop:
             return self._sales_bot_client
         self._bot_clients_loop = loop
-        self._sales_bot_client = Bot(token=Config.SALES_BOT_TOKEN)
+        self._sales_bot_client = Bot(
+            token=Config.SALES_BOT_TOKEN,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
         return self._sales_bot_client
+
+    async def _reupload_voice(self, admin_voice_file_id: str) -> BufferedInputFile:
+        """
+        Voice file_id is bot-specific. When admin records a voice in PUP, we must
+        download it via admin bot token and upload it via target bot token.
+        """
+        tg_file = await self.bot.get_file(admin_voice_file_id)
+        buf = io.BytesIO()
+        await self.bot.download_file(tg_file.file_path, destination=buf, timeout=60)
+        filename = Path(tg_file.file_path).name or "voice.ogg"
+        return BufferedInputFile(buf.getvalue(), filename=filename)
     
     def _register_handlers(self):
         """Register all bot handlers."""
@@ -1354,7 +1377,8 @@ class AdminBot:
         course_bot = self._get_course_bot_client()
         try:
             if voice_file_id:
-                await course_bot.send_voice(user.user_id, voice_file_id, caption=feedback_message, reply_markup=followup_kb)
+                voice_input = await self._reupload_voice(voice_file_id)
+                await course_bot.send_voice(user.user_id, voice_input, caption=feedback_message, reply_markup=followup_kb)
             else:
                 await course_bot.send_message(user.user_id, feedback_message, reply_markup=followup_kb)
             await self.assignment_service.mark_feedback_sent(assignment_id)
@@ -1456,7 +1480,8 @@ class AdminBot:
         
         reply_markup = _course_followup_keyboard(lesson_day) if bot_type != "sales" else None
         if voice_file_id:
-            await target_bot.send_voice(user_id, voice_file_id, caption=answer_message, reply_markup=reply_markup)
+            voice_input = await self._reupload_voice(voice_file_id)
+            await target_bot.send_voice(user_id, voice_input, caption=answer_message, reply_markup=reply_markup)
         else:
             await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
     

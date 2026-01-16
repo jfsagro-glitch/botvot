@@ -656,10 +656,15 @@ class SalesBot:
                 ]
             ])
 
-            # Send voice with header as caption (single request)
+            # Re-upload voice to PUP: file_id from sales bot is not valid for admin bot token.
+            import io
+            buf = io.BytesIO()
+            await self.bot.download(message.voice, destination=buf)
+
             sent = await send_to_admin_bot(
                 message_text=header,
-                voice_file_id=message.voice.file_id,
+                voice_bytes=buf.getvalue(),
+                voice_filename="voice.ogg",
                 reply_markup=keyboard
             )
             if not sent:

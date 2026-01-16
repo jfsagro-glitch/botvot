@@ -10,6 +10,7 @@ from aiogram import Bot
 from core.config import Config
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BufferedInputFile
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,9 @@ async def send_to_admin_bot(
     photo_file_id: Optional[str] = None,
     video_file_id: Optional[str] = None,
     document_file_id: Optional[str] = None,
-    voice_file_id: Optional[str] = None
+    voice_file_id: Optional[str] = None,
+    voice_bytes: Optional[bytes] = None,
+    voice_filename: str = "voice.ogg",
 ) -> bool:
     """
     Send message to admin bot.
@@ -152,6 +155,13 @@ async def send_to_admin_bot(
                 document_file_id,
                 caption=message_text,
                 reply_markup=reply_markup
+            )
+        elif voice_bytes:
+            await admin_bot.send_voice(
+                chat_id,
+                BufferedInputFile(voice_bytes, filename=voice_filename),
+                caption=message_text,
+                reply_markup=reply_markup,
             )
         elif voice_file_id:
             await admin_bot.send_voice(

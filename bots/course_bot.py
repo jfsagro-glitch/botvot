@@ -3017,7 +3017,11 @@ class CourseBot:
             elif message.document:
                 ok = await send_to_admin_bot(admin_text, document_file_id=message.document.file_id, reply_markup=reply_kb)
             elif message.voice:
-                ok = await send_to_admin_bot(admin_text, voice_file_id=message.voice.file_id, reply_markup=reply_kb)
+                # Re-upload voice to PUP: file_id from course bot is not valid for admin bot token.
+                import io
+                buf = io.BytesIO()
+                await self.bot.download(message.voice, destination=buf)
+                ok = await send_to_admin_bot(admin_text, voice_bytes=buf.getvalue(), voice_filename="voice.ogg", reply_markup=reply_kb)
             else:
                 ok = False
             if not ok:
@@ -3161,7 +3165,11 @@ class CourseBot:
             await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
             return
 
-        ok = await send_to_admin_bot(curator_message, voice_file_id=message.voice.file_id, reply_markup=keyboard)
+        # Re-upload voice to PUP: file_id from course bot is not valid for admin bot token.
+        import io
+        buf = io.BytesIO()
+        await self.bot.download(message.voice, destination=buf)
+        ok = await send_to_admin_bot(curator_message, voice_bytes=buf.getvalue(), voice_filename="voice.ogg", reply_markup=keyboard)
         if not ok:
             await message.answer("❌ Не удалось отправить вопрос в ПУП. Откройте ПУП и нажмите /start.")
             return
