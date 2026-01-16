@@ -1886,17 +1886,44 @@ class CourseBot:
         Безопасная отправка сообщения с проверкой на пустой текст.
         Фильтрует технические ошибки Telegram API.
         """
+        MAX_MESSAGE_LENGTH = 4000  # запас относительно лимита Telegram (4096)
+
         if not text or not text.strip():
             logger.warning(f"⚠️ Attempted to send empty message to {chat_id}, using zero-width space")
             text = "\u200B"
         
         try:
+            # Plain text only: split proactively to avoid Telegram "message is too long".
+            if not kwargs.get("parse_mode") and len(text) > MAX_MESSAGE_LENGTH:
+                parts = self._split_long_message(text, MAX_MESSAGE_LENGTH)
+                for part in parts[:-1]:
+                    if part and part.strip():
+                        await self.bot.send_message(chat_id, part, **kwargs)
+                        await asyncio.sleep(0.2)
+                last_part = parts[-1] if parts else ""
+                if last_part and last_part.strip():
+                    await self.bot.send_message(chat_id, last_part, reply_markup=reply_markup, **kwargs)
+                elif reply_markup:
+                    await self.bot.send_message(chat_id, "\u200B", reply_markup=reply_markup, **kwargs)
+                return
+
             await self.bot.send_message(chat_id, text, reply_markup=reply_markup, **kwargs)
         except Exception as e:
             error_msg = str(e)
             # Фильтруем технические ошибки о пустых сообщениях
             if "text must be non-empty" in error_msg or "message text is empty" in error_msg:
                 logger.warning(f"⚠️ Empty message error suppressed for {chat_id}: {error_msg}")
+            elif ("message is too long" in error_msg or "MESSAGE_TOO_LONG" in error_msg) and not kwargs.get("parse_mode"):
+                parts = self._split_long_message(text, MAX_MESSAGE_LENGTH)
+                for part in parts[:-1]:
+                    if part and part.strip():
+                        await self.bot.send_message(chat_id, part, **kwargs)
+                        await asyncio.sleep(0.2)
+                last_part = parts[-1] if parts else ""
+                if last_part and last_part.strip():
+                    await self.bot.send_message(chat_id, last_part, reply_markup=reply_markup, **kwargs)
+                elif reply_markup:
+                    await self.bot.send_message(chat_id, "\u200B", reply_markup=reply_markup, **kwargs)
             else:
                 raise
     
@@ -2101,7 +2128,7 @@ class CourseBot:
                 await send_typing_action(self.bot, user.user_id, 0.5)
                 # Текст берется как есть из Google Doc, без разделителей
                 intro_message = intro_text
-                await self.bot.send_message(user.user_id, intro_message)
+                await self._safe_send_message(user.user_id, intro_message)
                 logger.info(f"   Sent intro_text for lesson {day}")
                 await asyncio.sleep(0.5)  # Пауза для плавности
                 
@@ -2163,12 +2190,12 @@ class CourseBot:
                             except Exception as path_error:
                                 logger.warning(f"   ⚠️ Не удалось отправить фото 'ОБО МНЕ' по пути для урока {day}: {path_error}")
                                 # Отправляем только текст как fallback
-                                await self.bot.send_message(user.user_id, about_me_text)
+                                await self._safe_send_message(user.user_id, about_me_text)
                                 logger.info(f"   ✅ Sent 'ОБО МНЕ' text only (fallback) for lesson {day}")
                                 about_me_sent = True
                         else:
                             # Отправляем только текст как fallback
-                            await self.bot.send_message(user.user_id, about_me_text)
+                            await self._safe_send_message(user.user_id, about_me_text)
                             logger.info(f"   ✅ Sent 'ОБО МНЕ' text only (fallback) for lesson {day}")
                             about_me_sent = True
                 # Если нет file_id, но есть путь к файлу
@@ -2191,12 +2218,12 @@ class CourseBot:
                     except Exception as path_error:
                         logger.warning(f"   ⚠️ Не удалось отправить фото 'ОБО МНЕ' по пути для урока {day}: {path_error}")
                         # Отправляем только текст как fallback
-                        await self.bot.send_message(user.user_id, about_me_text)
+                        await self._safe_send_message(user.user_id, about_me_text)
                         logger.info(f"   ✅ Sent 'ОБО МНЕ' text only (fallback) for lesson {day}")
                         about_me_sent = True
                 # Если нет фото вообще, отправляем только текст
                 elif not about_me_sent:
-                    await self.bot.send_message(user.user_id, about_me_text)
+                    await self._safe_send_message(user.user_id, about_me_text)
                     logger.info(f"   ✅ Sent 'ОБО МНЕ' text only for lesson {day}")
                     about_me_sent = True
             else:
@@ -2230,7 +2257,7 @@ class CourseBot:
                         # Отправляем все абзацы до целевого
                         for i in range(target_paragraph_index):
                             if paragraphs[i]:
-                                await self.bot.send_message(user.user_id, paragraphs[i])
+                                await self._safe_send_message(user.user_id, paragraphs[i])
                                 await asyncio.sleep(0.2)
                         
                         # Отправляем картинку перед целевым абзацем
@@ -2242,13 +2269,13 @@ class CourseBot:
                         
                         # Отправляем целевой абзац после картинки
                         if paragraphs[target_paragraph_index]:
-                            await self.bot.send_message(user.user_id, paragraphs[target_paragraph_index])
+                            await self._safe_send_message(user.user_id, paragraphs[target_paragraph_index])
                             await asyncio.sleep(0.2)
                         
                         # Отправляем оставшиеся абзацы после целевого
                         for i in range(target_paragraph_index + 1, len(paragraphs)):
                             if paragraphs[i]:
-                                await self.bot.send_message(user.user_id, paragraphs[i])
+                                await self._safe_send_message(user.user_id, paragraphs[i])
                                 await asyncio.sleep(0.2)
                 
                 # Для урока 1: удаляем текст "Добро пожаловать на корвет" из основного текста, 
@@ -2298,7 +2325,7 @@ class CourseBot:
                         for i, paragraph in enumerate(paragraphs):
                             # Отправляем абзац
                             if paragraph:
-                                await self.bot.send_message(user.user_id, paragraph)
+                                await self._safe_send_message(user.user_id, paragraph)
                                 await asyncio.sleep(0.2)
                             
                             # Если наступила позиция для медиа, отправляем его
@@ -2320,7 +2347,7 @@ class CourseBot:
                             for i in range(1, len(lesson_posts)):
                                 post_text = lesson_posts[i]
                                 if post_text and post_text.strip():
-                                    await self.bot.send_message(user.user_id, post_text.strip())
+                                    await self._safe_send_message(user.user_id, post_text.strip())
                                     if i < len(lesson_posts) - 1:
                                         await asyncio.sleep(0.5)
                             logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
@@ -2330,10 +2357,10 @@ class CourseBot:
                         if len(lesson_posts) > 1:
                             # Отправляем первый пост
                             if lesson_posts[0] and lesson_posts[0].strip():
-                                await self.bot.send_message(user.user_id, lesson_posts[0].strip())
+                                await self._safe_send_message(user.user_id, lesson_posts[0].strip())
                                 await asyncio.sleep(0.3)
                         elif text.strip():
-                            await self.bot.send_message(user.user_id, text)
+                            await self._safe_send_message(user.user_id, text)
                             await asyncio.sleep(0.3)
                         
                         # Отправляем все оставшиеся медиа
@@ -2348,7 +2375,7 @@ class CourseBot:
                         for i in range(1, len(lesson_posts)):
                             post_text = lesson_posts[i]
                             if post_text and post_text.strip():
-                                await self.bot.send_message(user.user_id, post_text.strip())
+                                await self._safe_send_message(user.user_id, post_text.strip())
                                 if i < len(lesson_posts) - 1:
                                     await asyncio.sleep(0.5)
                         logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
@@ -2362,7 +2389,7 @@ class CourseBot:
                             # Анимация перед отправкой поста (только для первого)
                             if i == 0:
                                 await send_typing_action(self.bot, user.user_id, 0.5)
-                            await self.bot.send_message(user.user_id, post_text.strip())
+                            await self._safe_send_message(user.user_id, post_text.strip())
                             # Пауза между постами (кроме последнего)
                             if i < len(lesson_posts) - 1:
                                 await asyncio.sleep(0.5)
@@ -2371,7 +2398,7 @@ class CourseBot:
                     # Single post: send as before (backward compatible)
                     # Анимация перед отправкой текста
                     await send_typing_action(self.bot, user.user_id, 0.5)
-                    await self.bot.send_message(user.user_id, text)
+                    await self._safe_send_message(user.user_id, text)
                     await asyncio.sleep(0.5)  # Пауза для плавности
             
             # Для урока 19 отправляем кнопку "Показать все уровни" ПЕРЕД заданием
