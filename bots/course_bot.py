@@ -2829,7 +2829,7 @@ class CourseBot:
             return
 
         try:
-            await send_to_admin_bot(
+            ok = await send_to_admin_bot(
                 admin_text,
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [
@@ -2840,6 +2840,9 @@ class CourseBot:
                     ]
                 ])
             )
+            if not ok:
+                await message.answer("❌ Не удалось отправить задание в ПУП. Откройте ПУП и нажмите /start.")
+                return
         except Exception as e:
             logger.error(f"Error sending to admin bot: {e}", exc_info=True)
             await message.answer("❌ Не удалось отправить задание в ПУП. Попробуйте позже.")
@@ -2952,11 +2955,16 @@ class CourseBot:
 
         try:
             if message.photo:
-                await send_to_admin_bot(admin_text, photo_file_id=message.photo[-1].file_id, reply_markup=reply_kb)
+                ok = await send_to_admin_bot(admin_text, photo_file_id=message.photo[-1].file_id, reply_markup=reply_kb)
             elif message.video:
-                await send_to_admin_bot(admin_text, video_file_id=message.video.file_id, reply_markup=reply_kb)
+                ok = await send_to_admin_bot(admin_text, video_file_id=message.video.file_id, reply_markup=reply_kb)
             elif message.document:
-                await send_to_admin_bot(admin_text, document_file_id=message.document.file_id, reply_markup=reply_kb)
+                ok = await send_to_admin_bot(admin_text, document_file_id=message.document.file_id, reply_markup=reply_kb)
+            else:
+                ok = False
+            if not ok:
+                await message.answer("❌ Не удалось отправить задание в ПУП. Откройте ПУП и нажмите /start.")
+                return
         except Exception as e:
             logger.error(f"Error sending assignment media to admin bot: {e}", exc_info=True)
             await message.answer("❌ Не удалось отправить задание в ПУП. Попробуйте позже.")
@@ -3041,7 +3049,10 @@ class CourseBot:
             return
 
         try:
-            await send_to_admin_bot(curator_message, reply_markup=keyboard)
+            ok = await send_to_admin_bot(curator_message, reply_markup=keyboard)
+            if not ok:
+                await message.answer("❌ Не удалось отправить вопрос в ПУП. Откройте ПУП и нажмите /start.")
+                return
             logger.info(f"✅ Question sent to admin bot from user {user_id}")
         except Exception as e:
             logger.error(f"Error sending question to admin bot: {e}", exc_info=True)

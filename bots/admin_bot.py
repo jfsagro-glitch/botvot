@@ -132,6 +132,13 @@ class AdminBot:
     
     async def handle_start(self, message: Message):
         """Handle /start command - show admin menu."""
+        # Bind admin chat id for cross-bot forwarding (sales/course -> PUP).
+        try:
+            await self.db.connect()
+            await self.db.set_setting("pup_admin_chat_id", str(message.chat.id))
+        except Exception:
+            logger.warning("Failed to bind pup_admin_chat_id", exc_info=True)
+
         keyboard = self._create_admin_keyboard()
         await message.answer(
             "🚀 <b>Пункт управления полетами</b>\n\n"

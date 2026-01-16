@@ -567,11 +567,11 @@ class SalesBot:
         # Try sending a test message to admin bot (PUP) if configured
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
         if not is_admin_bot_configured():
-            await message.answer(
-                "❌ Сейчас поддержка недоступна: не настроен ПУП.\n\n"
-                "Проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID."
-            )
-            return
+                await message.answer(
+                    "❌ Сейчас поддержка недоступна: не настроен ПУП.\n\n"
+                    "Откройте ПУП и нажмите /start, либо проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID."
+                )
+                return
 
         try:
             test_message = (
@@ -639,7 +639,7 @@ class SalesBot:
         if not is_admin_bot_configured():
             await message.answer(
                 "❌ Сейчас поддержка недоступна: не настроен ПУП.\n\n"
-                "Проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
+                "Откройте ПУП и нажмите /start, либо проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
                 reply_markup=self._talk_mode_keyboard()
             )
             return
@@ -2910,7 +2910,7 @@ class SalesBot:
         if not is_admin_bot_configured():
             await message.answer(
                 "❌ Сейчас поддержка недоступна: не настроен ПУП.\n\n"
-                "Проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
+                "Откройте ПУП и нажмите /start, либо проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
                 reply_markup=self._talk_mode_keyboard()
             )
             return
