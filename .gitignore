@@ -25,6 +25,7 @@ data/lessons_manual.json
 .DS_Store
 .vscode/
 .idea/
+backups/
 
 # Секретные данные
 *.key

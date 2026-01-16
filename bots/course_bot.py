@@ -10,6 +10,7 @@ Handles:
 """
 
 import asyncio
+import html
 import logging
 import sys
 from aiogram import Bot, Dispatcher, F
@@ -31,7 +32,7 @@ from services.question_service import QuestionService
 from utils.telegram_helpers import create_lesson_keyboard, format_lesson_message, create_lesson_keyboard_from_json, create_upgrade_tariff_keyboard
 from utils.scheduler import LessonScheduler
 from utils.mentor_scheduler import MentorReminderScheduler
-from utils.premium_ui import send_typing_action, create_premium_separator
+from utils.premium_ui import send_typing_action
 from utils.navigator import create_navigator_keyboard, format_navigator_message
 
 # Configure logging
@@ -137,7 +138,8 @@ class CourseBot:
 
     async def handle_sync_content(self, message: Message):
         """Admin command: sync lessons from Google Drive into /app/data/lessons.json and reload LessonLoader."""
-        if not Config.ADMIN_CHAT_ID or message.from_user.id != Config.ADMIN_CHAT_ID:
+        # Check that ADMIN_CHAT_ID is set (can be negative for groups, so check != 0)
+        if Config.ADMIN_CHAT_ID == 0 or message.from_user.id != Config.ADMIN_CHAT_ID:
             return
 
         await message.answer("🔄 Синхронизирую контент из Google Drive…")
@@ -271,7 +273,7 @@ class CourseBot:
                 curator_chat_ids.append(int(Config.CURATOR_GROUP_ID))
             except (ValueError, TypeError):
                 pass
-        if Config.ADMIN_CHAT_ID:
+        if Config.ADMIN_CHAT_ID != 0:
             curator_chat_ids.append(Config.ADMIN_CHAT_ID)
         
         if curator_chat_ids:
@@ -331,13 +333,13 @@ class CourseBot:
         else:
             user_name = "друг"
         
-        logger.info(f"   User name determined: '{user_name}' (first_name={first_name}, user.first_name={user.first_name}, username={username})")
+        logger.info(f"   User name determined: '{user_name}' (first_name={first_name}, user.first_name={safe_first_name}, username={username})")
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
-            f"👋 Добро пожаловать в курс, {user_name}!\n\n"
-            f"📅 День {user.current_day} из {Config.COURSE_DURATION_DAYS}\n"
-            f"📚 Тариф: {user.tariff.value.upper()}\n\n"
+            f"Добро пожаловать в курс, {user_name}!\n\n"
+            f"День {user.current_day} из {Config.COURSE_DURATION_DAYS}\n"
+            f"Тариф: {user.tariff.value.upper()}\n\n"
             f"Используйте /lesson для просмотра текущего урока.",
             reply_markup=persistent_keyboard
         )
@@ -357,7 +359,7 @@ class CourseBot:
         """Handle /lesson command - show current lesson."""
         user_id = message.from_user.id
         logger.info(f"📚 Command /lesson received from user {user_id}")
-        logger.info(f"   Message text: {message.text}")
+        logger.info(f"   Message text: {safe_message_text}")
         logger.info(f"   Chat ID: {message.chat.id}")
         
         # Отправляем индикатор печати
@@ -471,8 +473,8 @@ class CourseBot:
                 persistent_keyboard = self._create_persistent_keyboard()
                 await self.bot.send_message(
                     user_id,
-                    f"🔇 Сегодня день тишины (День {user.current_day}).\n\n"
-                    f"Отдыхайте и переваривайте полученные знания! 📚",
+                    f"Сегодня день тишины (День {user.current_day}).\n\n"
+                    f"Отдыхайте и переваривайте полученные знания!",
                     reply_markup=persistent_keyboard
                 )
                 return
@@ -514,7 +516,7 @@ class CourseBot:
         progress_percent = (user.current_day / Config.COURSE_DURATION_DAYS) * 100
         
         await message.answer(
-            f"📊 <b>Ваш прогресс</b>\n\n"
+            f"<b>Ваш прогресс</b>\n\n"
             f"Текущий день: <b>{user.current_day}/{Config.COURSE_DURATION_DAYS}</b>\n"
             f"Прогресс: <b>{progress_percent:.1f}%</b>\n"
             f"Тариф: <b>{user.tariff.value.upper()}</b>\n"
@@ -714,9 +716,10 @@ class CourseBot:
             # Анимация перед отправкой карточки
             await send_typing_action(self.bot, user_id, 0.3)
             file_id = card.get("file_id")
-            centered_caption = "━━━━━━━━━━━━━━"
+            # Убираем разделители - caption должен браться из данных карточки или быть None
+            caption = None
             if file_id:
-                await self.bot.send_photo(user_id, file_id, caption=centered_caption)
+                await self.bot.send_photo(user_id, file_id, caption=caption)
                 logger.info(f"   ✅ Sent card {card_number} for lesson 21 to user {user_id}")
             else:
                 # Fallback: загрузка с диска
@@ -732,8 +735,9 @@ class CourseBot:
                     
                     if card_file.exists():
                         photo_file = FSInputFile(card_file)
-                        centered_caption = "━━━━━━━━━━━━━━"
-                        await self.bot.send_photo(user_id, photo_file, caption=centered_caption)
+                        # Убираем разделители - caption должен браться из данных карточки или быть None
+                        caption = None
+                        await self.bot.send_photo(user_id, photo_file, caption=caption)
                         logger.info(f"   ✅ Sent card {card_number} (from file) for lesson 21 to user {user_id}")
                     else:
                         await callback.message.answer(f"❌ Файл карточки {card_number} не найден.")
@@ -830,7 +834,7 @@ class CourseBot:
     async def handle_lesson19_show_levels(self, callback: CallbackQuery):
         """Обработчик для показа всех уровней урока 19."""
         try:
-            await callback.answer("📊 Загружаю уровни...")
+            await callback.answer("Загружаю уровни...")
         except:
             pass
         
@@ -1146,7 +1150,8 @@ class CourseBot:
                                 caption_text = follow_up_text
                                 remaining_text = None
                     else:
-                        caption_text = "━━━━━━━━━━━━━━"
+                        # Убираем разделители - если нет текста, caption = None
+                        caption_text = None
                         remaining_text = None
                     
                     await self.bot.send_photo(user_id, follow_up_photo_file_id, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None)
@@ -1250,7 +1255,8 @@ class CourseBot:
                                 caption_text = follow_up_text
                                 remaining_text = None
                         else:
-                            caption_text = "━━━━━━━━━━━━━━"
+                            # Убираем разделители - если нет текста, caption = None
+                            caption_text = None
                             remaining_text = None
                         
                         await self.bot.send_photo(user_id, photo_file, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None)
@@ -1315,7 +1321,7 @@ class CourseBot:
 
         def _split_caption(text: str):
             if not text:
-                return "━━━━━━━━━━━━━━", None
+                return None, None
             if len(text) <= CAPTION_LIMIT:
                 return text, None
             cut = text.rfind("\n", 0, CAPTION_LIMIT)
@@ -1411,7 +1417,7 @@ class CourseBot:
 
         def split_caption(text: str):
             if not text:
-                return "━━━━━━━━━━━━━━", None
+                return None, None
             if len(text) <= CAPTION_LIMIT:
                 return text, None
             cut = text.rfind("\n", 0, CAPTION_LIMIT)
@@ -1684,9 +1690,9 @@ class CourseBot:
         lesson_title = lesson_data.get("title", f"День {day_from_callback}") if lesson_data else f"День {day_from_callback}"
         
         await callback.message.answer(
-            f"📝 <b>Отправить задание для {lesson_title}</b>\n\n"
-            f"✍️ Отправьте ваше задание текстом, фото 📸, видео 🎥 или документом 📄.\n\n"
-            f"💬 <i>Можно отправить несколько сообщений. Напишите 'готово' ✅, когда закончите.</i>"
+            f"<b>Отправить задание для {safe_lesson_title}</b>\n\n"
+            f"Отправьте ваше задание текстом, фото, видео или документом.\n\n"
+            f"<i>Можно отправить несколько сообщений. Напишите 'готово', когда закончите.</i>"
         )
     
     async def handle_ask_question(self, callback: CallbackQuery):
@@ -1733,11 +1739,11 @@ class CourseBot:
         }
         
         await callback.message.answer(
-            f"❓ <b>Задать вопрос</b>\n\n"
-            f"📚 Напишите ваш вопрос по уроку <b>День {day_from_callback}</b> прямо здесь 👇\n\n"
-            f"✍️ Просто отправьте сообщение с вашим вопросом, и он сразу поступит кураторам.\n\n"
-            f"👥 Наша команда ответит вам как можно скорее ⚡\n\n"
-            f"💡 <i>Совет: Чем конкретнее вопрос, тем быстрее вы получите ответ! 🎯</i>"
+            f"<b>Задать вопрос</b>\n\n"
+            f"Напишите ваш вопрос по уроку <b>День {day_from_callback}</b> прямо здесь.\n\n"
+            f"Просто отправьте сообщение с вашим вопросом, и он сразу поступит кураторам.\n\n"
+            f"Наша команда ответит вам как можно скорее.\n\n"
+            f"<i>Совет: Чем конкретнее вопрос, тем быстрее вы получите ответ!</i>"
         )
     
     async def _send_media_item(self, user_id: int, media_item: dict, day: int) -> bool:
@@ -1760,18 +1766,18 @@ class CourseBot:
             # Анимация: показываем, что бот работает (уменьшено для скорости)
             await send_typing_action(self.bot, user_id, 0.2)
             
-            # Центрированная подпись с эмодзи-разделителями для визуального центрирования
-            centered_caption = "━━━━━━━━━━━━━━"
+            # Убираем разделители - caption должен браться из данных медиа или быть None
+            caption = None
             
             # Используем file_id если есть (самый быстрый способ)
             if file_id:
                 if media_type == "photo":
-                    await self.bot.send_photo(user_id, file_id, caption=centered_caption)
+                    await self.bot.send_photo(user_id, file_id, caption=caption)
                 elif media_type == "video":
                     # Для видео не указываем width/height, чтобы сохранить родные пропорции
                     # Урок 1 имеет специальную обработку в _send_lesson_from_json (не доходит до сюда)
                     # Для всех остальных видео (включая уроки 11 и 30) сохраняем пропорции
-                    await self.bot.send_video(user_id, file_id, caption=centered_caption, supports_streaming=True)
+                    await self.bot.send_video(user_id, file_id, caption=caption, supports_streaming=True)
                 await asyncio.sleep(0.2)  # Минимальная пауза для стабильности
                 return True
             
@@ -1811,13 +1817,15 @@ class CourseBot:
                         break
                 
                 if media_file:
+                    # Убираем разделители - caption должен браться из данных медиа или быть None
+                    caption = None
                     if media_type == "photo":
-                        await self.bot.send_photo(user_id, media_file, caption=centered_caption)
+                        await self.bot.send_photo(user_id, media_file, caption=caption)
                     elif media_type == "video":
                         # Для видео не указываем width/height, чтобы сохранить родные пропорции
                         # Урок 1 имеет специальную обработку в _send_lesson_from_json (не доходит до сюда)
                         # Для всех остальных видео (включая уроки 11 и 30) сохраняем пропорции
-                        await self.bot.send_video(user_id, media_file, caption=centered_caption, supports_streaming=True)
+                        await self.bot.send_video(user_id, media_file, caption=caption, supports_streaming=True)
                     await asyncio.sleep(0.2)  # Минимальная пауза для стабильности
                     return True
         except Exception as e:
@@ -1936,7 +1944,19 @@ class CourseBot:
                 day = user.current_day
             
             title = lesson_data.get("title", f"День {day}")
-            text = lesson_data.get("text", "")
+            # Get lesson text - can be string (single post) or list (multiple posts)
+            lesson_text_raw = lesson_data.get("text", "")
+            
+            # Convert to list if it's a string (backward compatible)
+            if isinstance(lesson_text_raw, str):
+                lesson_posts = [lesson_text_raw] if lesson_text_raw else []
+            elif isinstance(lesson_text_raw, list):
+                lesson_posts = lesson_text_raw
+            else:
+                lesson_posts = []
+            
+            # For backward compatibility, keep 'text' as first post for existing code
+            text = lesson_posts[0] if lesson_posts else ""
             
             # Получаем задание в зависимости от тарифа
             task = self.lesson_loader.get_task_for_tariff(day, user.tariff)
@@ -1954,16 +1974,17 @@ class CourseBot:
                 try:
                     # Анимация перед отправкой фото
                     await send_typing_action(self.bot, user.user_id, 0.4)
-                    centered_caption = "━━━━━━━━━━━━━━"
+                    # Убираем разделители - caption должен браться из данных или быть None
+                    caption = None
                     
                     if intro_photo_file_id:
-                        await self.bot.send_photo(user.user_id, intro_photo_file_id, caption=centered_caption)
+                        await self.bot.send_photo(user.user_id, intro_photo_file_id, caption=caption)
                         logger.info(f"   ✅ Sent intro photo (file_id) for lesson {day}")
                     elif intro_photo_path:
                         from pathlib import Path
                         from aiogram.types import FSInputFile
                         photo_file = FSInputFile(Path(intro_photo_path))
-                        await self.bot.send_photo(user.user_id, photo_file, caption=centered_caption)
+                        await self.bot.send_photo(user.user_id, photo_file, caption=caption)
                         logger.info(f"   ✅ Sent intro photo (file path) for lesson {day}")
                     await asyncio.sleep(0.6)  # Пауза для плавности
                 except Exception as photo_error:
@@ -2017,12 +2038,8 @@ class CourseBot:
             # Анимация: показываем, что бот работает
             await send_typing_action(self.bot, user.user_id, 0.6)
             
-            # Формируем заголовок урока с анимационными эффектами
-            lesson_message = (
-                f"{create_premium_separator()}\n"
-                f"✨ 📚 <b>{title}</b> 📚 ✨\n"
-                f"{create_premium_separator()}\n\n"
-            )
+            # Формируем заголовок урока - только текст из Google Doc, без эмодзи и разделителей
+            lesson_message = f"<b>{title}</b>\n\n"
             
             # Отправляем заголовок урока
             await self.bot.send_message(user.user_id, lesson_message)
@@ -2036,11 +2053,11 @@ class CourseBot:
                     video_file_id = lesson0_video_with_intro.get("file_id")
                     video_file_path = lesson0_video_with_intro.get("path")
                     
-                    # Центрированная подпись с intro_text
-                    centered_caption = f"━━━━━━━━━━━━━━\n{intro_text}\n━━━━━━━━━━━━━━"
+                    # Подпись с intro_text - только текст из Google Doc, без разделителей
+                    caption = intro_text if intro_text else None
                     
                     if video_file_id:
-                        await self.bot.send_video(user.user_id, video_file_id, caption=centered_caption)
+                        await self.bot.send_video(user.user_id, video_file_id, caption=caption)
                         logger.info(f"   ✅ Sent lesson 0 video with intro_text (file_id) for lesson {day}")
                     elif video_file_path:
                         from pathlib import Path
@@ -2068,7 +2085,8 @@ class CourseBot:
                         
                         if video_path.exists():
                             video_file = FSInputFile(video_path)
-                            await self.bot.send_video(user.user_id, video_file, caption=centered_caption)
+                            caption = intro_text if intro_text else None
+                            await self.bot.send_video(user.user_id, video_file, caption=caption)
                             logger.info(f"   ✅ Sent lesson 0 video with intro_text (file path: {video_path}) for lesson {day}")
                         else:
                             logger.error(f"   ❌ Lesson 0 video not found: {video_path.absolute()}")
@@ -2102,7 +2120,8 @@ class CourseBot:
             if intro_text and not skip_intro and not lesson0_intro_sent_with_video:
                 # Анимация перед отправкой текста
                 await send_typing_action(self.bot, user.user_id, 0.5)
-                intro_message = f"{intro_text}\n\n{create_premium_separator()}\n\n"
+                # Текст берется как есть из Google Doc, без разделителей
+                intro_message = intro_text
                 await self.bot.send_message(user.user_id, intro_message)
                 logger.info(f"   Sent intro_text for lesson {day}")
                 await asyncio.sleep(0.5)  # Пауза для плавности
@@ -2136,12 +2155,12 @@ class CourseBot:
                 # Пробуем отправить фото, если есть file_id (приоритет)
                 if about_me_photo_file_id:
                     try:
-                        # Центрированная подпись
-                        centered_caption = f"━━━━━━━━━━━━━━\n{about_me_text}\n━━━━━━━━━━━━━━"
+                        # Подпись - только текст из Google Doc, без разделителей
+                        caption = about_me_text if about_me_text else None
                         await self.bot.send_photo(
                             user.user_id,
                             about_me_photo_file_id,
-                            caption=centered_caption
+                            caption=caption
                         )
                         logger.info(f"   ✅ Sent 'ОБО МНЕ' photo (file_id) for lesson {day}")
                         about_me_sent = True
@@ -2153,12 +2172,12 @@ class CourseBot:
                                 from pathlib import Path
                                 from aiogram.types import FSInputFile
                                 photo_file = FSInputFile(Path(about_me_photo_path))
-                                # Центрированная подпись
-                                centered_caption = f"━━━━━━━━━━━━━━\n{about_me_text}\n━━━━━━━━━━━━━━"
+                                # Подпись - только текст из Google Doc, без разделителей
+                                caption = about_me_text if about_me_text else None
                                 await self.bot.send_photo(
                                     user.user_id,
                                     photo_file,
-                                    caption=centered_caption
+                                    caption=caption
                                 )
                                 logger.info(f"   ✅ Sent 'ОБО МНЕ' photo (file path) for lesson {day}")
                                 about_me_sent = True
@@ -2181,12 +2200,12 @@ class CourseBot:
                         from pathlib import Path
                         from aiogram.types import FSInputFile
                         photo_file = FSInputFile(Path(about_me_photo_path))
-                        # Центрированная подпись
-                        centered_caption = f"━━━━━━━━━━━━━━\n{about_me_text}\n━━━━━━━━━━━━━━"
+                        # Подпись - только текст из Google Doc, без разделителей
+                        caption = about_me_text if about_me_text else None
                         await self.bot.send_photo(
                             user.user_id,
                             photo_file,
-                            caption=centered_caption
+                            caption=caption
                         )
                         logger.info(f"   ✅ Sent 'ОБО МНЕ' photo (file path) for lesson {day}")
                         about_me_sent = True
@@ -2208,6 +2227,8 @@ class CourseBot:
             remaining_media = media_count - media_index if media_count > media_index else 0
             
             # Если есть медиа для распределения по тексту, разбиваем текст на части
+            # Если урок разбит на несколько постов, работаем с первым постом для распределения медиа
+            # Остальные посты отправятся после медиа
             if remaining_media > 0 and text:
                 # Для урока 1: специальная логика - видео после текста "Наш корабль берёт курс"
                 lesson1_video_placed = False
@@ -2314,9 +2335,25 @@ class CourseBot:
                             logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
                             media_index += 1
                             await asyncio.sleep(0.3)
+                    
+                        # Если урок разбит на несколько постов, отправляем остальные посты после медиа
+                        if len(lesson_posts) > 1:
+                            for i in range(1, len(lesson_posts)):
+                                post_text = lesson_posts[i]
+                                if post_text and post_text.strip():
+                                    await self.bot.send_message(user.user_id, post_text.strip())
+                                    if i < len(lesson_posts) - 1:
+                                        await asyncio.sleep(0.5)
+                            logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
                     else:
                         # Если нет абзацев, отправляем весь текст и медиа после него
-                        if text.strip():
+                        # Если урок разбит на несколько постов, отправляем первый пост, затем медиа, затем остальные посты
+                        if len(lesson_posts) > 1:
+                            # Отправляем первый пост
+                            if lesson_posts[0] and lesson_posts[0].strip():
+                                await self.bot.send_message(user.user_id, lesson_posts[0].strip())
+                                await asyncio.sleep(0.3)
+                        elif text.strip():
                             await self.bot.send_message(user.user_id, text)
                             await asyncio.sleep(0.3)
                         
@@ -2326,9 +2363,33 @@ class CourseBot:
                             logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
                             media_index += 1
                             await asyncio.sleep(0.3)
+                    
+                    # Если урок разбит на несколько постов, отправляем остальные посты после медиа
+                    if len(lesson_posts) > 1:
+                        for i in range(1, len(lesson_posts)):
+                            post_text = lesson_posts[i]
+                            if post_text and post_text.strip():
+                                await self.bot.send_message(user.user_id, post_text.strip())
+                                if i < len(lesson_posts) - 1:
+                                    await asyncio.sleep(0.5)
+                        logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
             else:
                 # Если медиа нет или уже все отправлены, отправляем текст как обычно
-                if text.strip():
+                # Если урок разбит на несколько постов, отправляем их последовательно
+                if len(lesson_posts) > 1:
+                    # Multiple posts: send each one separately
+                    for i, post_text in enumerate(lesson_posts):
+                        if post_text and post_text.strip():
+                            # Анимация перед отправкой поста (только для первого)
+                            if i == 0:
+                                await send_typing_action(self.bot, user.user_id, 0.5)
+                            await self.bot.send_message(user.user_id, post_text.strip())
+                            # Пауза между постами (кроме последнего)
+                            if i < len(lesson_posts) - 1:
+                                await asyncio.sleep(0.5)
+                    logger.info(f"   ✅ Sent {len(lesson_posts)} lesson posts for day {day}")
+                elif text.strip():
+                    # Single post: send as before (backward compatible)
                     # Анимация перед отправкой текста
                     await send_typing_action(self.bot, user.user_id, 0.5)
                     await self.bot.send_message(user.user_id, text)
@@ -2342,13 +2403,13 @@ class CourseBot:
                     await send_typing_action(self.bot, user.user_id, 0.4)
                     show_levels_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                         InlineKeyboardButton(
-                            text="📊 Показать все уровни",
+                            text="Показать все уровни",
                             callback_data="lesson19_show_levels"
                         )
                     ]])
                     await self.bot.send_message(
                         user.user_id,
-                        "📊 <b>Эмоциональные уровни</b>\n\nНажмите кнопку ниже, чтобы посмотреть все уровни:",
+                        "<b>Эмоциональные уровни</b>\n\nНажмите кнопку ниже, чтобы посмотреть все уровни:",
                         reply_markup=show_levels_keyboard,
                         parse_mode="HTML"
                     )
@@ -2361,11 +2422,12 @@ class CourseBot:
                     # Анимация перед отправкой видео
                     await send_typing_action(self.bot, user.user_id, 0.5)
                     
-                    # Текст для caption видео
+                    # Текст для caption видео - должен браться из Google Doc, без эмодзи
+                    # Если текст не в Google Doc, используем базовый текст без эмодзи
                     video_caption = (
-                        "⛵ Добро пожаловать на корвет, исследователи!\n\n"
-                        "⛵🧭 Наш корабль берёт курс на новые горизонты. 🌊🗺️ "
-                        "Но прежде чем отправиться, я задам вам первый ❓ вопрос. Даже три. ❓❓❓"
+                        "Добро пожаловать на корвет, исследователи!\n\n"
+                        "Наш корабль берёт курс на новые горизонты. "
+                        "Но прежде чем отправиться, я задам вам первый вопрос. Даже три."
                     )
                     
                     # Отправляем видео с текстом
@@ -2438,17 +2500,13 @@ class CourseBot:
                 except Exception as video_error:
                     logger.warning(f"   ⚠️ Не удалось отправить первое видео перед заданием для урока 30: {video_error}")
             
-            # Формируем сообщение с заданием
+            # Формируем сообщение с заданием - только текст из Google Doc, без эмодзи и разделителей
             task_message = ""
             if task:
                 # Анимация перед отправкой задания
                 await send_typing_action(self.bot, user.user_id, 0.6)
-                task_message = (
-                    f"{create_premium_separator()}\n\n"
-                    f"✨ 📝 <b>Задание:</b> 📝 ✨\n"
-                    f"{create_premium_separator()}\n\n"
-                    f"{task}\n\n"
-                )
+                # Текст задания берется как есть из Google Doc
+                task_message = task
             
             # Отправляем задание, если есть
             if task_message:
@@ -2554,7 +2612,7 @@ class CourseBot:
                         # Создаем кнопку для показа всех уровней
                         show_levels_button = [
                             InlineKeyboardButton(
-                                text="📊 Показать все уровни",
+                                text="Показать все уровни",
                                 callback_data="lesson19_show_levels"
                             )
                         ]
@@ -2582,7 +2640,7 @@ class CourseBot:
                 elif (day == 19 or str(day) == "19") and levels_images:
                     await self.bot.send_message(
                         user.user_id, 
-                        "📊 <b>Эмоциональные уровни</b>\n\nНажмите кнопку ниже, чтобы посмотреть все уровни:",
+                        "<b>Эмоциональные уровни</b>\n\nНажмите кнопку ниже, чтобы посмотреть все уровни:",
                         reply_markup=keyboard,
                         parse_mode="HTML"
                     )
@@ -2630,8 +2688,9 @@ class CourseBot:
                     try:
                         # Анимация перед отправкой фото
                         await send_typing_action(self.bot, user.user_id, 0.5)
-                        centered_caption = "━━━━━━━━━━━━━━"
-                        await self.bot.send_photo(user.user_id, follow_up_photo_file_id, caption=centered_caption)
+                        # Убираем разделители - caption должен браться из данных или быть None
+                        caption = None
+                        await self.bot.send_photo(user.user_id, follow_up_photo_file_id, caption=caption)
                         logger.info(f"   ✅ Sent follow_up photo (file_id) for lesson {day}")
                         photo_sent = True
                         await asyncio.sleep(0.7)  # Пауза для плавности
@@ -2660,8 +2719,9 @@ class CourseBot:
                             # Анимация перед отправкой фото
                             await send_typing_action(self.bot, user.user_id, 0.5)
                             photo_file = FSInputFile(photo_path)
-                            centered_caption = "━━━━━━━━━━━━━━"
-                            await self.bot.send_photo(user.user_id, photo_file, caption=centered_caption)
+                            # Убираем разделители - caption должен браться из данных или быть None
+                            caption = None
+                            await self.bot.send_photo(user.user_id, photo_file, caption=caption)
                             logger.info(f"   ✅ Sent follow_up photo (file path: {photo_path}) for lesson {day}")
                             photo_sent = True
                             await asyncio.sleep(0.7)  # Пауза для плавности
@@ -2684,8 +2744,9 @@ class CourseBot:
                                     # Анимация перед отправкой фото
                                     await send_typing_action(self.bot, user.user_id, 0.5)
                                     photo_file = FSInputFile(possible_path)
-                                    centered_caption = "━━━━━━━━━━━━━━"
-                                    await self.bot.send_photo(user.user_id, photo_file, caption=centered_caption)
+                                    # Убираем разделители - caption должен браться из данных или быть None
+                                    caption = None
+                                    await self.bot.send_photo(user.user_id, photo_file, caption=caption)
                                     logger.info(f"   ✅ Sent follow_up photo from alternative path for lesson {day}")
                                     photo_sent = True
                                     await asyncio.sleep(0.7)
@@ -2802,19 +2863,23 @@ class CourseBot:
             pass
         
         # Forward to admin
+        safe_first_name = html.escape(user.first_name or "")
+        safe_username = html.escape(user.username) if user.username else "\u041d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d\u043e"
+        safe_lesson_title = html.escape(lesson_title)
+        safe_message_text = html.escape(message.text or "")
         admin_text = (
-            f"📝 <b>Новое задание</b>\n\n"
-            f"👤 Пользователь: {user.first_name} (@{user.username or 'Не указано'})\n"
+            f"<b>Новое задание</b>\n\n"
+            f"👤 Пользователь: {safe_first_name} (@{safe_username})\n"
             f"🆔 ID пользователя: {user.user_id}\n"
-            f"📚 Урок: {lesson_title}\n"
+            f"Урок: {safe_lesson_title}\n"
             f"🔢 ID задания: {assignment.assignment_id}\n\n"
-            f"✍️ <b>Ответ:</b>\n{message.text}"
+            f"✍️ <b>Ответ:</b>\n{safe_message_text}"
         )
         
         # Send to admin bot if configured, otherwise to admin chat
-        if Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID:
+        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+        if is_admin_bot_configured():
             try:
-                from utils.admin_helpers import send_to_admin_bot
                 await send_to_admin_bot(
                     admin_text,
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -2841,7 +2906,7 @@ class CourseBot:
                         ]
                     ])
                 )
-        elif Config.ADMIN_CHAT_ID:
+        elif Config.ADMIN_CHAT_ID != 0:
             await self.bot.send_message(
                 Config.ADMIN_CHAT_ID,
                 admin_text,
@@ -2945,41 +3010,46 @@ class CourseBot:
             pass
         
         # Forward to admin
+        safe_first_name = html.escape(user.first_name or "")
+        safe_username = html.escape(user.username) if user.username else "\u041d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d\u043e"
+        safe_lesson_title = html.escape(lesson_title)
+        safe_caption = html.escape(message.caption or "")
+
         admin_text = (
-            f"📝 <b>Новое задание (Медиа)</b>\n\n"
-            f"👤 Пользователь: {user.first_name} (@{user.username or 'Не указано'})\n"
+            f"<b>Новое задание (Медиа)</b>\n\n"
+            f"👤 Пользователь: {safe_first_name} (@{safe_username})\n"
             f"🆔 ID пользователя: {user.user_id}\n"
-            f"📚 Урок: {lesson_title}\n"
+            f"Урок: {safe_lesson_title}\n"
             f"🔢 ID задания: {assignment.assignment_id}"
         )
         
         if message.caption:
-            admin_text += f"\n\n✍️ <b>Подпись:</b>\n{message.caption}"
+            admin_text += f"\n\n✍️ <b>Подпись:</b>\n{safe_caption}"
         
         # Forward media to admin
         if message.photo:
             await self.bot.send_photo(Config.ADMIN_CHAT_ID, message.photo[-1].file_id, caption=admin_text)
         elif message.video:
             # Send to admin bot if configured
-            if Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID:
+            from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+            if is_admin_bot_configured():
                 try:
-                    from utils.admin_helpers import send_to_admin_bot
                     await send_to_admin_bot(admin_text, video_file_id=message.video.file_id)
                 except Exception as e:
                     logger.error(f"Error sending to admin bot: {e}, falling back")
                     await self.bot.send_video(Config.ADMIN_CHAT_ID, message.video.file_id, caption=admin_text)
-            elif Config.ADMIN_CHAT_ID:
+            elif Config.ADMIN_CHAT_ID != 0:
                 await self.bot.send_video(Config.ADMIN_CHAT_ID, message.video.file_id, caption=admin_text)
         elif message.document:
             # Send to admin bot if configured
-            if Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID:
+            from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+            if is_admin_bot_configured():
                 try:
-                    from utils.admin_helpers import send_to_admin_bot
                     await send_to_admin_bot(admin_text, document_file_id=message.document.file_id)
                 except Exception as e:
                     logger.error(f"Error sending to admin bot: {e}, falling back")
                     await self.bot.send_document(Config.ADMIN_CHAT_ID, message.document.file_id, caption=admin_text)
-            elif Config.ADMIN_CHAT_ID:
+            elif Config.ADMIN_CHAT_ID != 0:
                 await self.bot.send_document(Config.ADMIN_CHAT_ID, message.document.file_id, caption=admin_text)
         
         persistent_keyboard = self._create_persistent_keyboard()
@@ -3059,9 +3129,10 @@ class CourseBot:
             ]
         ])
         
-        if Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID:
+        # Send to admin bot if configured
+        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+        if is_admin_bot_configured():
             try:
-                from utils.admin_helpers import send_to_admin_bot
                 await send_to_admin_bot(curator_message, reply_markup=keyboard)
                 logger.info(f"✅ Question sent to admin bot from user {user_id}")
             except Exception as e:
@@ -3127,7 +3198,7 @@ class CourseBot:
             await callback.message.answer(
                 f"💬 <b>Ответ на вопрос</b>\n\n"
                 f"👤 Пользователь ID: {user_id}\n"
-                f"📚 Урок: День {lesson_day}\n\n"
+                f"Урок: День {lesson_day}\n\n"
                 f"✍️ Ответьте на это сообщение с вашим ответом пользователю.\n\n"
                 f"💡 Ответ будет отправлен анонимно от имени бота."
             )
@@ -3161,9 +3232,9 @@ class CourseBot:
                 except (ValueError, IndexError):
                     pass
             
-            if "📚 Урок:" in reply_text:
+            if "Урок:" in reply_text:
                 try:
-                    parts = reply_text.split("📚 Урок:")
+                    parts = reply_text.split("Урок:")
                     if len(parts) > 1:
                         lesson_str = parts[1].split("\n")[0].strip()
                         if "День" in lesson_str:
@@ -3194,7 +3265,7 @@ class CourseBot:
                         f"💬 <b>Ответ на ваш вопрос</b>\n\n"
                     )
                     if lesson_day:
-                        answer_message += f"📚 Урок: День {lesson_day}\n\n"
+                        answer_message += f"Урок: День {lesson_day}\n\n"
                     answer_message += f"{answer_text}"
                     
                     await self.bot.send_message(user.user_id, answer_message)
@@ -3410,9 +3481,9 @@ class CourseBot:
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
-            f"❓ <b>Задать вопрос</b>\n\n"
-            f"✍️ Напишите ваш вопрос прямо здесь 👇\n\n"
-            f"📤 Ваш вопрос будет отправлен куратору, и мы ответим вам как можно скорее ⚡\n\n"
+            f"<b>Задать вопрос</b>\n\n"
+            f"Напишите ваш вопрос прямо здесь.\n\n"
+            f"Ваш вопрос будет отправлен куратору, и мы ответим вам как можно скорее.\n\n"
             f"💡 <i>Можете задать вопрос по текущему уроку или по курсу в целом.</i>",
             reply_markup=persistent_keyboard
         )
@@ -3429,7 +3500,7 @@ class CourseBot:
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
-            "💎 <b>Тарифы курса</b>\n\n"
+            "<b>Тарифы курса</b>\n\n"
             "📋 Для просмотра и выбора тарифа перейдите в бот оплаты:\n\n"
             f"🤖 <a href='{deep_link}'>@StartNowQ_bot</a>\n\n"
             f"💡 <i>Нажмите на ссылку выше, чтобы открыть тарифы 👆</i>",
@@ -3463,7 +3534,7 @@ class CourseBot:
         if group_link:
             await message.answer(
                 "💬 <b>Перейти к обсуждению</b>\n\n"
-                "📚 Обсудите задания и вопросы с другими участниками курса:\n\n"
+                "Обсудите задания и вопросы с другими участниками курса:\n\n"
                 f"👥 <a href='{group_link}'>Перейти в обсуждение</a>\n\n"
                 "💡 <i>Если ссылка не открывается — напишите в поддержку, мы добавим вас вручную.</i>",
                 disable_web_page_preview=False,
@@ -3506,7 +3577,7 @@ class CourseBot:
         for i in range(6):  # 0-5
             text = f"{i}"
             if i == 0:
-                text = "0 🖤"
+                text = "0"
             elif user.mentor_reminders == i:
                 text = f"{i} ☑️"
             
@@ -3527,7 +3598,7 @@ class CourseBot:
         
         # Определяем текущий статус
         if user.mentor_reminders == 0:
-            status_text = "🖤 Напоминания выключены"
+            status_text = "Напоминания выключены"
         else:
             status_text = f"☑️ Напоминаний в день: {user.mentor_reminders}"
         
@@ -3570,7 +3641,7 @@ class CourseBot:
         
         # Формируем сообщение об изменении
         if frequency == 0:
-            status_text = "🖤 Ок, напоминания выключены."
+            status_text = "Ок, напоминания выключены."
         else:
             status_text = f"☑️ Ок, буду напоминать {frequency} раз(а) в день 💬\n\nНапоминание будет содержать задание текущего урока."
         

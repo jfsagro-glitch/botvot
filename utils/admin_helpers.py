@@ -10,12 +10,23 @@ from core.config import Config
 logger = logging.getLogger(__name__)
 
 
+def is_admin_bot_configured() -> bool:
+    """
+    Check if admin bot is properly configured.
+    
+    Returns:
+        True if both ADMIN_BOT_TOKEN and ADMIN_CHAT_ID are configured, False otherwise
+    """
+    return bool(Config.ADMIN_BOT_TOKEN and Config.ADMIN_CHAT_ID != 0)
+
+
 async def send_to_admin_bot(
     message_text: str,
     reply_markup: Optional[object] = None,
     photo_file_id: Optional[str] = None,
     video_file_id: Optional[str] = None,
-    document_file_id: Optional[str] = None
+    document_file_id: Optional[str] = None,
+    voice_file_id: Optional[str] = None
 ) -> bool:
     """
     Send message to admin bot.
@@ -30,12 +41,8 @@ async def send_to_admin_bot(
     Returns:
         True if sent successfully, False otherwise
     """
-    if not Config.ADMIN_BOT_TOKEN:
-        logger.warning("ADMIN_BOT_TOKEN not configured, cannot send to admin bot")
-        return False
-    
-    if not Config.ADMIN_CHAT_ID:
-        logger.warning("ADMIN_CHAT_ID not configured, cannot send to admin bot")
+    if not is_admin_bot_configured():
+        logger.warning("Admin bot not configured (missing ADMIN_BOT_TOKEN or ADMIN_CHAT_ID)")
         return False
     
     try:
@@ -59,6 +66,13 @@ async def send_to_admin_bot(
             await admin_bot.send_document(
                 Config.ADMIN_CHAT_ID,
                 document_file_id,
+                caption=message_text,
+                reply_markup=reply_markup
+            )
+        elif voice_file_id:
+            await admin_bot.send_voice(
+                Config.ADMIN_CHAT_ID,
+                voice_file_id,
                 caption=message_text,
                 reply_markup=reply_markup
             )

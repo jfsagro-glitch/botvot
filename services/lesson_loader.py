@@ -132,7 +132,7 @@ class LessonLoader:
             return ""
         
         # Для тарифа с обратной связью (FEEDBACK, PREMIUM)
-        if tariff in [Tariff.FEEDBACK, Tariff.PREMIUM]:
+        if tariff in [Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]:
             task = lesson.get("task_feedback") or lesson.get("task", "")
             # Убираем префикс "💡 Для тарифа с обратной связью: " если он есть, оставляя содержимое
             feedback_prefix = "💡 Для тарифа с обратной связью:"
@@ -203,7 +203,7 @@ class LessonLoader:
         # JSON lessons don't include it, so we stamp "now" deterministically.
         from datetime import datetime
         return Lesson(
-            lesson_id=f"lesson_{day}",
+            lesson_id=day,
             day_number=day,
             title=lesson_data.get("title", f"День {day}"),
             content_text=lesson_data.get("text", ""),
@@ -212,4 +212,3 @@ class LessonLoader:
             assignment_text=lesson_data.get("task", ""),
             created_at=datetime.utcnow(),
         )
-

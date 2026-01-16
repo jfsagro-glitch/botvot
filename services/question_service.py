@@ -5,6 +5,7 @@ Handles question routing, FAQ, and question tracking.
 """
 
 from datetime import datetime
+from html import escape
 from typing import Optional, List
 from core.database import Database
 from core.models import User
@@ -43,9 +44,11 @@ class QuestionService:
     
     async def format_question_for_admin(self, question_data: dict) -> str:
         """Format question for admin chat."""
-        user_info = f"{question_data['user_name']}"
-        if question_data.get('username'):
-            user_info += f" (@{question_data['username']})"
+        user_name = escape(str(question_data.get("user_name") or "Unknown"))
+        username = question_data.get("username")
+        user_info = user_name
+        if username:
+            user_info += f" (@{escape(str(username))})"
         
         message = f"❓ <b>Новый вопрос</b>\n\n"
         message += f"👤 Пользователь: {user_info}\n"
@@ -55,9 +58,8 @@ class QuestionService:
             message += f"📚 Урок: День {question_data['lesson_id']}\n"
         
         if question_data.get('context'):
-            message += f"📍 Контекст: {question_data['context']}\n"
+            message += f"📍 Контекст: {escape(str(question_data['context']))}\n"
         
-        message += f"\n💭 <b>Вопрос:</b>\n{question_data.get('question_text', 'Нет текста')}"
+        message += f"\n💭 <b>Вопрос:</b>\n{escape(str(question_data.get('question_text', 'Нет текста')))}"
         
         return message
-

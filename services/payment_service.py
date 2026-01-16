@@ -5,6 +5,7 @@ Coordinates between payment processor and user service to grant access
 after successful payment.
 """
 
+from decimal import Decimal, InvalidOperation
 from typing import Optional, Dict, Any
 
 from core.database import Database
@@ -79,6 +80,8 @@ class PaymentService:
         if upgrade_from is not None:
             metadata["upgrade_from"] = upgrade_from.value
             metadata["is_upgrade"] = True
+            if upgrade_price is not None:
+                metadata["upgrade_price"] = upgrade_price
         
         payment_info = await self.payment_processor.create_payment(
             user_id=user_id,
@@ -162,9 +165,62 @@ class PaymentService:
         if not user_id or not tariff_str:
             logger.error(f"   Missing required data: user_id={user_id}, tariff={tariff_str}")
             return None
-        
-        tariff = Tariff(tariff_str)
-        
+
+        try:
+            tariff = Tariff(tariff_str)
+        except Exception:
+            logger.error(f"   Invalid tariff in payment metadata: {tariff_str}")
+            return None
+
+        # Idempotency: skip if already processed (still report success)
+        processed_payment_id = payment_data.get("payment_id") or payment_id
+        if processed_payment_id:
+            try:
+                if await self.db.is_payment_processed(processed_payment_id):
+                    logger.info(f"   Payment {processed_payment_id} already processed; skipping.")
+                    existing_user = await self.user_service.get_user(int(user_id))
+                    return {
+                        "user_id": user_id,
+                        "tariff": tariff.value,
+                        "user": existing_user,
+                        "is_upgrade": bool(metadata.get("is_upgrade", False)),
+                        "already_processed": True
+                    }
+            except Exception:
+                # If idempotency check fails, continue to avoid blocking access
+                logger.warning("   Failed to check payment idempotency; continuing.", exc_info=True)
+
+        # Validate amount to prevent underpayment or tampered metadata
+        def _to_decimal(value) -> Optional[Decimal]:
+            try:
+                return Decimal(str(value))
+            except (InvalidOperation, TypeError):
+                return None
+
+        amount_value = _to_decimal(payment_data.get("amount"))
+        expected_amount = None
+        if metadata.get("is_upgrade", False):
+            upgrade_price_meta = metadata.get("upgrade_price")
+            expected_amount = _to_decimal(upgrade_price_meta)
+            if expected_amount is None and metadata.get("upgrade_from"):
+                try:
+                    upgrade_from = Tariff(metadata.get("upgrade_from"))
+                    expected_amount = _to_decimal(
+                        self.TARIFF_PRICES.get(tariff, 0) - self.TARIFF_PRICES.get(upgrade_from, 0)
+                    )
+                except Exception:
+                    expected_amount = None
+        else:
+            expected_amount = _to_decimal(self.TARIFF_PRICES.get(tariff))
+
+        if amount_value is not None and expected_amount is not None:
+            tolerance = Decimal("0.01")
+            if amount_value + tolerance < expected_amount:
+                logger.error(
+                    f"   Payment amount mismatch: received={amount_value} expected>={expected_amount}"
+                )
+                return None
+
         # Grant access to user
         logger.info(f"   Granting access to user {user_id} with tariff {tariff.value}")
         # Проверяем, это апгрейд или новый доступ
@@ -190,10 +246,18 @@ class PaymentService:
         
         logger.info(f"   ✅ Access granted successfully to user {user_id}")
         
+        if processed_payment_id:
+            try:
+                await self.db.try_mark_payment_processed(processed_payment_id)
+            except Exception:
+                logger.warning(
+                    f"   Failed to mark payment {processed_payment_id} as processed",
+                    exc_info=True
+                )
+
         return {
             "user_id": user_id,
             "tariff": tariff.value,
             "user": user,
             "is_upgrade": is_upgrade
         }
-

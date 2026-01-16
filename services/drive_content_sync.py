@@ -141,21 +141,143 @@ class DriveContentSync:
                     break
 
             # split task
-            task_re = re.compile(r"^\s*(?:Задание|Task)\s*:\s*$", re.IGNORECASE)
+            # Support both formats:
+            #   "Задание:" (on its own line)
+            #   "Задание: текст задания" (text on same line)
+            task_re = re.compile(r"^\s*(?:Задание|Task)\s*:\s*(.*)$", re.IGNORECASE)
             parts_lesson: List[str] = []
             parts_task: List[str] = []
             in_task = False
             for ln in bl:
-                if task_re.match(ln):
+                m = task_re.match(ln)
+                if m:
                     in_task = True
+                    # If there's text on the same line after "Задание:", add it to task
+                    task_text_on_line = (m.group(1) or "").strip()
+                    if task_text_on_line:
+                        parts_task.append(task_text_on_line)
                     continue
                 (parts_task if in_task else parts_lesson).append(ln)
             lesson = "\n".join(parts_lesson).strip()
             task = "\n".join(parts_task).strip()
 
-            out[day] = {"title": title, "lesson": lesson, "task": task}
+            # Split lesson into posts:
+            # 1. By manual markers: ---POST--- or [POST] or ---
+            # 2. Automatically by length (>4000 chars)
+            lesson_posts = self._split_lesson_into_posts(lesson)
+            
+            # If lesson was split into multiple posts, store as list; otherwise as string (backward compatible)
+            if len(lesson_posts) > 1:
+                out[day] = {"title": title, "lesson": lesson_posts, "task": task}
+            else:
+                out[day] = {"title": title, "lesson": lesson_posts[0] if lesson_posts else "", "task": task}
 
         return out
+    
+    @staticmethod
+    def _split_lesson_into_posts(lesson_text: str, max_length: int = 4000) -> List[str]:
+        """
+        Split lesson text into multiple posts.
+        
+        Supports:
+        1. Manual markers: ---POST---, [POST], --- (on its own line)
+        2. Automatic splitting by length (>4000 chars) at paragraph boundaries
+        
+        Args:
+            lesson_text: Full lesson text
+            max_length: Maximum length per post (default 4000, Telegram limit is 4096)
+        
+        Returns:
+            List of post texts
+        """
+        if not lesson_text or not lesson_text.strip():
+            return [""]
+        
+        # Step 1: Split by manual markers
+        # Support: ---POST---, [POST], --- (on its own line)
+        # Split by lines first to find markers
+        lines = lesson_text.split('\n')
+        posts = []
+        current_post = []
+        
+        for line in lines:
+            # Check if line is a post marker
+            if re.match(r'^\s*(?:---POST---|\[POST\]|---)\s*$', line, re.IGNORECASE):
+                # Save current post if it has content
+                if current_post:
+                    post_text = '\n'.join(current_post).strip()
+                    if post_text:
+                        posts.append(post_text)
+                    current_post = []
+            else:
+                current_post.append(line)
+        
+        # Add last post if any
+        if current_post:
+            post_text = '\n'.join(current_post).strip()
+            if post_text:
+                posts.append(post_text)
+        
+        # If we found markers and split, return posts
+        if len(posts) > 1:
+            return posts
+        
+        # Step 2: If no manual markers, check length and split automatically if needed
+        if len(lesson_text) <= max_length:
+            return [lesson_text.strip()]
+        
+        # Auto-split by paragraphs, trying to keep posts under max_length
+        posts = []
+        paragraphs = lesson_text.split('\n\n')
+        current_post = []
+        current_length = 0
+        
+        for para in paragraphs:
+            para = para.strip()
+            if not para:
+                continue
+            
+            para_length = len(para)
+            
+            # If single paragraph exceeds max_length, split it by lines
+            if para_length > max_length:
+                # Save current post if any
+                if current_post:
+                    posts.append('\n\n'.join(current_post))
+                    current_post = []
+                    current_length = 0
+                
+                # Split long paragraph by lines
+                lines = para.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    line_length = len(line)
+                    if current_length + line_length + 2 > max_length:  # +2 for \n\n
+                        if current_post:
+                            posts.append('\n\n'.join(current_post))
+                            current_post = []
+                            current_length = 0
+                    
+                    current_post.append(line)
+                    current_length += line_length + 2  # +2 for \n\n
+            else:
+                # Check if adding this paragraph would exceed max_length
+                if current_post and current_length + para_length + 2 > max_length:  # +2 for \n\n
+                    posts.append('\n\n'.join(current_post))
+                    current_post = []
+                    current_length = 0
+                
+                current_post.append(para)
+                current_length += para_length + 2  # +2 for \n\n
+        
+        # Add remaining post
+        if current_post:
+            posts.append('\n\n'.join(current_post))
+        
+        return posts if posts else [lesson_text.strip()]
 
     def _sync_from_master_doc(self, drive, warnings: List[str]) -> Tuple[Dict[str, Any], int]:
         master_id = (Config.DRIVE_MASTER_DOC_ID or "").strip()
@@ -179,7 +301,12 @@ class DriveContentSync:
         compiled: Dict[str, Any] = {}
         for day, data in sorted(day_map.items(), key=lambda x: x[0]):
             title = (data.get("title") or "").strip() or f"День {day}"
-            lesson_text = (data.get("lesson") or "").strip()
+            lesson_raw = data.get("lesson") or ""
+            # Support multi-post lessons returned as list
+            if isinstance(lesson_raw, list):
+                lesson_text = "\n\n".join([str(x) for x in lesson_raw]).strip()
+            else:
+                lesson_text = str(lesson_raw).strip()
             task_text = (data.get("task") or "").strip()
 
             # Optional: download Drive-linked media referenced in the text/task
@@ -677,4 +804,3 @@ class DriveContentSync:
             media_files_downloaded=media_downloaded,
             warnings=warnings,
         )
-

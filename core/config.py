@@ -33,7 +33,13 @@ class Config:
     ADMIN_BOT_TOKEN: str = _get_env_value("ADMIN_BOT_TOKEN", "")
     
     # Admin Chat ID (for assignment feedback)
-    ADMIN_CHAT_ID: int = int(_get_env_value("ADMIN_CHAT_ID", "0") or "0")
+    # Read as string first, then convert to int (supports negative IDs for groups)
+    _admin_chat_id_str = _get_env_value("ADMIN_CHAT_ID", "").strip()
+    try:
+        ADMIN_CHAT_ID: int = int(_admin_chat_id_str) if _admin_chat_id_str else 0
+    except ValueError:
+        # If invalid value, default to 0
+        ADMIN_CHAT_ID: int = 0
     
     # Curator Group ID (for questions from users)
     CURATOR_GROUP_ID: str = _get_env_value("CURATOR_GROUP_ID", "")

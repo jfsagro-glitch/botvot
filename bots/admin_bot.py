@@ -196,6 +196,20 @@ class AdminBot:
             logger.error(f"Error getting stats: {e}", exc_info=True)
             await message.answer("❌ Ошибка при получении статистики.")
     
+    def _format_user_display_name(self, user: User) -> str:
+        """Format user display name for admin interface."""
+        # Try first_name + last_name
+        if user.first_name:
+            name_parts = [user.first_name]
+            if user.last_name:
+                name_parts.append(user.last_name)
+            return " ".join(name_parts)
+        # Fallback to username
+        if user.username:
+            return f"@{user.username}"
+        # Last resort: ID
+        return f"ID {user.user_id}"
+    
     async def handle_users(self, message: Message):
         """Handle /users command - show user list with stats buttons."""
         try:
@@ -212,14 +226,14 @@ class AdminBot:
             keyboard_buttons = []
             for i, user in enumerate(users[:20]):  # Telegram inline keyboard limit
                 tariff = user.tariff.value.upper() if user.tariff else "Нет"
+                display_name = self._format_user_display_name(user)
                 text += (
-                    f"• {user.first_name or 'Без имени'}"
-                    f"{f' (@{user.username})' if user.username else ''}\n"
+                    f"• {display_name}\n"
                     f"  ID: {user.user_id} | Тариф: {tariff} | День: {user.current_day}\n\n"
                 )
                 keyboard_buttons.append([
                     InlineKeyboardButton(
-                        text=f"📊 {user.first_name or user.user_id}",
+                        text=f"📊 {display_name[:30]}",  # Limit button text length
                         callback_data=f"admin:user_stats:{user.user_id}"
                     )
                 ])
@@ -319,8 +333,22 @@ class AdminBot:
             return
         
         # Check if this is a question or assignment
-        is_question = "❓" in reply_text or "Новый вопрос" in reply_text or "Вопрос:" in reply_text
-        is_assignment = "📝" in reply_text or "Задание" in reply_text or "Assignment ID:" in reply_text
+        # Questions: contain "❓", "Новый вопрос", "Вопрос:", "💭 Вопрос:"
+        is_question = (
+            "❓" in reply_text or 
+            "Новый вопрос" in reply_text or 
+            "Вопрос:" in reply_text or
+            "💭 Вопрос:" in reply_text
+        )
+        # Assignments: contain "📝", "Новое задание", "Задание", "ID задания:", "Assignment ID:"
+        is_assignment = (
+            "📝" in reply_text or 
+            "Новое задание" in reply_text or 
+            "Задание" in reply_text or 
+            "ID задания:" in reply_text or
+            "🔢 ID задания:" in reply_text or
+            "Assignment ID:" in reply_text
+        )
         
         if is_question:
             await self._handle_question_reply(message, reply_text, answer_text)
@@ -331,12 +359,12 @@ class AdminBot:
     
     async def _handle_question_reply(self, message: Message, reply_text: str, answer_text: str):
         """Handle reply to question."""
-        # Extract user_id from message
+        # Extract user_id from message - try multiple formats
         user_id = None
         lesson_day = None
         bot_type = "course"  # default
         
-        # Try to extract from formatted message
+        # Try "🆔 ID:" format
         if "🆔 ID:" in reply_text:
             try:
                 parts = reply_text.split("🆔 ID:")
@@ -346,7 +374,8 @@ class AdminBot:
             except (ValueError, IndexError):
                 pass
         
-        if "👤 Пользователь ID:" in reply_text:
+        # Try "👤 Пользователь ID:" format
+        if not user_id and "👤 Пользователь ID:" in reply_text:
             try:
                 parts = reply_text.split("👤 Пользователь ID:")
                 if len(parts) > 1:
@@ -355,37 +384,85 @@ class AdminBot:
             except (ValueError, IndexError):
                 pass
         
-        if "📚 Урок:" in reply_text:
+        # Try extracting from callback data if available
+        if not user_id and hasattr(message.reply_to_message, 'reply_markup'):
+            if message.reply_to_message.reply_markup:
+                for row in message.reply_to_message.reply_markup.inline_keyboard:
+                    for button in row:
+                        if button.callback_data:
+                            # Try curator_reply format: curator_reply:user_id:lesson_day
+                            if "curator_reply:" in button.callback_data:
+                                try:
+                                    parts = button.callback_data.split(":")
+                                    if len(parts) >= 2:
+                                        user_id = int(parts[1])
+                                        if len(parts) >= 3:
+                                            lesson_day = int(parts[2])
+                                    break
+                                except (ValueError, IndexError):
+                                    pass
+                            # Try reply_question format: reply_question:user_id:lesson_day
+                            elif "reply_question:" in button.callback_data:
+                                try:
+                                    parts = button.callback_data.split(":")
+                                    if len(parts) >= 2:
+                                        user_id = int(parts[1])
+                                        if len(parts) >= 3:
+                                            lesson_day = int(parts[2])
+                                    break
+                                except (ValueError, IndexError):
+                                    pass
+        
+        # Extract lesson day from text
+        if "📚 Урок:" in reply_text or "День" in reply_text:
             try:
-                parts = reply_text.split("📚 Урок:")
-                if len(parts) > 1:
-                    lesson_str = parts[1].split("\n")[0].strip()
-                    if "День" in lesson_str:
-                        lesson_day = int(lesson_str.replace("День", "").strip())
+                import re
+                day_match = re.search(r'День\s+(\d+)', reply_text)
+                if day_match:
+                    lesson_day = int(day_match.group(1))
             except (ValueError, IndexError):
                 pass
         
-        # Check bot type
-        if "sales bot" in reply_text.lower() or "продающего бота" in reply_text.lower():
-            bot_type = "sales"
+        # Check bot type - determine if question came from sales bot
+        is_sales_bot = (
+            "sales bot" in reply_text.lower() or 
+            "продающего бота" in reply_text.lower() or
+            "продающий бот" in reply_text.lower() or
+            "Источник: Продающий бот" in reply_text or
+            "Источник:" in reply_text and "sales bot" in reply_text.lower()
+        )
+        bot_type = "sales" if is_sales_bot else "course"
         
         if not user_id:
-            await message.answer("❌ Не удалось найти ID пользователя.")
+            await message.answer("❌ Не удалось найти ID пользователя. Убедитесь, что вы отвечаете на сообщение с вопросом.")
             return
         
-        # Send answer to user
+        # Send answer to user via appropriate bot (determined by bot_type)
         try:
             await self._send_answer_to_user(user_id, answer_text, lesson_day, bot_type)
-            await message.answer("✅ Ответ отправлен пользователю.")
+            bot_name = "продающий бот" if bot_type == "sales" else "обучающий бот"
+            await message.answer(f"✅ Ответ отправлен пользователю в {bot_name}.")
         except Exception as e:
             logger.error(f"Error sending answer to user: {e}", exc_info=True)
             await message.answer(f"❌ Ошибка при отправке ответа: {e}")
     
     async def _handle_assignment_reply(self, message: Message, reply_text: str, answer_text: str):
         """Handle reply to assignment."""
-        # Extract assignment_id
+        # Extract assignment_id - try multiple formats
         assignment_id = None
-        if "Assignment ID:" in reply_text:
+        
+        # Try "🔢 ID задания:" format (Russian)
+        if "🔢 ID задания:" in reply_text or "ID задания:" in reply_text:
+            try:
+                parts = reply_text.split("ID задания:")
+                if len(parts) > 1:
+                    assignment_id_str = parts[1].split("\n")[0].strip()
+                    assignment_id = int(assignment_id_str)
+            except (ValueError, IndexError):
+                pass
+        
+        # Try "Assignment ID:" format (English)
+        if not assignment_id and "Assignment ID:" in reply_text:
             try:
                 parts = reply_text.split("Assignment ID:")
                 if len(parts) > 1:
@@ -394,8 +471,20 @@ class AdminBot:
             except (ValueError, IndexError):
                 pass
         
+        # Try extracting from callback data if available
+        if not assignment_id and hasattr(message.reply_to_message, 'reply_markup'):
+            if message.reply_to_message.reply_markup:
+                for row in message.reply_to_message.reply_markup.inline_keyboard:
+                    for button in row:
+                        if button.callback_data and "admin_reply:" in button.callback_data:
+                            try:
+                                assignment_id = int(button.callback_data.split(":")[1])
+                                break
+                            except (ValueError, IndexError):
+                                pass
+        
         if not assignment_id:
-            await message.answer("❌ Не удалось найти ID задания.")
+            await message.answer("❌ Не удалось найти ID задания. Убедитесь, что вы отвечаете на сообщение с заданием.")
             return
         
         assignment = await self.assignment_service.get_assignment(assignment_id)
@@ -406,7 +495,7 @@ class AdminBot:
         # Add feedback
         await self.assignment_service.add_feedback(assignment_id, answer_text)
         
-        # Send feedback to user
+        # Send feedback to user via course bot
         user = await self.user_service.get_user(assignment.user_id)
         if user:
             feedback_message = (
@@ -426,7 +515,10 @@ class AdminBot:
             try:
                 await course_bot.send_message(user.user_id, feedback_message)
                 await self.assignment_service.mark_feedback_sent(assignment_id)
-                await message.answer("✅ Обратная связь отправлена пользователю.")
+                await message.answer("✅ Обратная связь отправлена пользователю в обучающий бот.")
+            except Exception as e:
+                logger.error(f"Error sending feedback to user: {e}", exc_info=True)
+                await message.answer(f"❌ Ошибка при отправке обратной связи: {e}")
             finally:
                 await course_bot.session.close()
         else:
@@ -480,10 +572,21 @@ class AdminBot:
         user_id = int(parts[1])
         lesson_day = int(parts[2]) if len(parts) > 2 else None
         
+        # Check if question came from sales bot by looking at the original message
+        reply_text = callback.message.text or callback.message.caption or ""
+        is_sales_bot = (
+            "sales bot" in reply_text.lower() or 
+            "продающего бота" in reply_text.lower() or
+            "продающий бот" in reply_text.lower() or
+            "Источник: Продающий бот" in reply_text
+        )
+        bot_type = "sales" if is_sales_bot else "course"
+        
         await callback.message.answer(
             f"💬 <b>Ответ на вопрос</b>\n\n"
             f"👤 Пользователь ID: {user_id}\n"
-            f"{f'📚 Урок: День {lesson_day}' if lesson_day else ''}\n\n"
+            f"{f'📚 Урок: День {lesson_day}' if lesson_day else ''}\n"
+            f"📍 Источник: {'Продающий бот' if is_sales_bot else 'Обучающий бот'}\n\n"
             f"Ответьте на это сообщение с вашим ответом."
         )
     
@@ -504,7 +607,7 @@ class AdminBot:
         await self.handle_sync_content(message)
     
     async def handle_restore_button(self, message: Message):
-        """Handle restore button from keyboard - restore from latest backup."""
+        """Handle restore button from keyboard - show list of 5 latest backups."""
         if not self.drive_sync or not self.drive_sync._admin_ready():
             await message.answer("❌ Синхронизация с Google Drive не настроена.")
             return
@@ -522,33 +625,35 @@ class AdminBot:
                 )
                 return
             
-            # Show latest backup info
-            latest_backup, latest_time = backups[0]
-            backup_info = f"📦 <b>Последний бэкап:</b>\n"
-            backup_info += f"• Дата: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            backup_info += f"• Файл: {latest_backup.name}\n\n"
+            # Show last 5 backups
+            recent_backups = backups[:5]
+            backup_info = f"📦 <b>Доступные бэкапы</b> (последние 5):\n\n"
             
-            if len(backups) > 1:
-                backup_info += f"📚 Всего бэкапов: {len(backups)}\n\n"
-            
-            backup_info += "⚠️ <b>Внимание:</b> Откат заменит текущую версию уроков на версию из бэкапа.\n"
-            backup_info += "Продолжить?"
-            
-            # Create confirmation keyboard
-            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [
+            keyboard_buttons = []
+            for i, (backup_path, backup_time) in enumerate(recent_backups):
+                backup_info += f"{i+1}. 📅 {backup_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                keyboard_buttons.append([
                     InlineKeyboardButton(
-                        text="✅ Да, откатить",
-                        callback_data=f"admin:restore_confirm:{latest_backup.name}"
-                    ),
-                    InlineKeyboardButton(
-                        text="❌ Отмена",
-                        callback_data="admin:restore_cancel"
+                        text=f"⏪ Откатить к {backup_time.strftime('%d.%m %H:%M')}",
+                        callback_data=f"admin:restore_confirm:{backup_path.name}"
                     )
-                ]
+                ])
+            
+            if len(backups) > 5:
+                backup_info += f"\n... и еще {len(backups) - 5} бэкапов\n"
+            
+            backup_info += "\n⚠️ <b>Внимание:</b> Откат заменит текущую версию уроков на версию из выбранного бэкапа.\n"
+            backup_info += "Выберите бэкап для отката:"
+            
+            # Add cancel button
+            keyboard_buttons.append([
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data="admin:restore_cancel"
+                )
             ])
             
+            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
             await message.answer(backup_info, reply_markup=keyboard)
         except Exception as e:
             logger.error(f"Error getting backups: {e}", exc_info=True)
@@ -660,8 +765,37 @@ class AdminBot:
             for row in rows:
                 user = self.db._row_to_user(row)
                 if user:
+                    # Try to update user info from Telegram if missing
+                    if not user.first_name and not user.username:
+                        try:
+                            await self._update_user_from_telegram(user)
+                        except Exception as e:
+                            logger.debug(f"Could not update user {user.user_id} from Telegram: {e}")
                     users.append(user)
         return users
+    
+    async def _update_user_from_telegram(self, user: User):
+        """Try to get user info from Telegram API and update in database."""
+        try:
+            # Try to get user info from any available bot token
+            from core.config import Config
+            from aiogram import Bot
+            
+            # Try course bot first
+            if Config.COURSE_BOT_TOKEN:
+                bot = Bot(token=Config.COURSE_BOT_TOKEN)
+                try:
+                    chat_member = await bot.get_chat(user.user_id)
+                    if chat_member:
+                        user.first_name = getattr(chat_member, 'first_name', None) or user.first_name
+                        user.last_name = getattr(chat_member, 'last_name', None) or user.last_name
+                        user.username = getattr(chat_member, 'username', None) or user.username
+                        await self.db.update_user(user)
+                        logger.info(f"Updated user {user.user_id} info from Telegram")
+                finally:
+                    await bot.session.close()
+        except Exception as e:
+            logger.debug(f"Could not fetch user {user.user_id} from Telegram: {e}")
     
     async def handle_user_stats(self, message: Message):
         """Handle /user_stats USER_ID command - show detailed stats for a user."""
@@ -745,9 +879,9 @@ class AdminBot:
             # Simple activity calculation based on actions
             activity_percent = min(100, (total_actions / 100) * 100)  # Normalize
         
+        display_name = self._format_user_display_name(user)
         return (
-            f"👤 <b>{user.first_name or 'Без имени'}</b> "
-            f"{f'(@{user.username})' if user.username else ''}\n"
+            f"👤 <b>{display_name}</b>\n"
             f"🆔 ID: {user.user_id}\n"
             f"⏱️ Онлайн: {hours}ч {minutes}м\n"
             f"🔢 Заходов: {stats['total_bot_visits']}\n"
@@ -781,10 +915,10 @@ class AdminBot:
         top_actions = sorted(stats["activity_by_action"].items(), key=lambda x: x[1], reverse=True)[:5]
         actions_text = "\n".join([f"  • {action}: {count}" for action, count in top_actions]) if top_actions else "  Нет данных"
         
+        display_name = self._format_user_display_name(user)
         return (
             f"📊 <b>Детальная статистика пользователя</b>\n\n"
-            f"👤 <b>{user.first_name or 'Без имени'}</b> "
-            f"{f'(@{user.username})' if user.username else ''}\n"
+            f"👤 <b>{display_name}</b>\n"
             f"🆔 ID: {user.user_id}\n"
             f"📅 Тариф: {user.tariff.value.upper() if user.tariff else 'Нет'}\n"
             f"📚 Текущий день: {user.current_day}\n\n"

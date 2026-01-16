@@ -133,7 +133,7 @@ class YooKassaPaymentProcessor(PaymentProcessor):
                 }
             
             # Create payment
-            payment = Payment.create(payment_data)
+            payment = await asyncio.to_thread(Payment.create, payment_data)
             
             payment_id = payment.id
             payment_url = payment.confirmation.confirmation_url if payment.confirmation else None
@@ -152,7 +152,7 @@ class YooKassaPaymentProcessor(PaymentProcessor):
     async def check_payment_status(self, payment_id: str) -> PaymentStatus:
         """Check payment status in YooKassa."""
         try:
-            payment = Payment.find_one(payment_id)
+            payment = await asyncio.to_thread(Payment.find_one, payment_id)
             
             # Map YooKassa status to our PaymentStatus
             status_map = {
@@ -172,7 +172,7 @@ class YooKassaPaymentProcessor(PaymentProcessor):
     async def get_payment_details(self, payment_id: str) -> Optional[Dict[str, Any]]:
         """Get full payment details from YooKassa."""
         try:
-            payment = Payment.find_one(payment_id)
+            payment = await asyncio.to_thread(Payment.find_one, payment_id)
             
             if payment.status != "succeeded":
                 return None
@@ -208,7 +208,7 @@ class YooKassaPaymentProcessor(PaymentProcessor):
             payment_id = payment_object.id
             
             # Get payment details
-            payment = Payment.find_one(payment_id)
+            payment = await asyncio.to_thread(Payment.find_one, payment_id)
             
             return {
                 "payment_id": payment_id,
@@ -219,4 +219,3 @@ class YooKassaPaymentProcessor(PaymentProcessor):
         except Exception as e:
             logger.error(f"Error processing YooKassa webhook: {e}", exc_info=True)
             return None
-

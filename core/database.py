@@ -273,6 +273,21 @@ class Database:
         )
         await self.conn.commit()
 
+    async def try_mark_payment_processed(self, payment_id: str) -> bool:
+        """
+        Attempt to mark payment_id as processed.
+
+        Returns True if the record was inserted by this call, False if it already existed.
+        """
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        cursor = await self.conn.execute(
+            "INSERT OR IGNORE INTO processed_payments (payment_id, processed_at) VALUES (?, ?)",
+            (payment_id, now),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
     async def reset_user_data(self, user_id: int):
         """
         Hard reset a user: removes access, progress, assignments and referral records.
@@ -381,6 +396,7 @@ class Database:
     
     async def get_users_with_access(self) -> List[User]:
         """Get all users with active course access."""
+        await self._ensure_connection()
         async with self.conn.execute(
             "SELECT * FROM users WHERE tariff IS NOT NULL"
         ) as cursor:
@@ -390,6 +406,7 @@ class Database:
     # Lesson operations
     async def get_lesson_by_day(self, day_number: int) -> Optional[Lesson]:
         """Get lesson by day number."""
+        await self._ensure_connection()
         async with self.conn.execute(
             "SELECT * FROM lessons WHERE day_number = ?", (day_number,)
         ) as cursor:
@@ -403,6 +420,7 @@ class Database:
                            video_url: Optional[str] = None,
                            assignment_text: Optional[str] = None) -> Lesson:
         """Create a new lesson."""
+        await self._ensure_connection()
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
             INSERT INTO lessons (day_number, title, content_text, image_url,
@@ -420,6 +438,7 @@ class Database:
     
     async def get_all_lessons(self) -> List[Lesson]:
         """Get all lessons ordered by day number."""
+        await self._ensure_connection()
         async with self.conn.execute(
             "SELECT * FROM lessons ORDER BY day_number"
         ) as cursor:
@@ -429,6 +448,7 @@ class Database:
     # Progress operations
     async def get_user_progress(self, user_id: int, lesson_id: int) -> Optional[UserProgress]:
         """Get user progress for a specific lesson."""
+        await self._ensure_connection()
         async with self.conn.execute("""
             SELECT * FROM user_progress 
             WHERE user_id = ? AND lesson_id = ?
@@ -440,6 +460,7 @@ class Database:
     
     async def mark_lesson_completed(self, user_id: int, lesson_id: int, day_number: int):
         """Mark a lesson as completed for a user."""
+        await self._ensure_connection()
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
             INSERT OR REPLACE INTO user_progress 
@@ -451,6 +472,7 @@ class Database:
     # Referral operations
     async def create_referral(self, partner_id: str, referred_user_id: int) -> Referral:
         """Create a referral record."""
+        await self._ensure_connection()
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
             INSERT INTO referrals (partner_id, referred_user_id, created_at)
@@ -467,6 +489,7 @@ class Database:
     
     async def get_referral_stats(self, partner_id: str) -> int:
         """Get number of referrals for a partner."""
+        await self._ensure_connection()
         async with self.conn.execute("""
             SELECT COUNT(*) as count FROM referrals WHERE partner_id = ?
         """, (partner_id,)) as cursor:
@@ -478,6 +501,7 @@ class Database:
                                submission_text: Optional[str] = None,
                                submission_media_ids: Optional[List[str]] = None) -> Assignment:
         """Create an assignment submission."""
+        await self._ensure_connection()
         now = datetime.utcnow().isoformat()
         media_json = json.dumps(submission_media_ids) if submission_media_ids else None
         
@@ -498,6 +522,7 @@ class Database:
     
     async def get_assignment(self, assignment_id: int) -> Optional[Assignment]:
         """Get assignment by ID."""
+        await self._ensure_connection()
         async with self.conn.execute(
             "SELECT * FROM assignments WHERE assignment_id = ?", (assignment_id,)
         ) as cursor:
@@ -570,6 +595,7 @@ class Database:
     
     async def get_pending_assignments(self) -> List[Assignment]:
         """Get all assignments pending admin feedback."""
+        await self._ensure_connection()
         async with self.conn.execute("""
             SELECT * FROM assignments 
             WHERE status = 'submitted' AND admin_feedback IS NULL
@@ -580,6 +606,7 @@ class Database:
     
     async def update_assignment_feedback(self, assignment_id: int, feedback: str):
         """Update assignment with admin feedback."""
+        await self._ensure_connection()
         now = datetime.utcnow().isoformat()
         await self.conn.execute("""
             UPDATE assignments SET
@@ -592,6 +619,7 @@ class Database:
     
     async def mark_feedback_sent(self, assignment_id: int):
         """Mark feedback as sent to user."""
+        await self._ensure_connection()
         await self.conn.execute("""
             UPDATE assignments SET status = 'feedback_sent'
             WHERE assignment_id = ?
@@ -777,4 +805,3 @@ class Database:
             submitted_at=datetime.fromisoformat(row["submitted_at"]),
             status=row["status"]
         )
-
