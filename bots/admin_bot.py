@@ -640,8 +640,6 @@ class AdminBot:
             self._admin_state.pop(admin_id, None)
             disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📣 В общий чат", callback_data=f"admin:promo:send:general:{code}")],
-                [InlineKeyboardButton(text="📣 В премиум чат", callback_data=f"admin:promo:send:premium:{code}")],
                 [InlineKeyboardButton(text="📩 Мне (для пересылки)", callback_data=f"admin:promo:send:me:{code}")],
                 [InlineKeyboardButton(text="📨 Сообщение для пересылки", callback_data=f"admin:promo:share:{code}")],
             ])
@@ -683,8 +681,6 @@ class AdminBot:
             f"Использовано: {promo.get('used_count') or 0}\n"
         )
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📣 В общий чат", callback_data=f"admin:promo:send:general:{promo.get('code')}")],
-            [InlineKeyboardButton(text="📣 В премиум чат", callback_data=f"admin:promo:send:premium:{promo.get('code')}")],
             [InlineKeyboardButton(text="📩 Мне (для пересылки)", callback_data=f"admin:promo:send:me:{promo.get('code')}")],
             [InlineKeyboardButton(text="📨 Сообщение для пересылки", callback_data=f"admin:promo:share:{promo.get('code')}")],
             [InlineKeyboardButton(text="🗑 Удалить промокод", callback_data=f"admin:promo:delete:{promo.get('code')}")],
@@ -761,8 +757,8 @@ class AdminBot:
 
             self._admin_state.pop(message.from_user.id, None)
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📣 В общий чат", callback_data=f"admin:promo:send:general:{code}")],
-                [InlineKeyboardButton(text="📣 В премиум чат", callback_data=f"admin:promo:send:premium:{code}")],
+                [InlineKeyboardButton(text="📩 Мне (для пересылки)", callback_data=f"admin:promo:send:me:{code}")],
+                [InlineKeyboardButton(text="📨 Сообщение для пересылки", callback_data=f"admin:promo:share:{code}")],
             ])
             await message.answer(
                 "✅ <b>Бесплатный промокод создан</b>\n\n"
@@ -832,8 +828,8 @@ class AdminBot:
             self._admin_state.pop(message.from_user.id, None)
             disc = f"{discount_value:g}%" if discount_type == "percent" else f"{discount_value:g}"
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📣 В общий чат", callback_data=f"admin:promo:send:general:{code}")],
-                [InlineKeyboardButton(text="📣 В премиум чат", callback_data=f"admin:promo:send:premium:{code}")],
+                [InlineKeyboardButton(text="📩 Мне (для пересылки)", callback_data=f"admin:promo:send:me:{code}")],
+                [InlineKeyboardButton(text="📨 Сообщение для пересылки", callback_data=f"admin:promo:share:{code}")],
             ])
             await message.answer(
                 "✅ <b>Промокод создан</b>\n\n"
