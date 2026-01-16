@@ -1368,10 +1368,9 @@ class AdminBot:
         if answer_text:
             feedback_message += f"\n\n{answer_text}"
 
+        # В обучающем боте кнопки "Навигатор" и "Вопрос" уже закреплены, не дублируем.
         followup_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📝 Отправить дополнение", callback_data=f"assignment:submit:lesson_{assignment.day_number}")],
-            [InlineKeyboardButton(text="❓ Задать вопрос", callback_data=f"question:ask:lesson_{assignment.day_number}")],
-            [InlineKeyboardButton(text="🧭 Навигатор", callback_data="navigator:open")],
         ])
 
         course_bot = self._get_course_bot_client()
@@ -1447,26 +1446,6 @@ class AdminBot:
         """Send answer to user via appropriate bot."""
         from aiogram import Bot
 
-        def _course_followup_keyboard(day: Optional[int]) -> InlineKeyboardMarkup:
-            rows: list[list[InlineKeyboardButton]] = []
-            if day is not None:
-                rows.append([
-                    InlineKeyboardButton(
-                        text="📝 Отправить дополнение",
-                        callback_data=f"assignment:submit:lesson_{day}",
-                    )
-                ])
-                rows.append([
-                    InlineKeyboardButton(
-                        text="❓ Задать вопрос",
-                        callback_data=f"question:ask:lesson_{day}",
-                    )
-                ])
-            rows.append([
-                InlineKeyboardButton(text="🧭 Навигатор", callback_data="navigator:open")
-            ])
-            return InlineKeyboardMarkup(inline_keyboard=rows)
-        
         # Determine which bot to use
         if bot_type == "sales":
             target_bot = self._get_sales_bot_client()
@@ -1477,8 +1456,10 @@ class AdminBot:
         if lesson_day is not None:
             answer_message += f"📚 Урок: День {lesson_day}\n\n"
         answer_message += (answer_text or "")
-        
-        reply_markup = _course_followup_keyboard(lesson_day) if bot_type != "sales" else None
+
+        # В обучающем боте кнопки "Навигатор" и "Вопрос" уже закреплены (reply keyboard),
+        # поэтому под ответом их не дублируем.
+        reply_markup = None
         if voice_file_id:
             voice_input = await self._reupload_voice(voice_file_id)
             await target_bot.send_voice(user_id, voice_input, caption=answer_message, reply_markup=reply_markup)
