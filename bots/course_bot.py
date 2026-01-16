@@ -15,6 +15,7 @@ import logging
 import sys
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -270,6 +271,9 @@ class CourseBot:
         
         # Общие обработчики сообщений (после команд!)
         # ВАЖНО: Используем F.text & ~F.command чтобы НЕ перехватывать команды
+        self.dp.message.register(self.handle_unclassified_voice, F.voice)
+        self.dp.message.register(self.handle_unclassified_media, F.photo | F.video | F.document)
+        self.dp.message.register(self.handle_unclassified_text, F.text & ~F.command)
         self.dp.message.register(self.handle_assignment_text, F.text & ~F.command)
         self.dp.message.register(self.handle_assignment_media, F.photo | F.video | F.document | F.voice)
         self.dp.message.register(self.handle_question_voice, F.voice)
@@ -2775,11 +2779,11 @@ class CourseBot:
         user = await self.user_service.get_user(user_id)
         
         if not user or not user.has_access():
-            return
+            raise SkipHandler()
 
         ctx = self._user_assignment_context.get(user_id) or {}
         if not ctx.get("waiting_for_assignment"):
-            return
+            raise SkipHandler()
         lesson_day = int(ctx.get("lesson_day") or user.current_day)
         self._user_assignment_context.pop(user_id, None)
         
@@ -2906,11 +2910,11 @@ class CourseBot:
         user = await self.user_service.get_user(user_id)
         
         if not user or not user.has_access():
-            return
+            raise SkipHandler()
 
         ctx = self._user_assignment_context.get(user_id) or {}
         if not ctx.get("waiting_for_assignment"):
-            return
+            raise SkipHandler()
         lesson_day = int(ctx.get("lesson_day") or user.current_day)
         self._user_assignment_context.pop(user_id, None)
         
@@ -3053,11 +3057,11 @@ class CourseBot:
         user = await self.user_service.get_user(user_id)
         
         if not user or not user.has_access():
-            return
+            raise SkipHandler()
         
         context = self._user_question_context.get(user_id) or {}
         if not context.get("waiting_for_question"):
-            return
+            raise SkipHandler()
 
         lesson_day = int(context.get("lesson_day") or user.current_day)
         self._user_question_context.pop(user_id, None)
@@ -3121,11 +3125,11 @@ class CourseBot:
         user = await self.user_service.get_user(user_id)
 
         if not user or not user.has_access() or not message.voice:
-            return
+            raise SkipHandler()
 
         context = self._user_question_context.get(user_id) or {}
         if not context.get("waiting_for_question"):
-            return
+            raise SkipHandler()
 
         lesson_day = int(context.get("lesson_day") or user.current_day)
         self._user_question_context.pop(user_id, None)
@@ -3163,6 +3167,70 @@ class CourseBot:
             "📤 Ваше голосовое отправлено в ПУП 👥.\n"
             "⏳ Мы ответим вам как можно скорее 💬.",
             reply_markup=persistent_keyboard
+        )
+
+    def _quick_help_keyboard(self, user: User) -> InlineKeyboardMarkup:
+        day = int(getattr(user, "current_day", 0) or 0)
+        rows: list[list[InlineKeyboardButton]] = [
+            [InlineKeyboardButton(text="❓ Задать вопрос", callback_data=f"question:ask:lesson_{day}")],
+        ]
+        lesson_data = self.lesson_loader.get_lesson(day)
+        task = self.lesson_loader.get_task_for_tariff(day, user.tariff) if lesson_data else None
+        if task:
+            rows.insert(0, [InlineKeyboardButton(text="📝 Отправить задание", callback_data=f"assignment:submit:lesson_{day}")])
+        rows.append([InlineKeyboardButton(text="🧭 Навигатор", callback_data="navigator:open")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def handle_unclassified_text(self, message: Message):
+        user_id = message.from_user.id
+        user = await self.user_service.get_user(user_id)
+        if not user or not user.has_access():
+            raise SkipHandler()
+
+        # If some flow is active, let the specific handlers handle it.
+        if (self._user_assignment_context.get(user_id) or {}).get("waiting_for_assignment"):
+            raise SkipHandler()
+        if (self._user_question_context.get(user_id) or {}).get("waiting_for_question"):
+            raise SkipHandler()
+
+        await message.answer(
+            "Я получил сообщение.\n\n"
+            "Это <b>вопрос</b> или <b>задание</b>?\n"
+            "Нажмите кнопку ниже и отправьте одним сообщением.",
+            reply_markup=self._quick_help_keyboard(user),
+        )
+
+    async def handle_unclassified_voice(self, message: Message):
+        user_id = message.from_user.id
+        user = await self.user_service.get_user(user_id)
+        if not user or not user.has_access():
+            raise SkipHandler()
+
+        if (self._user_assignment_context.get(user_id) or {}).get("waiting_for_assignment"):
+            raise SkipHandler()
+        if (self._user_question_context.get(user_id) or {}).get("waiting_for_question"):
+            raise SkipHandler()
+
+        await message.answer(
+            "Чтобы отправить голосовое как <b>вопрос</b> или <b>задание</b>, сначала нажмите ❓ или 📝, затем пришлите голосовое.",
+            reply_markup=self._quick_help_keyboard(user),
+        )
+
+    async def handle_unclassified_media(self, message: Message):
+        user_id = message.from_user.id
+        user = await self.user_service.get_user(user_id)
+        if not user or not user.has_access():
+            raise SkipHandler()
+
+        if (self._user_assignment_context.get(user_id) or {}).get("waiting_for_assignment"):
+            raise SkipHandler()
+        if (self._user_question_context.get(user_id) or {}).get("waiting_for_question"):
+            raise SkipHandler()
+
+        await message.answer(
+            "Чтобы отправить медиа как <b>задание</b>, нажмите 📝 и отправьте файл.\n"
+            "Чтобы задать <b>вопрос</b>, нажмите ❓ и напишите/запишите вопрос.",
+            reply_markup=self._quick_help_keyboard(user),
         )
     
     async def handle_admin_reply(self, callback: CallbackQuery):
