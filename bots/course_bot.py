@@ -58,6 +58,10 @@ class CourseBot:
         self.question_service = QuestionService(self.db)
         self.scheduler = None
         self.mentor_scheduler = None
+
+        # Per-user transient states for "send one message" flows
+        self._user_question_context: dict[int, dict] = {}
+        self._user_assignment_context: dict[int, dict] = {}
         
         # Проверяем, что уроки загружены
         if self.lesson_loader:
@@ -79,11 +83,14 @@ class CourseBot:
             keyboard=[
                 [
                     KeyboardButton(text="🧭"),
-                    KeyboardButton(text="❔"),
                     KeyboardButton(text="💎"),
+                    KeyboardButton(text="❓"),
+                ],
+                [
+                    KeyboardButton(text="📝"),
                     KeyboardButton(text="💬"),
-                    KeyboardButton(text="👨‍🏫")
-                ]
+                    KeyboardButton(text="👨‍🏫"),
+                ],
             ],
             resize_keyboard=True,
             is_persistent=True
@@ -253,6 +260,7 @@ class CourseBot:
         self.dp.message.register(self.handle_keyboard_navigator, (F.text == "🧭") | (F.text == "🧿"))
         self.dp.message.register(self.handle_keyboard_ask_question, (F.text == "❔") | (F.text == "❓") | (F.text == "🔵"))
         self.dp.message.register(self.handle_keyboard_tariffs, (F.text == "💎") | (F.text == "💙"))
+        self.dp.message.register(self.handle_keyboard_submit_assignment, F.text == "📝")
         # Кнопка 🔍 была тестовой и удалена из постоянной клавиатуры
         self.dp.message.register(self.handle_keyboard_discussion, (F.text == "💬") | (F.text == "🟦"))
         self.dp.message.register(self.handle_keyboard_mentor, F.text == "👨‍🏫")
@@ -263,7 +271,8 @@ class CourseBot:
         # Общие обработчики сообщений (после команд!)
         # ВАЖНО: Используем F.text & ~F.command чтобы НЕ перехватывать команды
         self.dp.message.register(self.handle_assignment_text, F.text & ~F.command)
-        self.dp.message.register(self.handle_assignment_media, F.photo | F.video | F.document)
+        self.dp.message.register(self.handle_assignment_media, F.photo | F.video | F.document | F.voice)
+        self.dp.message.register(self.handle_question_voice, F.voice)
         self.dp.message.register(self.handle_question_text, F.text & ~F.command)
         
         # Ответы кураторов/админов через course-bot отключены:
@@ -1647,6 +1656,11 @@ class CourseBot:
             await callback.message.answer(f"❌ Урок для дня {day_from_callback} не найден.")
             return
 
+        task = self.lesson_loader.get_task_for_tariff(day_from_callback, user.tariff)
+        if not task:
+            await callback.message.answer("📝 Для этого дня нет задания.", reply_markup=self._create_persistent_keyboard())
+            return
+
         # IMPORTANT: once user clicks "submit assignment", stop mentor reminders for this day.
         # This matches product requirement: reminders continue until the user starts submission flow.
         try:
@@ -1657,11 +1671,18 @@ class CourseBot:
         # Получаем информацию об уроке из JSON
         lesson_data = self.lesson_loader.get_lesson(day_from_callback)
         lesson_title = lesson_data.get("title", f"День {day_from_callback}") if lesson_data else f"День {day_from_callback}"
+        safe_lesson_title = html.escape(lesson_title)
+
+        # Start "one message" assignment capture flow
+        self._user_assignment_context[user_id] = {
+            "lesson_day": day_from_callback,
+            "waiting_for_assignment": True,
+        }
         
         await callback.message.answer(
             f"<b>Отправить задание для {safe_lesson_title}</b>\n\n"
-            f"Отправьте ваше задание текстом, фото, видео или документом.\n\n"
-            f"<i>Можно отправить несколько сообщений. Напишите 'готово', когда закончите.</i>"
+            "Отправьте ответ <b>одним сообщением</b>: текстом, фото, видео, документом или голосовым.\n\n"
+            "<i>Чтобы добавить ещё — нажмите 📝 и отправьте дополнение.</i>"
         )
     
     async def handle_ask_question(self, callback: CallbackQuery):
@@ -1686,21 +1707,17 @@ class CourseBot:
         else:
             day_from_callback = user.current_day
         
-        # Сохраняем информацию о том, что пользователь задает вопрос по конкретному уроку
-        # Используем временное хранилище (в продакшене можно использовать FSM или БД)
-        if not hasattr(self, '_user_question_context'):
-            self._user_question_context = {}
+        # Start "one message" question capture flow
         self._user_question_context[user_id] = {
-            'lesson_day': day_from_callback,
-            'waiting_for_question': True
+            "lesson_day": day_from_callback,
+            "waiting_for_question": True,
         }
         
         await callback.message.answer(
             f"<b>Задать вопрос</b>\n\n"
-            f"Напишите ваш вопрос по уроку <b>День {day_from_callback}</b> прямо здесь.\n\n"
-            f"Просто отправьте сообщение с вашим вопросом, и он сразу поступит кураторам.\n\n"
-            f"Наша команда ответит вам как можно скорее.\n\n"
-            f"<i>Совет: Чем конкретнее вопрос, тем быстрее вы получите ответ!</i>"
+            f"Отправьте вопрос по <b>Дню {day_from_callback}</b> <b>одним сообщением</b> (можно голосовым).\n\n"
+            f"Сообщение уйдёт в ПУП, администратор ответит вам прямо сюда.\n\n"
+            f"<i>Совет: чем конкретнее вопрос, тем быстрее вы получите ответ.</i>"
         )
     
     async def _send_media_item(self, user_id: int, media_item: dict, day: int) -> bool:
@@ -2759,10 +2776,16 @@ class CourseBot:
         
         if not user or not user.has_access():
             return
+
+        ctx = self._user_assignment_context.get(user_id) or {}
+        if not ctx.get("waiting_for_assignment"):
+            return
+        lesson_day = int(ctx.get("lesson_day") or user.current_day)
+        self._user_assignment_context.pop(user_id, None)
         
         # Check if this is assignment submission context
         # Загружаем урок из JSON для текущего дня пользователя
-        lesson_data = self.lesson_loader.get_lesson(user.current_day)
+        lesson_data = self.lesson_loader.get_lesson(lesson_day)
         if not lesson_data:
             # Если нет урока в JSON, проверяем через сервис
             lesson = await self.lesson_service.get_user_current_lesson(user)
@@ -2770,23 +2793,23 @@ class CourseBot:
                 return
         else:
             # Проверяем наличие задания в JSON
-            task = self.lesson_loader.get_task_for_tariff(user.current_day, user.tariff)
+            task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff)
             if not task:
                 return
         
         # Получаем информацию об уроке для отправки админу (если еще не получено выше)
         if not lesson_data:
-            lesson_data = self.lesson_loader.get_lesson(user.current_day)
-        lesson_title = lesson_data.get("title", f"День {user.current_day}") if lesson_data else f"День {user.current_day}"
+            lesson_data = self.lesson_loader.get_lesson(lesson_day)
+        lesson_title = lesson_data.get("title", f"День {lesson_day}") if lesson_data else f"День {lesson_day}"
         
         # Submit assignment
         # Создаем временный объект Lesson для совместимости с сервисом
         from core.models import Lesson
         from datetime import datetime
-        task = self.lesson_loader.get_task_for_tariff(user.current_day, user.tariff) if lesson_data else ""
+        task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff) if lesson_data else ""
         temp_lesson = Lesson(
-            lesson_id=user.current_day,  # Используем day_number как lesson_id
-            day_number=user.current_day,
+            lesson_id=lesson_day,  # Используем day_number как lesson_id
+            day_number=lesson_day,
             title=lesson_title,
             content_text="",
             assignment_text=task or "",
@@ -2872,20 +2895,26 @@ class CourseBot:
         
         if not user or not user.has_access():
             return
+
+        ctx = self._user_assignment_context.get(user_id) or {}
+        if not ctx.get("waiting_for_assignment"):
+            return
+        lesson_day = int(ctx.get("lesson_day") or user.current_day)
+        self._user_assignment_context.pop(user_id, None)
         
         # Проверяем наличие задания в JSON
-        lesson_data = self.lesson_loader.get_lesson(user.current_day)
+        lesson_data = self.lesson_loader.get_lesson(lesson_day)
         if not lesson_data:
             lesson = await self.lesson_service.get_user_current_lesson(user)
             if not lesson or not lesson.has_assignment():
                 return
         else:
-            task = self.lesson_loader.get_task_for_tariff(user.current_day, user.tariff)
+            task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff)
             if not task:
                 return
         
         # Получаем информацию об уроке
-        lesson_title = lesson_data.get("title", f"День {user.current_day}") if lesson_data else f"День {user.current_day}"
+        lesson_title = lesson_data.get("title", f"День {lesson_day}") if lesson_data else f"День {lesson_day}"
         
         # Collect media file IDs
         media_ids = []
@@ -2895,14 +2924,16 @@ class CourseBot:
             media_ids.append(f"video:{message.video.file_id}")
         elif message.document:
             media_ids.append(f"document:{message.document.file_id}")
+        elif message.voice:
+            media_ids.append(f"voice:{message.voice.file_id}")
         
         # Создаем временный объект Lesson для совместимости
         from core.models import Lesson
         from datetime import datetime
-        task = self.lesson_loader.get_task_for_tariff(user.current_day, user.tariff) if lesson_data else ""
+        task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff) if lesson_data else ""
         temp_lesson = Lesson(
-            lesson_id=user.current_day,  # Используем day_number как lesson_id (int)
-            day_number=user.current_day,
+            lesson_id=lesson_day,  # Используем day_number как lesson_id (int)
+            day_number=lesson_day,
             title=lesson_title,
             content_text="",
             assignment_text=task or "",
@@ -2916,7 +2947,13 @@ class CourseBot:
             user=user,
             lesson=temp_lesson,
             submission_text=message.caption or "[Медиа файл]",
-            submission_media_ids=[message.photo[-1].file_id if message.photo else message.video.file_id if message.video else message.document.file_id if message.document else None]
+            submission_media_ids=[
+                message.photo[-1].file_id if message.photo
+                else message.video.file_id if message.video
+                else message.document.file_id if message.document
+                else message.voice.file_id if message.voice
+                else None
+            ]
         )
         
         # Log assignment submission
@@ -2960,6 +2997,8 @@ class CourseBot:
                 ok = await send_to_admin_bot(admin_text, video_file_id=message.video.file_id, reply_markup=reply_kb)
             elif message.document:
                 ok = await send_to_admin_bot(admin_text, document_file_id=message.document.file_id, reply_markup=reply_kb)
+            elif message.voice:
+                ok = await send_to_admin_bot(admin_text, voice_file_id=message.voice.file_id, reply_markup=reply_kb)
             else:
                 ok = False
             if not ok:
@@ -2979,7 +3018,7 @@ class CourseBot:
         )
         
         # Отправляем follow_up_text для урока 0 после отправки задания (медиа)
-        if user.current_day == 0:
+        if lesson_day == 0:
             lesson_data = self.lesson_loader.get_lesson(0)
             if lesson_data and lesson_data.get("follow_up_text"):
                 await asyncio.sleep(1)  # Небольшая пауза перед отправкой
@@ -2993,26 +3032,12 @@ class CourseBot:
         if not user or not user.has_access():
             return
         
-        # Проверяем, ожидаем ли мы вопрос от этого пользователя
-        waiting_for_question = False
-        lesson_day = user.current_day
-        
-        if hasattr(self, '_user_question_context') and user_id in self._user_question_context:
-            context = self._user_question_context[user_id]
-            if context.get('waiting_for_question'):
-                waiting_for_question = True
-                lesson_day = context.get('lesson_day', user.current_day)
-                # Удаляем контекст после обработки
-                del self._user_question_context[user_id]
-        
-        # Если не ожидаем вопрос, проверяем, не является ли это заданием
-        if not waiting_for_question:
-            lesson_data = self.lesson_loader.get_lesson(user.current_day)
-            task = self.lesson_loader.get_task_for_tariff(user.current_day, user.tariff) if lesson_data else None
-            
-            if task:
-                # Если есть задание, это может быть задание, а не вопрос
-                return
+        context = self._user_question_context.get(user_id) or {}
+        if not context.get("waiting_for_question"):
+            return
+
+        lesson_day = int(context.get("lesson_day") or user.current_day)
+        self._user_question_context.pop(user_id, None)
         
         # Обрабатываем как вопрос
         lesson_id = lesson_day if lesson_day else None
@@ -3063,6 +3088,56 @@ class CourseBot:
         await message.answer(
             "✅ <b>Вопрос отправлен!</b>\n\n"
             "📤 Ваш вопрос отправлен в ПУП 👥.\n"
+            "⏳ Мы ответим вам как можно скорее 💬.",
+            reply_markup=persistent_keyboard
+        )
+
+    async def handle_question_voice(self, message: Message):
+        """Handle voice question submission (when question flow is active)."""
+        user_id = message.from_user.id
+        user = await self.user_service.get_user(user_id)
+
+        if not user or not user.has_access() or not message.voice:
+            return
+
+        context = self._user_question_context.get(user_id) or {}
+        if not context.get("waiting_for_question"):
+            return
+
+        lesson_day = int(context.get("lesson_day") or user.current_day)
+        self._user_question_context.pop(user_id, None)
+
+        question_data = await self.question_service.create_question(
+            user_id=user_id,
+            lesson_id=lesson_day,
+            question_text="[voice]",
+            context=f"День {lesson_day}",
+        )
+        curator_message = await self.question_service.format_question_for_admin(question_data)
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💬 Ответить",
+                    callback_data=f"curator_reply:{user_id}:{lesson_day}"
+                )
+            ]
+        ])
+
+        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+        if not is_admin_bot_configured():
+            await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
+            return
+
+        ok = await send_to_admin_bot(curator_message, voice_file_id=message.voice.file_id, reply_markup=keyboard)
+        if not ok:
+            await message.answer("❌ Не удалось отправить вопрос в ПУП. Откройте ПУП и нажмите /start.")
+            return
+
+        persistent_keyboard = self._create_persistent_keyboard()
+        await message.answer(
+            "✅ <b>Вопрос отправлен!</b>\n\n"
+            "📤 Ваше голосовое отправлено в ПУП 👥.\n"
             "⏳ Мы ответим вам как можно скорее 💬.",
             reply_markup=persistent_keyboard
         )
@@ -3361,22 +3436,54 @@ class CourseBot:
             await message.answer("❌ У вас нет доступа к этому курсу.", reply_markup=persistent_keyboard)
             return
         
-        # Сохраняем информацию о том, что пользователь задает вопрос
-        if not hasattr(self, '_user_question_context'):
-            self._user_question_context = {}
         self._user_question_context[user_id] = {
-            'waiting_for_question': True,
-            'lesson_id': user.current_day,
-            'source': 'course_bot'
+            "lesson_day": user.current_day,
+            "waiting_for_question": True,
         }
-        
-        persistent_keyboard = self._create_persistent_keyboard()
+
         await message.answer(
             f"<b>Задать вопрос</b>\n\n"
-            f"Напишите ваш вопрос прямо здесь.\n\n"
-            f"Ваш вопрос будет отправлен куратору, и мы ответим вам как можно скорее.\n\n"
-            f"💡 <i>Можете задать вопрос по текущему уроку или по курсу в целом.</i>",
+            f"Отправьте вопрос по <b>Дню {user.current_day}</b> <b>одним сообщением</b> (можно голосовым).\n\n"
+            f"Сообщение уйдёт в ПУП, администратор ответит вам прямо сюда.\n\n"
+            f"💡 <i>Чтобы задать ещё вопрос — просто нажмите ❓ снова.</i>",
             reply_markup=persistent_keyboard
+        )
+
+    async def handle_keyboard_submit_assignment(self, message: Message):
+        """Handle 'Отправить задание' button from persistent keyboard."""
+        user_id = message.from_user.id
+        user = await self.user_service.get_user(user_id)
+        persistent_keyboard = self._create_persistent_keyboard()
+
+        if not user or not user.has_access():
+            await message.answer("❌ У вас нет доступа к этому курсу.", reply_markup=persistent_keyboard)
+            return
+
+        day = user.current_day
+        lesson_data = self.lesson_loader.get_lesson(day)
+        task = self.lesson_loader.get_task_for_tariff(day, user.tariff) if lesson_data else None
+        if not task:
+            await message.answer("📝 Для текущего дня нет задания.", reply_markup=persistent_keyboard)
+            return
+
+        try:
+            await self.db.mark_assignment_intent(user_id, day)
+        except Exception:
+            pass
+
+        lesson_title = lesson_data.get("title", f"День {day}") if lesson_data else f"День {day}"
+        safe_lesson_title = html.escape(lesson_title)
+
+        self._user_assignment_context[user_id] = {
+            "lesson_day": day,
+            "waiting_for_assignment": True,
+        }
+
+        await message.answer(
+            f"<b>Отправить задание для {safe_lesson_title}</b>\n\n"
+            "Отправьте ответ <b>одним сообщением</b>: текстом, фото, видео, документом или голосовым.\n\n"
+            "<i>После отправки задание уйдёт в ПУП.</i>",
+            reply_markup=persistent_keyboard,
         )
     
     async def handle_keyboard_tariffs(self, message: Message):

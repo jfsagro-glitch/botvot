@@ -1184,10 +1184,15 @@ class AdminBot:
             
             course_bot = Bot(token=Config.COURSE_BOT_TOKEN)
             try:
+                followup_kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📝 Отправить дополнение", callback_data=f"assignment:submit:lesson_{assignment.day_number}")],
+                    [InlineKeyboardButton(text="❓ Задать вопрос", callback_data=f"question:ask:lesson_{assignment.day_number}")],
+                    [InlineKeyboardButton(text="🧭 Навигатор", callback_data="navigator:open")],
+                ])
                 if voice_file_id:
-                    await course_bot.send_voice(user.user_id, voice_file_id, caption=feedback_message)
+                    await course_bot.send_voice(user.user_id, voice_file_id, caption=feedback_message, reply_markup=followup_kb)
                 else:
-                    await course_bot.send_message(user.user_id, feedback_message)
+                    await course_bot.send_message(user.user_id, feedback_message, reply_markup=followup_kb)
                 await self.assignment_service.mark_feedback_sent(assignment_id)
                 await message.answer("✅ Обратная связь отправлена пользователю в обучающий бот.")
             except Exception as e:
@@ -1209,6 +1214,26 @@ class AdminBot:
         """Send answer to user via appropriate bot."""
         from core.config import Config
         from aiogram import Bot
+
+        def _course_followup_keyboard(day: Optional[int]) -> InlineKeyboardMarkup:
+            rows: list[list[InlineKeyboardButton]] = []
+            if day is not None:
+                rows.append([
+                    InlineKeyboardButton(
+                        text="📝 Отправить дополнение",
+                        callback_data=f"assignment:submit:lesson_{day}",
+                    )
+                ])
+                rows.append([
+                    InlineKeyboardButton(
+                        text="❓ Задать вопрос",
+                        callback_data=f"question:ask:lesson_{day}",
+                    )
+                ])
+            rows.append([
+                InlineKeyboardButton(text="🧭 Навигатор", callback_data="navigator:open")
+            ])
+            return InlineKeyboardMarkup(inline_keyboard=rows)
         
         # Determine which bot to use
         if bot_type == "sales":
@@ -1221,15 +1246,16 @@ class AdminBot:
             target_bot = Bot(token=Config.COURSE_BOT_TOKEN)
         
         answer_message = "💬 <b>Ответ на ваш вопрос</b>\n\n"
-        if lesson_day:
+        if lesson_day is not None:
             answer_message += f"📚 Урок: День {lesson_day}\n\n"
         answer_message += (answer_text or "")
         
         try:
+            reply_markup = _course_followup_keyboard(lesson_day) if bot_type != "sales" else None
             if voice_file_id:
-                await target_bot.send_voice(user_id, voice_file_id, caption=answer_message)
+                await target_bot.send_voice(user_id, voice_file_id, caption=answer_message, reply_markup=reply_markup)
             else:
-                await target_bot.send_message(user_id, answer_message)
+                await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
         finally:
             await target_bot.session.close()
     
