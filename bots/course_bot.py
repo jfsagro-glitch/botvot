@@ -2484,8 +2484,8 @@ class CourseBot:
             if task:
                 # Анимация перед отправкой задания
                 await send_typing_action(self.bot, user.user_id, 0.6)
-                # Текст задания берется как есть из Google Doc
-                task_message = task
+                # Выделяем задание отдельным блоком
+                task_message = f"📝 Задание:\n\n{task}".strip()
             
             # Отправляем задание, если есть
             if task_message:
@@ -2531,26 +2531,37 @@ class CourseBot:
                     # Разбиваем сообщение на части
                     message_parts = self._split_long_message(task_message, MAX_MESSAGE_LENGTH)
                     logger.info(f"   Task message split into {len(message_parts)} parts")
-                    
-                    # Отправляем все части кроме последней без клавиатуры
-                    for i, part in enumerate(message_parts[:-1], 1):
-                        # Пропускаем пустые части
-                        if part and part.strip():
-                            await self.bot.send_message(user.user_id, part)
-                            await asyncio.sleep(0.3)  # Небольшая пауза между сообщениями
-                            logger.info(f"   Sent task part {i}/{len(message_parts)}")
-                        else:
-                            logger.warning(f"   Skipped empty task part {i}/{len(message_parts)}")
-                    
-                    # Отправляем последнюю часть с клавиатурой (проверяем, что она не пустая)
-                    last_part = message_parts[-1]
-                    if last_part and last_part.strip():
-                        await self.bot.send_message(user.user_id, last_part, reply_markup=keyboard)
-                        logger.info(f"   Sent last task part {len(message_parts)}/{len(message_parts)} with keyboard")
+
+                    # Кнопка должна быть прямо "под заданием", поэтому:
+                    # - находим последнюю НЕпустую часть
+                    # - отправляем её с клавиатурой
+                    last_non_empty_idx = None
+                    for idx in range(len(message_parts) - 1, -1, -1):
+                        if message_parts[idx] and message_parts[idx].strip():
+                            last_non_empty_idx = idx
+                            break
+
+                    if last_non_empty_idx is None:
+                        logger.warning("   Task message parts are empty after split; skipping task send")
                     else:
-                        # Если последняя часть пустая, отправляем только клавиатуру с невидимым символом
-                        logger.warning(f"   Last task part is empty, sending keyboard only")
-                        await self.bot.send_message(user.user_id, "\u200B", reply_markup=keyboard)
+                        # Отправляем все части до последней непустой без клавиатуры
+                        for i, part in enumerate(message_parts[:last_non_empty_idx], 1):
+                            if part and part.strip():
+                                await self.bot.send_message(user.user_id, part)
+                                await asyncio.sleep(0.3)  # Небольшая пауза между сообщениями
+                                logger.info(f"   Sent task part {i}/{len(message_parts)}")
+                            else:
+                                logger.warning(f"   Skipped empty task part {i}/{len(message_parts)}")
+
+                        # Отправляем последнюю непустую часть с клавиатурой
+                        await self.bot.send_message(
+                            user.user_id,
+                            message_parts[last_non_empty_idx],
+                            reply_markup=keyboard,
+                        )
+                        logger.info(
+                            f"   Sent task part {last_non_empty_idx + 1}/{len(message_parts)} with keyboard"
+                        )
                 else:
                     # Если сообщение короткое, отправляем как есть
                     await self.bot.send_message(user.user_id, task_message, reply_markup=keyboard)

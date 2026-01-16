@@ -148,14 +148,20 @@ class LessonLoader:
             return task
         else:
             # Для базового тарифа (BASIC)
-            task = lesson.get("task_basic") or lesson.get("task", "")
-            # Убираем весь текст после "💡 Для тарифа с обратной связью:" если он есть
-            feedback_prefix = "💡 Для тарифа с обратной связью:"
-            if feedback_prefix in task:
-                # Обрезаем все после префикса (включая сам префикс)
-                prefix_pos = task.find(feedback_prefix)
-                if prefix_pos != -1:
-                    task = task[:prefix_pos].strip()
+            # IMPORTANT: базовый тариф тоже сдаёт задания, поэтому:
+            # - если task_basic отсутствует, используем общий task или task_feedback
+            task = lesson.get("task_basic") or lesson.get("task") or lesson.get("task_feedback") or ""
+
+            # Убираем маркер "Для тарифа с обратной связью", но НЕ выкидываем само задание.
+            feedback_prefixes = [
+                "💡 Для тарифа с обратной связью:",
+                "Для тарифа с обратной связью:",
+            ]
+            for feedback_prefix in feedback_prefixes:
+                if feedback_prefix in task:
+                    task = task.replace(feedback_prefix + " ", "").replace(feedback_prefix, "")
+
+            task = task.replace("\n\n\n", "\n\n").strip()
             return task
     
     def is_silent_day(self, day: int) -> bool:
