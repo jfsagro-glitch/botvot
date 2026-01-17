@@ -1946,8 +1946,11 @@ class CourseBot:
                     pass
                 continue
 
+    # Assignment headings sometimes come with a leading emoji/icon, e.g. "🔗 #Задание 28".
+    # We allow optional non-word prefix before the Markdown heading markers.
     _ASSIGNMENT_HEADING_RE = re.compile(
-        r"^\s*#{1,6}\s*(?:[⏺️●\-–—]?\s*)?задание\b", re.IGNORECASE
+        r"^\s*(?:[^\w#]*\s*)?(?:#{1,6}\s*)?(?:[⏺️●\-–—]?\s*)?задание\b",
+        re.IGNORECASE,
     )
 
     def _split_assignment_from_text(self, text: str) -> tuple[str, str]:
