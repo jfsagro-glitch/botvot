@@ -1658,17 +1658,12 @@ class CourseBot:
         except (ValueError, IndexError):
             day_from_callback = user.current_day
         
-        # Загружаем урок из JSON
-        lesson_data = self.lesson_loader.get_lesson(day_from_callback)
-        
-        if not lesson_data:
-            await callback.message.answer(f"❌ Урок для дня {day_from_callback} не найден.")
-            return
-
-        task = self.lesson_loader.get_task_for_tariff(day_from_callback, user.tariff)
-        if not task:
-            await callback.message.answer("📝 Для этого дня нет задания.", reply_markup=self._create_persistent_keyboard())
-            return
+        # Best-effort lesson metadata load (submission should work even if JSON is missing)
+        lesson_data = None
+        try:
+            lesson_data = self.lesson_loader.get_lesson(day_from_callback) if self.lesson_loader else None
+        except Exception:
+            lesson_data = None
 
         # IMPORTANT: once user clicks "submit assignment", stop mentor reminders for this day.
         # This matches product requirement: reminders continue until the user starts submission flow.
@@ -1677,8 +1672,7 @@ class CourseBot:
         except Exception as e:
             logger.warning(f"   ⚠️ Could not mark assignment intent for user={user_id} day={day_from_callback}: {e}")
         
-        # Получаем информацию об уроке из JSON
-        lesson_data = self.lesson_loader.get_lesson(day_from_callback)
+        # Получаем информацию об уроке (best-effort)
         lesson_title = lesson_data.get("title", f"День {day_from_callback}") if lesson_data else f"День {day_from_callback}"
         safe_lesson_title = html.escape(lesson_title)
 
@@ -1951,6 +1945,41 @@ class CourseBot:
                 except Exception:
                     pass
                 continue
+
+    _ASSIGNMENT_HEADING_RE = re.compile(
+        r"^\s*#{1,6}\s*(?:[⏺️●\-–—]?\s*)?задание\b", re.IGNORECASE
+    )
+
+    def _split_assignment_from_text(self, text: str) -> tuple[str, str]:
+        """
+        Split a combined lesson text into (lesson_text, assignment_text).
+
+        We treat a Markdown heading like "#Задание" (or variants) as the start of
+        the assignment block.
+        """
+        if not text:
+            return "", ""
+
+        lines = (text or "").splitlines()
+        for idx, raw in enumerate(lines):
+            line = (raw or "").strip()
+            if not line:
+                continue
+            if not self._ASSIGNMENT_HEADING_RE.match(line):
+                continue
+
+            # If there is a short "Задание:" line just before the heading, include it.
+            start_idx = idx
+            if idx > 0:
+                prev = (lines[idx - 1] or "").strip().lower()
+                if prev in {"задание", "задание:", "задание."}:
+                    start_idx = idx - 1
+
+            lesson_part = "\n".join(lines[:start_idx]).strip()
+            assignment_part = "\n".join(lines[start_idx:]).strip()
+            return lesson_part, assignment_part
+
+        return (text or "").strip(), ""
     
     def _split_long_message(self, text: str, max_length: int = 4000) -> list:
         """
@@ -2103,12 +2132,31 @@ class CourseBot:
                 lesson_posts = lesson_text_raw
             else:
                 lesson_posts = []
-            
+
+            # Some sources put the assignment inside the main text. Extract it so it becomes a separate block.
+            extracted_task_from_posts = ""
+            if lesson_posts:
+                normalized_posts: list[str] = []
+                for post in lesson_posts:
+                    if not isinstance(post, str) or not post.strip():
+                        continue
+                    if not extracted_task_from_posts:
+                        lesson_part, task_part = self._split_assignment_from_text(post)
+                        if task_part:
+                            extracted_task_from_posts = task_part
+                            if lesson_part:
+                                normalized_posts.append(lesson_part)
+                            continue
+                    normalized_posts.append(post)
+                lesson_posts = normalized_posts
+
             # For backward compatibility, keep 'text' as first post for existing code
             text = lesson_posts[0] if lesson_posts else ""
-            
-            # Получаем задание в зависимости от тарифа
+
+            # Получаем задание в зависимости от тарифа (fallback to extracted task when needed)
             task = self.lesson_loader.get_task_for_tariff(day, user.tariff)
+            if not task and extracted_task_from_posts:
+                task = extracted_task_from_posts
             
             # Формируем сообщение урока
             # Проверяем, есть ли вводный текст (intro_text) - для урока 22
@@ -2689,7 +2737,7 @@ class CourseBot:
                 # Ensure submit-assignment button is present under the task message.
                 submit_row = [
                     InlineKeyboardButton(
-                        text="📝 Отправить задание",
+                        text=f"📝 Отправить ответ на задание №{int(day)}",
                         callback_data=f"assignment:submit:lesson_{int(day)}",
                     )
                 ]
@@ -2806,24 +2854,6 @@ class CourseBot:
                 except Exception:
                     pass
 
-                # Отдельный короткий блок с кнопкой (самое стабильное отображение inline-кнопок)
-                try:
-                    cta_day = int(day) if day is not None else int(getattr(user, "current_day", 0) or 0)
-                except Exception:
-                    cta_day = int(getattr(user, "current_day", 0) or 0)
-
-                cta_text = (
-                    f"📝 <b>Отправить ответ на задание №{cta_day}</b>\n\n"
-                    "Нажмите кнопку ниже, затем отправьте ответ <b>одним сообщением</b>:\n"
-                    "текст / фото / видео / документ / голосовое."
-                )
-                cta_kb = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(
-                        text="📝 Отправить ответ",
-                        callback_data=f"assignment:submit:lesson_{cta_day}",
-                    )
-                ]])
-                await self.bot.send_message(user.user_id, cta_text, reply_markup=cta_kb, parse_mode="HTML")
             else:
                 # Если задания нет, отправляем только клавиатуру
                 lesson_data_with_day = lesson_data.copy()
@@ -3059,30 +3089,20 @@ class CourseBot:
         lesson_day = int(ctx.get("lesson_day") or user.current_day)
         self._user_assignment_context.pop(user_id, None)
         
-        # Check if this is assignment submission context
-        # Загружаем урок из JSON для текущего дня пользователя
-        lesson_data = self.lesson_loader.get_lesson(lesson_day)
-        if not lesson_data:
-            # Если нет урока в JSON, проверяем через сервис
-            lesson = await self.lesson_service.get_user_current_lesson(user)
-            if not lesson or not lesson.has_assignment():
-                return
-        else:
-            # Проверяем наличие задания в JSON
-            task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff)
-            if not task:
-                return
-        
-        # Получаем информацию об уроке для отправки админу (если еще не получено выше)
-        if not lesson_data:
-            lesson_data = self.lesson_loader.get_lesson(lesson_day)
+        # Best-effort lesson/task lookup (submission should be accepted once user started the flow)
+        lesson_data = None
+        try:
+            lesson_data = self.lesson_loader.get_lesson(lesson_day) if self.lesson_loader else None
+        except Exception:
+            lesson_data = None
+
         lesson_title = lesson_data.get("title", f"День {lesson_day}") if lesson_data else f"День {lesson_day}"
+        task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff) if (lesson_data and self.lesson_loader) else ""
         
         # Submit assignment
         # Создаем временный объект Lesson для совместимости с сервисом
         from core.models import Lesson
         from datetime import datetime
-        task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff) if lesson_data else ""
         temp_lesson = Lesson(
             lesson_id=lesson_day,  # Используем day_number как lesson_id
             day_number=lesson_day,
@@ -3179,19 +3199,15 @@ class CourseBot:
         lesson_day = int(ctx.get("lesson_day") or user.current_day)
         self._user_assignment_context.pop(user_id, None)
         
-        # Проверяем наличие задания в JSON
-        lesson_data = self.lesson_loader.get_lesson(lesson_day)
-        if not lesson_data:
-            lesson = await self.lesson_service.get_user_current_lesson(user)
-            if not lesson or not lesson.has_assignment():
-                return
-        else:
-            task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff)
-            if not task:
-                return
-        
-        # Получаем информацию об уроке
+        # Best-effort lesson/task lookup (submission should be accepted once user started the flow)
+        lesson_data = None
+        try:
+            lesson_data = self.lesson_loader.get_lesson(lesson_day) if self.lesson_loader else None
+        except Exception:
+            lesson_data = None
+
         lesson_title = lesson_data.get("title", f"День {lesson_day}") if lesson_data else f"День {lesson_day}"
+        task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff) if (lesson_data and self.lesson_loader) else ""
         
         # Collect media file IDs
         media_ids = []
@@ -3207,7 +3223,6 @@ class CourseBot:
         # Создаем временный объект Lesson для совместимости
         from core.models import Lesson
         from datetime import datetime
-        task = self.lesson_loader.get_task_for_tariff(lesson_day, user.tariff) if lesson_data else ""
         temp_lesson = Lesson(
             lesson_id=lesson_day,  # Используем day_number как lesson_id (int)
             day_number=lesson_day,
@@ -3437,7 +3452,7 @@ class CourseBot:
         lesson_data = self.lesson_loader.get_lesson(day)
         task = self.lesson_loader.get_task_for_tariff(day, user.tariff) if lesson_data else None
         if task:
-            rows.insert(0, [InlineKeyboardButton(text="📝 Отправить задание", callback_data=f"assignment:submit:lesson_{day}")])
+            rows.insert(0, [InlineKeyboardButton(text=f"📝 Отправить ответ на задание №{day}", callback_data=f"assignment:submit:lesson_{day}")])
         rows.append([InlineKeyboardButton(text="🧭 Навигатор", callback_data="navigator:open")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -3747,16 +3762,36 @@ class CourseBot:
                 await send_typing_action(self.bot, user.user_id, 0.8)
                 await self._send_lesson_from_json(user, lesson_data, user.current_day)
             else:
-                # Fallback на старый метод, если JSON нет
-                lesson_text = format_lesson_message(lesson)
-                keyboard = create_lesson_keyboard(lesson, Config.GENERAL_GROUP_ID, user)
-                
-                # Send lesson text
-                await self.bot.send_message(user.user_id, lesson_text, reply_markup=keyboard)
-                
-                # Send image if available
-                if lesson.image_url:
-                    await self.bot.send_photo(user.user_id, lesson.image_url)
+                # Fallback на старый метод, если JSON нет:
+                # отделяем задание отдельным блоком и добавляем кнопку отправки ответа.
+                await send_typing_action(self.bot, user.user_id, 0.6)
+
+                header = f"📚 <b>День {lesson.day_number}: {html.escape(lesson.title or '')}</b>"
+                await self._safe_send_message(user.user_id, header, parse_mode="HTML")
+
+                content_text = (lesson.content_text or "").strip()
+                lesson_part, embedded_task = self._split_assignment_from_text(content_text)
+                if lesson_part:
+                    await self._safe_send_message(user.user_id, lesson_part)
+
+                if getattr(lesson, "video_url", None):
+                    await self._safe_send_message(user.user_id, f"🎥 Видео: {lesson.video_url}")
+
+                if getattr(lesson, "image_url", None):
+                    try:
+                        await self.bot.send_photo(user.user_id, lesson.image_url)
+                    except Exception:
+                        pass
+
+                assignment_text = (lesson.assignment_text or "").strip() or (embedded_task or "").strip()
+                if assignment_text:
+                    submit_kb = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text=f"📝 Отправить ответ на задание №{int(lesson.day_number)}",
+                            callback_data=f"assignment:submit:lesson_{int(lesson.day_number)}",
+                        )
+                    ]])
+                    await self._safe_send_message(user.user_id, assignment_text, reply_markup=submit_kb)
             
             logger.info(f"✅ Урок {user.current_day} отправлен пользователю {user.user_id}")
             

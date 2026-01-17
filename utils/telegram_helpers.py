@@ -162,12 +162,12 @@ def create_lesson_keyboard_from_json(lesson_data: dict, user, general_group_id: 
     else:
         logger.debug(f"   ⏭️ Skipping final message button (day={day}, not 30)")
     
-    # Кнопка "Сдать задание" (если есть задание)
+    # Кнопка "Отправить ответ на задание" (если есть задание)
     task = lesson_data.get("task") or lesson_data.get("task_basic") or lesson_data.get("task_feedback")
     if task:
         buttons.append([
             InlineKeyboardButton(
-                text="📝 Отправить задание",
+                text=f"📝 Отправить ответ на задание №{day}",
                 callback_data=f"assignment:submit:lesson_{day}"
             )
         ])
@@ -200,7 +200,7 @@ def create_lesson_keyboard(lesson: Lesson, general_group_id: str, user=None) -> 
     if lesson.has_assignment():
         buttons.append([
             InlineKeyboardButton(
-                text="📝 Отправить задание",
+                text=f"📝 Отправить ответ на задание №{lesson.day_number}",
                 callback_data=f"assignment:submit:{lesson.lesson_id}"
             )
         ])

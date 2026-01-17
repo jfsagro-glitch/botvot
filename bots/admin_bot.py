@@ -124,9 +124,22 @@ class AdminBot:
         """
         tg_file = await self.bot.get_file(admin_voice_file_id)
         buf = io.BytesIO()
-        await self.bot.download_file(tg_file.file_path, destination=buf, timeout=60)
+        try:
+            await self.bot.download_file(tg_file.file_path, destination=buf, timeout=60)
+        except Exception:
+            # Fallback: some setups handle file_id downloads better via `download`.
+            buf = io.BytesIO()
+            await self.bot.download(admin_voice_file_id, destination=buf)
+
         filename = Path(tg_file.file_path).name or "voice.ogg"
-        return BufferedInputFile(buf.getvalue(), filename=filename)
+        if not filename.lower().endswith((".ogg", ".oga")):
+            filename = "voice.ogg"
+
+        data = buf.getvalue()
+        if not data:
+            raise ValueError("Downloaded voice is empty")
+
+        return BufferedInputFile(data, filename=filename)
     
     def _register_handlers(self):
         """Register all bot handlers."""
@@ -454,7 +467,6 @@ class AdminBot:
         online_defaults = {
             Tariff.BASIC: 5000.0,
             Tariff.FEEDBACK: 10000.0,
-            Tariff.PREMIUM: 8000.0,
             Tariff.PRACTIC: 20000.0,
         }
         offline_defaults = {
@@ -465,7 +477,7 @@ class AdminBot:
         }
 
         lines = ["💰 <b>Цены:</b>", "<b>Онлайн:</b>"]
-        for t in [Tariff.BASIC, Tariff.FEEDBACK, Tariff.PREMIUM, Tariff.PRACTIC]:
+        for t in [Tariff.BASIC, Tariff.FEEDBACK, Tariff.PRACTIC]:
             price = await self.db.get_online_tariff_price(t, online_defaults[t])
             lines.append(f"• {t.value}: {price:.0f}")
         lines.append("<b>Офлайн:</b>")
@@ -481,7 +493,7 @@ class AdminBot:
             "💰 <b>Изменение цен</b>\n\n"
             "Отправьте одним сообщением пары <code>ключ=цена</code>.\n"
             "Можно с новой строки или через пробел.\n\n"
-            "Ключи онлайн: <code>basic</code>, <code>feedback</code>, <code>premium</code>, <code>practic</code>\n"
+            "Ключи онлайн: <code>basic</code>, <code>feedback</code>, <code>practic</code>\n"
             "Ключи офлайн: <code>slushatel</code>, <code>aktivist</code>, <code>media_persona</code>, <code>glavnyi_geroi</code>\n\n"
             "Пример:\n"
             "<code>basic=5000\nfeedback=10000\nslushatel=6000</code>"
@@ -587,11 +599,13 @@ class AdminBot:
         except Exception:
             is_free = False
         title = "🎁 <b>Бесплатный доступ</b>" if is_free else "🎟 <b>Промокод</b>"
+        sales_bot_url = "https://t.me/StartNowQ_bot"
+        sales_bot_link = f"<a href='{sales_bot_url}'>@StartNowQ_bot</a>"
         return (
             f"{title}\n\n"
             f"Код: <code>{promo.get('code')}</code>\n"
             f"Скидка: -{disc}\n\n"
-            "Откройте sales-бот и нажмите «🎟 Промокод», чтобы применить."
+            f"Откройте sales-бот {sales_bot_link} и нажмите «🎟 Промокод», чтобы применить."
         )
 
     def _get_promo_wizard(self, admin_id: int) -> dict:
@@ -776,7 +790,7 @@ class AdminBot:
                 "✅ <b>Промокод создан</b>\n\n"
                 f"Код: <code>{code}</code>\n"
                 f"Скидка: -{disc}\n\n"
-                "В sales-боте нажмите «🎟 Промокод» и введите этот код.",
+                "Откройте sales-бот <a href='https://t.me/StartNowQ_bot'>@StartNowQ_bot</a>, нажмите «🎟 Промокод» и введите этот код.",
                 reply_markup=keyboard,
             )
             return
@@ -860,7 +874,7 @@ class AdminBot:
                 await message.answer("❌ Не нашёл ни одной пары ключ=цена.")
                 return
             for key, price in updates.items():
-                if key in ("basic", "feedback", "premium", "practic"):
+                if key in ("basic", "feedback", "practic"):
                     await self.db.set_online_tariff_price(Tariff(key), price)
                 else:
                     await self.db.set_offline_tariff_price(key, price)
@@ -893,7 +907,7 @@ class AdminBot:
                 "✅ <b>Бесплатный промокод создан</b>\n\n"
                 f"Код: <code>{code}</code>\n"
                 "Скидка: -100%\n\n"
-                "В sales-боте нажмите «🎟 Промокод» и введите этот код — доступ выдастся без оплаты.",
+                "Откройте sales-бот <a href='https://t.me/StartNowQ_bot'>@StartNowQ_bot</a>, нажмите «🎟 Промокод» и введите этот код — доступ выдастся без оплаты.",
                 reply_markup=keyboard,
             )
             return
@@ -964,7 +978,7 @@ class AdminBot:
                 "✅ <b>Промокод создан</b>\n\n"
                 f"Код: <code>{code}</code>\n"
                 f"Скидка: -{disc}\n\n"
-                "В sales-боте нажмите «🎟 Промокод» и введите этот код.",
+                "Откройте sales-бот <a href='https://t.me/StartNowQ_bot'>@StartNowQ_bot</a>, нажмите «🎟 Промокод» и введите этот код.",
                 reply_markup=keyboard,
             )
             return
@@ -1440,7 +1454,20 @@ class AdminBot:
         try:
             if voice_file_id:
                 voice_input = await self._reupload_voice(voice_file_id)
-                await course_bot.send_voice(user.user_id, voice_input, caption=feedback_message, reply_markup=followup_kb)
+                try:
+                    await course_bot.send_voice(
+                        chat_id=user.user_id,
+                        voice=voice_input,
+                        caption=feedback_message,
+                        reply_markup=followup_kb,
+                    )
+                except Exception:
+                    await course_bot.send_document(
+                        chat_id=user.user_id,
+                        document=voice_input,
+                        caption=feedback_message,
+                        reply_markup=followup_kb,
+                    )
             else:
                 await course_bot.send_message(user.user_id, feedback_message, reply_markup=followup_kb)
             await self.assignment_service.mark_feedback_sent(assignment_id)
@@ -1525,7 +1552,20 @@ class AdminBot:
         reply_markup = None
         if voice_file_id:
             voice_input = await self._reupload_voice(voice_file_id)
-            await target_bot.send_voice(user_id, voice_input, caption=answer_message, reply_markup=reply_markup)
+            try:
+                await target_bot.send_voice(
+                    chat_id=user_id,
+                    voice=voice_input,
+                    caption=answer_message,
+                    reply_markup=reply_markup,
+                )
+            except Exception:
+                await target_bot.send_document(
+                    chat_id=user_id,
+                    document=voice_input,
+                    caption=answer_message,
+                    reply_markup=reply_markup,
+                )
         else:
             await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
     

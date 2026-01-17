@@ -563,6 +563,12 @@ class SalesBot:
     async def handle_keyboard_talk_to_human(self, message: Message):
         """Persistent keyboard: enter talk-to-human mode."""
         user_id = message.from_user.id
+
+        # If user was in another "input" flow (promo/email), stop it so their next message
+        # is treated as a support message and forwarded to PUP.
+        self._awaiting_promo.discard(user_id)
+        if user_id in self._awaiting_email:
+            del self._awaiting_email[user_id]
         
         # Try sending a test message to admin bot (PUP) if configured
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
@@ -1180,6 +1186,9 @@ class SalesBot:
 
     async def handle_promo_input(self, message: Message):
         user_id = message.from_user.id
+        # In talk-to-human mode any text must go to PUP, not be treated as a promo code.
+        if user_id in self._talk_mode_users:
+            raise SkipHandler()
         if user_id not in self._awaiting_promo:
             raise SkipHandler()
 
@@ -1232,7 +1241,6 @@ class SalesBot:
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎁 Онлайн · BASIC", callback_data="free_promo:online:basic")],
             [InlineKeyboardButton(text="🎁 Онлайн · FEEDBACK", callback_data="free_promo:online:feedback")],
-            [InlineKeyboardButton(text="🎁 Онлайн · PREMIUM", callback_data="free_promo:online:premium")],
             [InlineKeyboardButton(text="🎁 Онлайн · PRACTIC", callback_data="free_promo:online:practic")],
             [InlineKeyboardButton(text="🎁 Офлайн · СЛУШАТЕЛЬ", callback_data="free_promo:offline:slushatel")],
             [InlineKeyboardButton(text="🎁 Офлайн · АКТИВИСТ", callback_data="free_promo:offline:aktivist")],
@@ -1290,6 +1298,9 @@ class SalesBot:
                 tariff = Tariff(tariff_key)
             except Exception:
                 await message.answer("❌ Неверный тариф.")
+                return
+            if tariff == Tariff.PREMIUM:
+                await message.answer("❌ Тариф PREMIUM отключён.")
                 return
 
             base_price = await self.payment_service.get_tariff_base_price(tariff)
