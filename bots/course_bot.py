@@ -14,13 +14,14 @@ import html
 import logging
 import re
 import sys
+import aiohttp
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.dispatcher.event.bases import SkipHandler
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, BufferedInputFile
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
@@ -1865,6 +1866,43 @@ class CourseBot:
         except Exception:
             return False
 
+    async def _download_url_bytes(
+        self,
+        url: str,
+        *,
+        max_bytes: int,
+        timeout_s: float = 15.0,
+    ) -> tuple[bytes, str, str]:
+        """
+        Download a URL into memory with a strict size cap.
+        Returns: (data, content_type, filename)
+        """
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("Unsupported URL scheme")
+
+        timeout = aiohttp.ClientTimeout(total=timeout_s)
+        headers = {"User-Agent": "Mozilla/5.0"}
+
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(url, allow_redirects=True) as resp:
+                resp.raise_for_status()
+                content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                filename = Path(urlparse(str(resp.url)).path).name or Path(parsed.path).name or "file"
+
+                size_hdr = resp.headers.get("Content-Length")
+                if size_hdr and size_hdr.isdigit() and int(size_hdr) > max_bytes:
+                    raise ValueError("File too large")
+
+                buf = bytearray()
+                async for chunk in resp.content.iter_chunked(256 * 1024):
+                    if not chunk:
+                        continue
+                    buf.extend(chunk)
+                    if len(buf) > max_bytes:
+                        raise ValueError("File too large")
+                return bytes(buf), content_type, filename
+
     async def _send_previews_from_text(
         self,
         user_id: int,
@@ -1930,7 +1968,18 @@ class CourseBot:
 
             if self._is_direct_image_url(url):
                 try:
-                    await self.bot.send_photo(user_id, url, caption=(caption if caption != url else None))
+                    data, content_type, filename = await self._download_url_bytes(url, max_bytes=12 * 1024 * 1024)
+                    if not filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                        if content_type == "image/png":
+                            filename = "image.png"
+                        elif content_type == "image/webp":
+                            filename = "image.webp"
+                        elif content_type == "image/gif":
+                            filename = "image.gif"
+                        else:
+                            filename = "image.jpg"
+                    photo = BufferedInputFile(data, filename=filename)
+                    await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None))
                     seen.add(url)
                     sent += 1
                 except Exception:
@@ -1939,12 +1988,55 @@ class CourseBot:
 
             if self._is_direct_video_url(url):
                 try:
-                    await self.bot.send_video(user_id, url, caption=(caption if caption != url else None), supports_streaming=True)
+                    data, content_type, filename = await self._download_url_bytes(url, max_bytes=45 * 1024 * 1024, timeout_s=30.0)
+                    if not filename.lower().endswith((".mp4", ".mov", ".webm")):
+                        filename = "video.mp4"
+                    video = BufferedInputFile(data, filename=filename)
+                    try:
+                        await self.bot.send_video(
+                            user_id,
+                            video,
+                            caption=(caption if caption != url else None),
+                            supports_streaming=True,
+                        )
+                    except Exception:
+                        await self.bot.send_document(user_id, video, caption=(caption if caption != url else None))
                     seen.add(url)
                     sent += 1
                 except Exception:
                     pass
                 continue
+
+            # Generic media URLs: try downloading by content-type (e.g., links without extensions).
+            try:
+                data, content_type, filename = await self._download_url_bytes(url, max_bytes=12 * 1024 * 1024)
+                if content_type.startswith("image/"):
+                    photo = BufferedInputFile(data, filename=(filename or "image"))
+                    await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None))
+                    seen.add(url)
+                    sent += 1
+                    continue
+            except Exception:
+                pass
+
+            try:
+                data, content_type, filename = await self._download_url_bytes(url, max_bytes=45 * 1024 * 1024, timeout_s=30.0)
+                if content_type.startswith("video/"):
+                    video = BufferedInputFile(data, filename=(filename or "video.mp4"))
+                    try:
+                        await self.bot.send_video(
+                            user_id,
+                            video,
+                            caption=(caption if caption != url else None),
+                            supports_streaming=True,
+                        )
+                    except Exception:
+                        await self.bot.send_document(user_id, video, caption=(caption if caption != url else None))
+                    seen.add(url)
+                    sent += 1
+                    continue
+            except Exception:
+                pass
 
     # Assignment headings sometimes come with a leading emoji/icon, e.g. "🔗 #Задание 28".
     # We allow optional non-word prefix before the Markdown heading markers.
