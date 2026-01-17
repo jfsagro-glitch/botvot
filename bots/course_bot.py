@@ -1866,42 +1866,58 @@ class CourseBot:
         except Exception:
             return False
 
-    async def _download_url_bytes(
+    async def _download_media_from_url(
         self,
+        session: aiohttp.ClientSession,
         url: str,
         *,
-        max_bytes: int,
-        timeout_s: float = 15.0,
-    ) -> tuple[bytes, str, str]:
+        timeout_s: float = 20.0,
+        max_image_bytes: int = 12 * 1024 * 1024,
+        max_video_bytes: int = 45 * 1024 * 1024,
+    ) -> tuple[str, bytes, str, str]:
         """
-        Download a URL into memory with a strict size cap.
-        Returns: (data, content_type, filename)
+        Download media (image/video) from URL into memory with strict caps.
+
+        Returns: (kind, data, content_type, filename), where kind is "image" or "video".
         """
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"}:
             raise ValueError("Unsupported URL scheme")
 
-        timeout = aiohttp.ClientTimeout(total=timeout_s)
-        headers = {"User-Agent": "Mozilla/5.0"}
+        req_timeout = aiohttp.ClientTimeout(total=timeout_s)
+        async with session.get(url, allow_redirects=True, timeout=req_timeout) as resp:
+            resp.raise_for_status()
 
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.get(url, allow_redirects=True) as resp:
-                resp.raise_for_status()
-                content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-                filename = Path(urlparse(str(resp.url)).path).name or Path(parsed.path).name or "file"
+            content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            filename = Path(urlparse(str(resp.url)).path).name or Path(parsed.path).name or "file"
 
-                size_hdr = resp.headers.get("Content-Length")
-                if size_hdr and size_hdr.isdigit() and int(size_hdr) > max_bytes:
+            if content_type.startswith("image/"):
+                cap = int(max_image_bytes)
+                kind = "image"
+            elif content_type.startswith("video/"):
+                cap = int(max_video_bytes)
+                kind = "video"
+            else:
+                # Don't waste bandwidth on html/text/etc.
+                raise ValueError("Not a media URL")
+
+            size_hdr = resp.headers.get("Content-Length")
+            if size_hdr and size_hdr.isdigit() and int(size_hdr) > cap:
+                raise ValueError("File too large")
+
+            buf = bytearray()
+            async for chunk in resp.content.iter_chunked(256 * 1024):
+                if not chunk:
+                    continue
+                buf.extend(chunk)
+                if len(buf) > cap:
                     raise ValueError("File too large")
 
-                buf = bytearray()
-                async for chunk in resp.content.iter_chunked(256 * 1024):
-                    if not chunk:
-                        continue
-                    buf.extend(chunk)
-                    if len(buf) > max_bytes:
-                        raise ValueError("File too large")
-                return bytes(buf), content_type, filename
+            data = bytes(buf)
+            if not data:
+                raise ValueError("Empty download")
+
+            return kind, data, content_type, filename
 
     async def _send_previews_from_text(
         self,
@@ -1939,104 +1955,109 @@ class CourseBot:
             seen = set()
 
         sent = 0
-        for url, line in candidates:
-            if url in seen:
-                continue
-            if sent >= int(limit):
-                break
+        headers = {"User-Agent": "Mozilla/5.0"}
+        connector = aiohttp.TCPConnector(limit=4, ttl_dns_cache=300)
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+            for url, line in candidates:
+                if url in seen:
+                    continue
+                if sent >= int(limit):
+                    break
 
-            caption = url
-            # Use a short per-line caption when it looks like a "label: link" format.
-            if line and len(line) <= 180 and (":" in line or "фрагмент" in line.lower()):
-                caption = line
-            if len(caption) > 900:
-                caption = caption[:900] + "…"
+                caption = url
+                # Use a short per-line caption when it looks like a "label: link" format.
+                if line and len(line) <= 180 and (":" in line or "фрагмент" in line.lower()):
+                    caption = line
+                if len(caption) > 900:
+                    caption = caption[:900] + "…"
 
-            vid = self._youtube_video_id(url)
-            if vid:
-                thumb = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
-                try:
-                    await self.bot.send_photo(user_id, thumb, caption=caption)
-                except Exception:
+                vid = self._youtube_video_id(url)
+                if vid:
+                    thumb = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                     try:
-                        await self.bot.send_message(user_id, url, disable_web_page_preview=True)
+                        await self.bot.send_photo(user_id, thumb, caption=caption)
+                    except Exception:
+                        try:
+                            await self.bot.send_message(user_id, url, disable_web_page_preview=True)
+                        except Exception:
+                            pass
+                    seen.add(url)
+                    sent += 1
+                    continue
+
+                if self._is_direct_image_url(url):
+                    try:
+                        kind, data, content_type, filename = await self._download_media_from_url(
+                            session, url, timeout_s=20.0
+                        )
+                        if kind != "image":
+                            raise ValueError("Not an image")
+                        if not filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                            filename = "image.png" if content_type == "image/png" else "image.jpg"
+                        photo = BufferedInputFile(data, filename=filename)
+                        await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None))
+                        seen.add(url)
+                        sent += 1
                     except Exception:
                         pass
-                seen.add(url)
-                sent += 1
-                continue
+                    continue
 
-            if self._is_direct_image_url(url):
+                if self._is_direct_video_url(url):
+                    try:
+                        kind, data, content_type, filename = await self._download_media_from_url(
+                            session, url, timeout_s=35.0
+                        )
+                        if kind != "video":
+                            raise ValueError("Not a video")
+                        if not filename.lower().endswith((".mp4", ".mov", ".webm")):
+                            filename = "video.mp4"
+                        video = BufferedInputFile(data, filename=filename)
+                        try:
+                            await self.bot.send_video(
+                                user_id,
+                                video,
+                                caption=(caption if caption != url else None),
+                                supports_streaming=True,
+                            )
+                        except Exception:
+                            await self.bot.send_document(
+                                user_id, video, caption=(caption if caption != url else None)
+                            )
+                        seen.add(url)
+                        sent += 1
+                    except Exception:
+                        pass
+                    continue
+
+                # Generic media URLs: download once, decide by Content-Type (e.g., links without extensions).
                 try:
-                    data, content_type, filename = await self._download_url_bytes(url, max_bytes=12 * 1024 * 1024)
-                    if not filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
-                        if content_type == "image/png":
-                            filename = "image.png"
-                        elif content_type == "image/webp":
-                            filename = "image.webp"
-                        elif content_type == "image/gif":
-                            filename = "image.gif"
-                        else:
-                            filename = "image.jpg"
-                    photo = BufferedInputFile(data, filename=filename)
-                    await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None))
-                    seen.add(url)
-                    sent += 1
+                    kind, data, content_type, filename = await self._download_media_from_url(
+                        session, url, timeout_s=25.0
+                    )
+                    if kind == "image":
+                        photo = BufferedInputFile(data, filename=(filename or "image.jpg"))
+                        await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None))
+                        seen.add(url)
+                        sent += 1
+                        continue
+                    if kind == "video":
+                        video = BufferedInputFile(data, filename=(filename or "video.mp4"))
+                        try:
+                            await self.bot.send_video(
+                                user_id,
+                                video,
+                                caption=(caption if caption != url else None),
+                                supports_streaming=True,
+                            )
+                        except Exception:
+                            await self.bot.send_document(
+                                user_id, video, caption=(caption if caption != url else None)
+                            )
+                        seen.add(url)
+                        sent += 1
+                        continue
                 except Exception:
                     pass
-                continue
-
-            if self._is_direct_video_url(url):
-                try:
-                    data, content_type, filename = await self._download_url_bytes(url, max_bytes=45 * 1024 * 1024, timeout_s=30.0)
-                    if not filename.lower().endswith((".mp4", ".mov", ".webm")):
-                        filename = "video.mp4"
-                    video = BufferedInputFile(data, filename=filename)
-                    try:
-                        await self.bot.send_video(
-                            user_id,
-                            video,
-                            caption=(caption if caption != url else None),
-                            supports_streaming=True,
-                        )
-                    except Exception:
-                        await self.bot.send_document(user_id, video, caption=(caption if caption != url else None))
-                    seen.add(url)
-                    sent += 1
-                except Exception:
-                    pass
-                continue
-
-            # Generic media URLs: try downloading by content-type (e.g., links without extensions).
-            try:
-                data, content_type, filename = await self._download_url_bytes(url, max_bytes=12 * 1024 * 1024)
-                if content_type.startswith("image/"):
-                    photo = BufferedInputFile(data, filename=(filename or "image"))
-                    await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None))
-                    seen.add(url)
-                    sent += 1
-                    continue
-            except Exception:
-                pass
-
-            try:
-                data, content_type, filename = await self._download_url_bytes(url, max_bytes=45 * 1024 * 1024, timeout_s=30.0)
-                if content_type.startswith("video/"):
-                    video = BufferedInputFile(data, filename=(filename or "video.mp4"))
-                    try:
-                        await self.bot.send_video(
-                            user_id,
-                            video,
-                            caption=(caption if caption != url else None),
-                            supports_streaming=True,
-                        )
-                    except Exception:
-                        await self.bot.send_document(user_id, video, caption=(caption if caption != url else None))
-                    seen.add(url)
-                    sent += 1
-                    continue
-            except Exception:
-                pass
 
     # Assignment headings sometimes come with a leading emoji/icon, e.g. "🔗 #Задание 28".
     # We allow optional non-word prefix before the Markdown heading markers.
