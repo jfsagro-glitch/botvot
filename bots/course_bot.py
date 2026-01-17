@@ -2631,6 +2631,25 @@ class CourseBot:
                         )
                     except Exception:
                         pass
+
+                # Отдельный короткий блок с кнопкой (самое стабильное отображение inline-кнопок)
+                try:
+                    cta_day = int(day) if day is not None else int(getattr(user, "current_day", 0) or 0)
+                except Exception:
+                    cta_day = int(getattr(user, "current_day", 0) or 0)
+
+                cta_text = (
+                    f"📝 <b>Отправить ответ на задание №{cta_day}</b>\n\n"
+                    "Нажмите кнопку ниже, затем отправьте ответ <b>одним сообщением</b>:\n"
+                    "текст / фото / видео / документ / голосовое."
+                )
+                cta_kb = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="📝 Отправить ответ",
+                        callback_data=f"assignment:submit:lesson_{cta_day}",
+                    )
+                ]])
+                await self.bot.send_message(user.user_id, cta_text, reply_markup=cta_kb, parse_mode="HTML")
             else:
                 # Если задания нет, отправляем только клавиатуру
                 lesson_data_with_day = lesson_data.copy()
