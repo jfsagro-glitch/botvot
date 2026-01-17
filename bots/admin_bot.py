@@ -151,6 +151,14 @@ class AdminBot:
         self.dp.message.register(self.handle_settings, Command("settings"))
         self.dp.message.register(self.handle_sync_content, Command("sync_content"))
 
+        # Persistent keyboard buttons (text)
+        self.dp.message.register(self.handle_stats, F.text == "📊 Статистика")
+        self.dp.message.register(self.handle_users, F.text == "👥 Пользователи")
+        self.dp.message.register(self.handle_settings, F.text == "⚙️ Настройки")
+        self.dp.message.register(self.handle_sync_content, F.text == "🔄 Обновить контент")
+        # Restore button is registered separately (needs drive sync checks).
+        self.dp.message.register(self.handle_restore_button, F.text == "⏪ Откатить обновление")
+
         # Compose-reply handlers (must be before settings input and before reply handlers)
         self.dp.message.register(self.handle_compose_reply_voice, F.voice)
         self.dp.message.register(self.handle_compose_reply_text, F.text & ~F.command)
@@ -868,6 +876,20 @@ class AdminBot:
         kind = state.get("type")
         text = (message.text or "").strip()
         if kind == "set_prices":
+            # If admin presses a main menu button while in "set_prices" mode, treat it as cancel.
+            main_buttons = {
+                "📊 Статистика": self.handle_stats,
+                "👥 Пользователи": self.handle_users,
+                "⚙️ Настройки": self.handle_settings,
+                "🔄 Обновить контент": self.handle_sync_content,
+                "⏪ Откатить обновление": self.handle_restore_button,
+            }
+            handler = main_buttons.get(text)
+            if handler is not None:
+                self._admin_state.pop(message.from_user.id, None)
+                await handler(message)
+                return
+
             await self.db.connect()
             updates = self._parse_price_updates(text)
             if not updates:
