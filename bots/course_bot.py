@@ -12,7 +12,11 @@ Handles:
 import asyncio
 import html
 import logging
+import re
 import sys
+from pathlib import Path
+from typing import Optional
+from urllib.parse import parse_qs, urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
 from aiogram.dispatcher.event.bases import SkipHandler
@@ -1813,6 +1817,117 @@ class CourseBot:
             return False
         
         return False
+
+    _URL_RE = re.compile(r"(https?://[^\s<>\"]+)", re.IGNORECASE)
+
+    @staticmethod
+    def _clean_url(url: str) -> str:
+        if not url:
+            return ""
+        u = url.strip()
+        while u and u[-1] in ")]}>,.!?":
+            u = u[:-1]
+        return u
+
+    @staticmethod
+    def _youtube_video_id(url: str) -> Optional[str]:
+        try:
+            p = urlparse(url)
+            host = (p.netloc or "").lower()
+            path = (p.path or "").strip("/")
+
+            if "youtu.be" in host:
+                vid = path.split("/")[0] if path else ""
+                return vid or None
+
+            if "youtube.com" in host:
+                if path.startswith("watch"):
+                    q = parse_qs(p.query or "")
+                    vid = (q.get("v") or [None])[0]
+                    return vid or None
+                if path.startswith("embed/") or path.startswith("shorts/"):
+                    parts = path.split("/")
+                    vid = parts[1] if len(parts) > 1 else None
+                    return vid or None
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
+    def _is_direct_image_url(url: str) -> bool:
+        try:
+            p = urlparse(url)
+            ext = (Path(p.path).suffix or "").lower()
+            return ext in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_direct_video_url(url: str) -> bool:
+        try:
+            p = urlparse(url)
+            ext = (Path(p.path).suffix or "").lower()
+            return ext in {".mp4", ".mov", ".webm"}
+        except Exception:
+            return False
+
+    async def _send_previews_from_text(
+        self,
+        user_id: int,
+        text: str,
+        *,
+        seen: Optional[set[str]] = None,
+        limit: int = 6,
+    ):
+        if not text:
+            return
+
+        urls = [self._clean_url(u) for u in self._URL_RE.findall(text or "")]
+        urls = [u for u in urls if u]
+        if not urls:
+            return
+
+        if seen is None:
+            seen = set()
+
+        sent = 0
+        for url in urls:
+            if url in seen:
+                continue
+            if sent >= int(limit):
+                break
+
+            vid = self._youtube_video_id(url)
+            if vid:
+                thumb = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
+                try:
+                    await self.bot.send_photo(user_id, thumb, caption=url)
+                except Exception:
+                    try:
+                        await self.bot.send_message(user_id, url)
+                    except Exception:
+                        pass
+                seen.add(url)
+                sent += 1
+                continue
+
+            if self._is_direct_image_url(url):
+                try:
+                    await self.bot.send_photo(user_id, url)
+                    seen.add(url)
+                    sent += 1
+                except Exception:
+                    pass
+                continue
+
+            if self._is_direct_video_url(url):
+                try:
+                    await self.bot.send_video(user_id, url, supports_streaming=True)
+                    seen.add(url)
+                    sent += 1
+                except Exception:
+                    pass
+                continue
     
     def _split_long_message(self, text: str, max_length: int = 4000) -> list:
         """
@@ -1948,7 +2063,9 @@ class CourseBot:
         try:
             if day is None:
                 day = user.current_day
-            
+
+            link_preview_seen: set[str] = set()
+             
             title = lesson_data.get("title", f"День {day}")
             # Get lesson text - can be string (single post) or list (multiple posts)
             lesson_text_raw = lesson_data.get("text", "")
@@ -2506,6 +2623,25 @@ class CourseBot:
                 except Exception as video_error:
                     logger.warning(f"   ⚠️ Не удалось отправить первое видео перед заданием для урока 30: {video_error}")
             
+            # Если в тексте урока есть ссылки на видео/картинки — показываем превью отдельными сообщениями.
+            # (Например, YouTube: отправляем миниатюру, чтобы было «видно».)
+            try:
+                combined_text = "\n\n".join(
+                    [
+                        (lesson_data.get("intro_text", "") or ""),
+                        (lesson_data.get("about_me_text", "") or ""),
+                        "\n\n".join([p for p in lesson_posts if isinstance(p, str) and p.strip()]),
+                    ]
+                )
+                await self._send_previews_from_text(
+                    user.user_id,
+                    combined_text,
+                    seen=link_preview_seen,
+                    limit=6,
+                )
+            except Exception:
+                pass
+
             # Формируем сообщение с заданием - только текст из Google Doc, без эмодзи и разделителей
             task_message = ""
             if task:
@@ -2631,6 +2767,17 @@ class CourseBot:
                         )
                     except Exception:
                         pass
+
+                # Если в задании есть ссылки на видео/картинки — показываем превью.
+                try:
+                    await self._send_previews_from_text(
+                        user.user_id,
+                        task_message,
+                        seen=link_preview_seen,
+                        limit=6,
+                    )
+                except Exception:
+                    pass
 
                 # Отдельный короткий блок с кнопкой (самое стабильное отображение inline-кнопок)
                 try:
