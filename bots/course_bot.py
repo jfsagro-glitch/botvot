@@ -1882,29 +1882,52 @@ class CourseBot:
         if not text:
             return
 
-        urls = [self._clean_url(u) for u in self._URL_RE.findall(text or "")]
-        urls = [u for u in urls if u]
-        if not urls:
+        # Prefer per-line extraction so consecutive links become separate preview blocks
+        # with their own captions (e.g. "Фрагмент 1:", "Фрагмент 2:").
+        candidates: list[tuple[str, str]] = []
+        for raw_line in (text or "").splitlines():
+            line = (raw_line or "").strip()
+            if not line:
+                continue
+            for u in self._URL_RE.findall(line):
+                url = self._clean_url(u)
+                if not url:
+                    continue
+                candidates.append((url, line))
+
+        if not candidates:
+            # Fallback: any URL in the whole text
+            urls = [self._clean_url(u) for u in self._URL_RE.findall(text or "")]
+            candidates = [(u, u) for u in urls if u]
+
+        if not candidates:
             return
 
         if seen is None:
             seen = set()
 
         sent = 0
-        for url in urls:
+        for url, line in candidates:
             if url in seen:
                 continue
             if sent >= int(limit):
                 break
 
+            caption = url
+            # Use a short per-line caption when it looks like a "label: link" format.
+            if line and len(line) <= 180 and (":" in line or "фрагмент" in line.lower()):
+                caption = line
+            if len(caption) > 900:
+                caption = caption[:900] + "…"
+
             vid = self._youtube_video_id(url)
             if vid:
                 thumb = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                 try:
-                    await self.bot.send_photo(user_id, thumb, caption=url)
+                    await self.bot.send_photo(user_id, thumb, caption=caption)
                 except Exception:
                     try:
-                        await self.bot.send_message(user_id, url)
+                        await self.bot.send_message(user_id, url, disable_web_page_preview=True)
                     except Exception:
                         pass
                 seen.add(url)
@@ -1913,7 +1936,7 @@ class CourseBot:
 
             if self._is_direct_image_url(url):
                 try:
-                    await self.bot.send_photo(user_id, url)
+                    await self.bot.send_photo(user_id, url, caption=(caption if caption != url else None))
                     seen.add(url)
                     sent += 1
                 except Exception:
@@ -1922,7 +1945,7 @@ class CourseBot:
 
             if self._is_direct_video_url(url):
                 try:
-                    await self.bot.send_video(user_id, url, supports_streaming=True)
+                    await self.bot.send_video(user_id, url, caption=(caption if caption != url else None), supports_streaming=True)
                     seen.add(url)
                     sent += 1
                 except Exception:
@@ -2002,6 +2025,9 @@ class CourseBot:
         Фильтрует технические ошибки Telegram API.
         """
         MAX_MESSAGE_LENGTH = 4000  # запас относительно лимита Telegram (4096)
+        # В уроках/заданиях ссылки должны показываться отдельными превью-блоками,
+        # поэтому у текстовых сообщений по умолчанию выключаем web-page preview.
+        kwargs.setdefault("disable_web_page_preview", True)
 
         if not text or not text.strip():
             logger.warning(f"⚠️ Attempted to send empty message to {chat_id}, using zero-width space")
@@ -2733,7 +2759,7 @@ class CourseBot:
                         # Отправляем все части до последней непустой без клавиатуры
                         for i, part in enumerate(message_parts[:last_non_empty_idx], 1):
                             if part and part.strip():
-                                await self.bot.send_message(user.user_id, part)
+                                await self.bot.send_message(user.user_id, part, disable_web_page_preview=True)
                                 await asyncio.sleep(0.3)  # Небольшая пауза между сообщениями
                                 logger.info(f"   Sent task part {i}/{len(message_parts)}")
                             else:
@@ -2744,6 +2770,7 @@ class CourseBot:
                             user.user_id,
                             message_parts[last_non_empty_idx],
                             reply_markup=keyboard,
+                            disable_web_page_preview=True,
                         )
                         try:
                             await self.bot.edit_message_reply_markup(
@@ -2758,7 +2785,7 @@ class CourseBot:
                         )
                 else:
                     # Если сообщение короткое, отправляем как есть
-                    sent = await self.bot.send_message(user.user_id, task_message, reply_markup=keyboard)
+                    sent = await self.bot.send_message(user.user_id, task_message, reply_markup=keyboard, disable_web_page_preview=True)
                     try:
                         await self.bot.edit_message_reply_markup(
                             chat_id=user.user_id,
