@@ -28,7 +28,7 @@ import os
 import re
 import html
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from dataclasses import dataclass
 from pathlib import Path
@@ -313,7 +313,7 @@ class DriveContentSync:
             media_items: List[Dict[str, Any]] = []
             for fid in self._extract_drive_file_ids(lesson_text + "\n" + task_text):
                 try:
-                    meta = drive.files().get(fileId=fid, fields="id,name,mimeType").execute()
+                    meta = drive.files().get(fileId=fid, fields="id,name,mimeType,modifiedTime,size").execute()
                     mt = (meta.get("mimeType") or "").lower()
                     name = (meta.get("name") or f"file_{fid}").strip()
                     if mt.startswith("image/"):
@@ -324,8 +324,9 @@ class DriveContentSync:
                         continue
                     safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
                     dest = media_root / f"day_{day:02d}" / safe_name
-                    self._download_binary_file(drive, fid, dest)
-                    media_downloaded += 1
+                    if not self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime")):
+                        self._download_binary_file(drive, fid, dest)
+                        media_downloaded += 1
                     rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
                     media_items.append({"type": media_type, "path": rel_path})
                 except Exception as e:
@@ -429,6 +430,38 @@ class DriveContentSync:
         with open(tmp, "wb") as f:
             f.write(fh.getvalue())
         os.replace(tmp, dest_path)
+
+    @staticmethod
+    def _parse_rfc3339(value: str) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            # Google Drive returns RFC3339, often with "Z"
+            v = value.replace("Z", "+00:00")
+            return datetime.fromisoformat(v)
+        except Exception:
+            return None
+
+    @classmethod
+    def _should_skip_download(cls, dest_path: Path, remote_size: Optional[str], remote_mtime: Optional[str]) -> bool:
+        if not dest_path.exists():
+            return False
+        try:
+            if remote_size:
+                size = int(remote_size)
+                if size > 0 and dest_path.stat().st_size != size:
+                    return False
+            remote_dt = cls._parse_rfc3339(remote_mtime)
+            if remote_dt:
+                local_dt = datetime.fromtimestamp(dest_path.stat().st_mtime, tz=timezone.utc)
+                if local_dt >= remote_dt:
+                    return True
+            # If size matches and no mtime, treat as cached
+            if remote_size:
+                return True
+        except Exception:
+            return False
+        return False
 
     @staticmethod
     def _sanitize_telegram_html(text: str) -> Tuple[str, List[str]]:
@@ -756,8 +789,9 @@ class DriveContentSync:
                 safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
                 dest = media_root / f"day_{day:02d}" / safe_name
                 try:
-                    self._download_binary_file(drive, m["id"], dest)
-                    media_downloaded += 1
+                    if not self._should_skip_download(dest, m.get("size"), m.get("modifiedTime")):
+                        self._download_binary_file(drive, m["id"], dest)
+                        media_downloaded += 1
                     # Store path relative to project root, because CourseBot resolves it that way
                     rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
                     media_items.append({"type": media_type, "path": rel_path})

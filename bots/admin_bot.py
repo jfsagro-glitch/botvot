@@ -1094,15 +1094,61 @@ class AdminBot:
     
     async def handle_sync_content(self, message: Message):
         """Handle /sync_content command - sync content from Google Drive."""
-        if not self.drive_sync or not self.drive_sync._admin_ready():
+        ok, reason = (self.drive_sync._admin_ready() if self.drive_sync else (False, "Drive sync not available"))
+        if not ok:
             await message.answer(
                 "❌ Синхронизация с Google Drive не настроена.\n\n"
                 "Убедитесь, что установлены:\n"
                 "• DRIVE_CONTENT_ENABLED=1\n"
                 "• DRIVE_MASTER_DOC_ID (ID документа)\n"
-                "• GOOGLE_SERVICE_ACCOUNT_JSON"
+                "• GOOGLE_SERVICE_ACCOUNT_JSON\n\n"
+                f"Причина: {reason}"
             )
             return
+        
+        # Show current document info
+        doc_id = (Config.DRIVE_MASTER_DOC_ID or "").strip()
+        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit" if doc_id else "Не указан"
+        
+        await message.answer(
+            "🔄 <b>Начинаю синхронизацию контента</b>\n\n"
+            f"📄 <b>Документ:</b> {doc_url}\n"
+            "⏳ Подтягиваю данные из Google Drive...\n\n"
+            "Это может занять несколько секунд."
+        )
+        
+        try:
+            # sync_now is synchronous, run in executor to avoid blocking
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, self.drive_sync.sync_now)
+            
+            # Check for warnings
+            warnings_text = ""
+            if result.warnings:
+                warnings_text = "\n⚠️ <b>Предупреждения:</b>\n" + "\n".join([f"• {w}" for w in result.warnings[:5]])
+                if len(result.warnings) > 5:
+                    warnings_text += f"\n... и еще {len(result.warnings) - 5} предупреждений"
+            
+            # result is SyncResult dataclass
+            await message.answer(
+                "✅ <b>Синхронизация завершена</b>\n\n"
+                f"📄 Документ: {doc_url}\n"
+                f"• Обновлено дней: {result.days_synced}\n"
+                f"• Медиа файлов загружено: {result.media_files_downloaded}\n"
+                f"• Путь к урокам: {result.lessons_path}\n"
+                f"{warnings_text}\n\n"
+                "💡 Контент обновлен. Курс-бот автоматически подхватит изменения."
+            )
+        except Exception as e:
+            logger.error(f"Error syncing content: {e}", exc_info=True)
+            await message.answer(
+                "❌ <b>Ошибка при синхронизации</b>\n\n"
+                f"{str(e)}\n\n"
+                "💡 Проверьте:\n"
+                "• Доступ к Google Drive\n"
+                "• Правильность ID документа\n"
+                "• Настройки сервисного аккаунта"
+            )
 
     def _compose_cancel_keyboard(self) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(inline_keyboard=[
@@ -1213,51 +1259,6 @@ class AdminBot:
 
         self._compose_reply.pop(message.from_user.id, None)
         await message.answer("❌ Не удалось отправить: неизвестный тип ответа.")
-        
-        # Show current document info
-        doc_id = (Config.DRIVE_MASTER_DOC_ID or "").strip()
-        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit" if doc_id else "Не указан"
-        
-        await message.answer(
-            f"🔄 <b>Начинаю синхронизацию контента</b>\n\n"
-            f"📄 <b>Документ:</b> {doc_url}\n"
-            f"⏳ Подтягиваю данные из Google Drive...\n\n"
-            f"Это может занять несколько секунд."
-        )
-        
-        try:
-            # sync_now is synchronous, run in executor to avoid blocking
-            import asyncio
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, self.drive_sync.sync_now)
-            
-            # Check for warnings
-            warnings_text = ""
-            if result.warnings:
-                warnings_text = f"\n⚠️ <b>Предупреждения:</b>\n" + "\n".join([f"• {w}" for w in result.warnings[:5]])
-                if len(result.warnings) > 5:
-                    warnings_text += f"\n... и еще {len(result.warnings) - 5} предупреждений"
-            
-            # result is SyncResult dataclass
-            await message.answer(
-                f"✅ <b>Синхронизация завершена</b>\n\n"
-                f"📄 Документ: {doc_url}\n"
-                f"• Обновлено дней: {result.days_synced}\n"
-                f"• Медиа файлов загружено: {result.media_files_downloaded}\n"
-                f"• Путь к урокам: {result.lessons_path}\n"
-                f"{warnings_text}\n\n"
-                f"💡 Контент обновлен. Курс-бот автоматически подхватит изменения."
-            )
-        except Exception as e:
-            logger.error(f"Error syncing content: {e}", exc_info=True)
-            await message.answer(
-                f"❌ <b>Ошибка при синхронизации</b>\n\n"
-                f"{str(e)}\n\n"
-                f"💡 Проверьте:\n"
-                f"• Доступ к Google Drive\n"
-                f"• Правильность ID документа\n"
-                f"• Настройки сервисного аккаунта"
-            )
     
     async def handle_reply(self, message: Message):
         """Handle reply to question/assignment message."""
