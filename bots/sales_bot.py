@@ -622,6 +622,16 @@ class SalesBot:
                 await callback.message.answer("✅ Диалог завершён. Можете продолжать пользоваться ботом.")
             except Exception:
                 pass
+        # Restore persistent keyboard after inline-only talk mode.
+        try:
+            online_min_price = await self.payment_service.get_tariff_base_price(Tariff.BASIC)
+            persistent_keyboard = create_persistent_keyboard(
+                online_min_price=online_min_price,
+                offline_min_price=6000.0,
+            )
+            await callback.message.answer("\u200B", reply_markup=persistent_keyboard)
+        except Exception:
+            pass
 
     async def handle_voice_question_from_sales(self, message: Message):
         """Forward voice messages to admin bot (PUP) when talk-to-human mode is enabled."""

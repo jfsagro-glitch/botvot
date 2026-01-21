@@ -117,6 +117,31 @@ class AdminBot:
         )
         return self._sales_bot_client
 
+    def _course_persistent_keyboard(self) -> ReplyKeyboardMarkup:
+        """Mirror CourseBot persistent keyboard for restoring in user chats."""
+        return ReplyKeyboardMarkup(
+            keyboard=[
+                [
+                    KeyboardButton(text="📘"),
+                    KeyboardButton(text="💬"),
+                    KeyboardButton(text="📝"),
+                ],
+                [
+                    KeyboardButton(text="💳"),
+                    KeyboardButton(text="🟦"),
+                    KeyboardButton(text="👨‍🏫"),
+                ],
+            ],
+            resize_keyboard=True,
+            is_persistent=True,
+        )
+
+    def _sales_persistent_keyboard(self) -> ReplyKeyboardMarkup:
+        """Use the same persistent keyboard as sales bot."""
+        from utils.telegram_helpers import create_persistent_keyboard
+        # Prices are optional here; keyboard layout is stable without them.
+        return create_persistent_keyboard()
+
     async def _reupload_voice(self, admin_voice_file_id: str) -> BufferedInputFile:
         """
         Voice file_id is bot-specific. When admin records a voice in PUP, we must
@@ -1493,6 +1518,8 @@ class AdminBot:
                     )
             else:
                 await course_bot.send_message(user.user_id, feedback_message, reply_markup=followup_kb)
+            # Restore persistent reply keyboard (some clients hide it after inline-only messages).
+            await course_bot.send_message(user.user_id, "\u200B", reply_markup=self._course_persistent_keyboard())
             await self.assignment_service.mark_feedback_sent(assignment_id)
             await admin_message.answer("✅ Обратная связь отправлена пользователю в обучающий бот.")
         except Exception as e:
@@ -1570,8 +1597,8 @@ class AdminBot:
             answer_message += f"📚 Урок: День {lesson_day}\n\n"
         answer_message += (answer_text or "")
 
-        # В обучающем боте кнопки "Навигатор" и "Вопрос" уже закреплены (reply keyboard),
-        # поэтому под ответом их не дублируем.
+        # В обучающем боте кнопки уже закреплены (reply keyboard),
+        # но некоторые клиенты прячут их после inline-ответов.
         reply_markup = None
         if voice_file_id:
             voice_input = await self._reupload_voice(voice_file_id)
@@ -1591,6 +1618,16 @@ class AdminBot:
                 )
         else:
             await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
+
+        # Restore persistent reply keyboard after admin responses.
+        try:
+            if bot_type == "sales":
+                kb = self._sales_persistent_keyboard()
+            else:
+                kb = self._course_persistent_keyboard()
+            await target_bot.send_message(user_id, "\u200B", reply_markup=kb)
+        except Exception:
+            pass
     
     async def handle_reply_button(self, callback: CallbackQuery):
         """Handle reply button click."""
