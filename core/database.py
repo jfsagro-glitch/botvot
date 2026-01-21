@@ -8,7 +8,7 @@ to switch to PostgreSQL or another database in the future.
 
 import aiosqlite
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 from pathlib import Path
 
@@ -964,17 +964,28 @@ class Database:
     async def has_assignment_activity_for_day(self, user_id: int, day_number: int) -> bool:
         """
         Fast check used by mentor reminders:
-        returns True if user has EITHER started assignment flow (clicked submit) OR submitted an assignment.
+        returns True if user has EITHER:
+        - a recent assignment intent (clicked submit) for this day, OR
+        - a submitted assignment for this day.
+
+        Note: intents are treated as "activity" only for a limited time window, so an accidental click
+        won't silence reminders forever if the user never submits anything.
         Implemented as a single DB round-trip.
         """
         await self._ensure_connection()
+        # Only consider "intent" as activity for a short period (prevents permanent silencing).
+        # ISO timestamps sort lexicographically, so string comparison works for our stored format.
+        intent_since = (datetime.utcnow() - timedelta(hours=6)).isoformat()
         async with self.conn.execute(
             """
             SELECT
-              EXISTS(SELECT 1 FROM assignment_intents WHERE user_id = ? AND day_number = ?) OR
+              EXISTS(
+                SELECT 1 FROM assignment_intents
+                WHERE user_id = ? AND day_number = ? AND started_at >= ?
+              ) OR
               EXISTS(SELECT 1 FROM assignments WHERE user_id = ? AND day_number = ?)
             """,
-            (user_id, day_number, user_id, day_number),
+            (user_id, day_number, intent_since, user_id, day_number),
         ) as cursor:
             row = await cursor.fetchone()
             return bool(row[0]) if row else False

@@ -4179,6 +4179,16 @@ class CourseBot:
             f"👨‍🏫 <b>НАСТАВНИК</b>\n\n{status_text}",
             reply_markup=persistent_keyboard
         )
+
+        # If user just enabled reminders, send the first one immediately (best-effort).
+        # The background scheduler checks periodically, so without this users may think it's broken.
+        if frequency > 0:
+            try:
+                activity = await self.db.has_assignment_activity_for_day(user.user_id, user.current_day)
+                if not activity:
+                    await self._send_mentor_reminder(user)
+            except Exception:
+                pass
         
         logger.info(f"User {user_id} set mentor reminders frequency to {frequency}")
     
