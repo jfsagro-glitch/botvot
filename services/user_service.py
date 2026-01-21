@@ -4,17 +4,13 @@ User service for managing user accounts and access.
 Handles user creation, updates, tariff assignment, and access control.
 """
 
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from typing import Optional
 
 from core.database import Database
 from core.models import User, Tariff
 from core.config import Config
-
-try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
-except Exception:  # pragma: no cover
-    ZoneInfo = None
+from utils.schedule_timezone import get_schedule_timezone
 
 
 class UserService:
@@ -75,26 +71,18 @@ class UserService:
             user.tariff = tariff
             # Set start_date to tomorrow at LESSON_DELIVERY_TIME_LOCAL in configured timezone (default: Europe/Moscow),
             # stored as naive UTC datetime for backwards compatibility.
-            now_utc = datetime.utcnow()
-            if ZoneInfo is not None:
-                try:
-                    tz = ZoneInfo(Config.SCHEDULE_TIMEZONE)
-                except Exception:
-                    tz = ZoneInfo("UTC")
-                now_local = now_utc.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
-                tomorrow_local_date = (now_local + timedelta(days=1)).date()
-                # Parse "HH:MM" (fallback to 08:30)
-                try:
-                    hh, mm = (Config.LESSON_DELIVERY_TIME_LOCAL or "").strip().split(":", 1)
-                    delivery_t = time(hour=int(hh), minute=int(mm))
-                except Exception:
-                    delivery_t = time(8, 30)
-                start_local = datetime.combine(tomorrow_local_date, delivery_t, tzinfo=tz)
-                user.start_date = start_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
-            else:
-                # Fallback: assume Moscow time and convert roughly to UTC (08:30 MSK ≈ 05:30 UTC)
-                tomorrow = now_utc + timedelta(days=1)
-                user.start_date = tomorrow.replace(hour=5, minute=30, second=0, microsecond=0)
+            now_utc = datetime.now(timezone.utc)
+            tz = get_schedule_timezone()
+            now_local = now_utc.astimezone(tz)
+            tomorrow_local_date = (now_local + timedelta(days=1)).date()
+            # Parse "HH:MM" (fallback to 08:30)
+            try:
+                hh, mm = (Config.LESSON_DELIVERY_TIME_LOCAL or "").strip().split(":", 1)
+                delivery_t = time(hour=int(hh), minute=int(mm))
+            except Exception:
+                delivery_t = time(8, 30)
+            start_local = datetime.combine(tomorrow_local_date, delivery_t, tzinfo=tz)
+            user.start_date = start_local.astimezone(timezone.utc).replace(tzinfo=None)
             user.current_day = 0  # Lesson 0 will be sent immediately
             user.referral_partner_id = referral_partner_id
             
@@ -116,4 +104,3 @@ class UserService:
     async def get_user(self, user_id: int) -> Optional[User]:
         """Get user by ID."""
         return await self.db.get_user(user_id)
-
