@@ -6,6 +6,21 @@
 import os
 import sys
 
+def _force_utf8_stdio() -> None:
+    """
+    Best-effort: avoid UnicodeEncodeError on Windows consoles (e.g. cp1251)
+    when printing emojis / non-ASCII text.
+    """
+    for stream in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+        try:
+            if stream and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_force_utf8_stdio()
+
 def check_env_variables():
     """Проверяет все переменные окружения, связанные с ботом."""
     print("=" * 60)

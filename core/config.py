@@ -70,6 +70,11 @@ class Config:
     # Example: https://t.me/+AbCdEfGhIjk or https://t.me/joinchat/AbCdEfGhIjk
     GENERAL_GROUP_INVITE_LINK: str = _get_env_value("GENERAL_GROUP_INVITE_LINK", "")
     PREMIUM_GROUP_INVITE_LINK: str = _get_env_value("PREMIUM_GROUP_INVITE_LINK", "")
+
+    # Community / Discussion (optional direct URL for the "Обсуждение" button)
+    # Recommended: a Telegram invite link like https://t.me/+AbCdEfGhIjk
+    # You can also use a web.telegram.org link, but it's less reliable on mobile clients.
+    DISCUSSION_GROUP_URL: str = _get_env_value("DISCUSSION_GROUP_URL", "")
     
     # Database
     DATABASE_PATH: str = _get_env_value("DATABASE_PATH", "./data/course_platform.db")

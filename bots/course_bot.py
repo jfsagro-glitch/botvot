@@ -1973,12 +1973,26 @@ class CourseBot:
 
                 vid = self._youtube_video_id(url)
                 if vid:
-                    thumb = f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
                     try:
-                        await self.bot.send_photo(user_id, thumb, caption=caption)
+                        # For YouTube (and similar pages), let Telegram build a native link preview
+                        # with a playable thumbnail (like when a user pastes the link manually).
+                        #
+                        # Important: do NOT send as photo thumb; that loses the in-Telegram "play" UX.
+                        message_text = line if (line and url in line and len(line) <= 900) else url
+                        await self.bot.send_message(
+                            user_id,
+                            message_text,
+                            disable_web_page_preview=False,
+                            parse_mode=None,
+                        )
                     except Exception:
                         try:
-                            await self.bot.send_message(user_id, url, disable_web_page_preview=True)
+                            await self.bot.send_message(
+                                user_id,
+                                url,
+                                disable_web_page_preview=False,
+                                parse_mode=None,
+                            )
                         except Exception:
                             pass
                     seen.add(url)
@@ -2056,6 +2070,19 @@ class CourseBot:
                         seen.add(url)
                         sent += 1
                         continue
+                except Exception:
+                    pass
+
+                # Fallback: send the URL with link preview enabled (works for pages with OG metadata).
+                try:
+                    await self.bot.send_message(
+                        user_id,
+                        url,
+                        disable_web_page_preview=False,
+                        parse_mode=None,
+                    )
+                    seen.add(url)
+                    sent += 1
                 except Exception:
                     pass
 
@@ -4020,8 +4047,10 @@ class CourseBot:
             pass
         persistent_keyboard = self._create_persistent_keyboard()
         
-        # Prefer configured invite link; fallback to group id/username heuristics.
-        group_link = (self.community_service.get_group_invite_link(Config.GENERAL_GROUP_ID) or "").strip()
+        # Prefer an explicit discussion URL; fallback to configured group invite links / ID heuristics.
+        group_link = (Config.DISCUSSION_GROUP_URL or "").strip()
+        if not group_link:
+            group_link = (self.community_service.get_group_invite_link(Config.GENERAL_GROUP_ID) or "").strip()
         if not group_link:
             # Additional fallback for numeric chat IDs (private groups): try `t.me/c/<id>/1`
             # Note: this opens the chat only if the user already has access; invite link is still preferred.
