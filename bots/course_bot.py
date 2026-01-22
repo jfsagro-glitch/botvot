@@ -3139,38 +3139,52 @@ class CourseBot:
                     # Разбиваем длинные сообщения на части (лимит Telegram: 4096 символов)
                     MAX_MESSAGE_LENGTH = 4000  # Оставляем запас
                     if len(task_message_clean) > MAX_MESSAGE_LENGTH:
-                    # Разбиваем сообщение на части
-                    message_parts = self._split_long_message(task_message_clean, MAX_MESSAGE_LENGTH)
-                    logger.info(f"   Task message split into {len(message_parts)} parts")
+                        # Разбиваем сообщение на части
+                        message_parts = self._split_long_message(task_message_clean, MAX_MESSAGE_LENGTH)
+                        logger.info(f"   Task message split into {len(message_parts)} parts")
 
-                    # Кнопка должна быть прямо "под заданием", поэтому:
-                    # - находим последнюю НЕпустую часть
-                    # - отправляем её с клавиатурой
-                    last_non_empty_idx = None
-                    for idx in range(len(message_parts) - 1, -1, -1):
-                        if message_parts[idx] and message_parts[idx].strip():
-                            last_non_empty_idx = idx
-                            break
+                        # Кнопка должна быть прямо "под заданием", поэтому:
+                        # - находим последнюю НЕпустую часть
+                        # - отправляем её с клавиатурой
+                        last_non_empty_idx = None
+                        for idx in range(len(message_parts) - 1, -1, -1):
+                            if message_parts[idx] and message_parts[idx].strip():
+                                last_non_empty_idx = idx
+                                break
 
-                    if last_non_empty_idx is None:
-                        logger.warning("   Task message parts are empty after split; skipping task send")
+                        if last_non_empty_idx is None:
+                            logger.warning("   Task message parts are empty after split; skipping task send")
+                        else:
+                            # Отправляем все части до последней непустой без клавиатуры
+                            for i, part in enumerate(message_parts[:last_non_empty_idx], 1):
+                                if part and part.strip():
+                                    await self.bot.send_message(user.user_id, part, disable_web_page_preview=True)
+                                    await asyncio.sleep(0.3)  # Небольшая пауза между сообщениями
+                                    logger.info(f"   Sent task part {i}/{len(message_parts)}")
+                                else:
+                                    logger.warning(f"   Skipped empty task part {i}/{len(message_parts)}")
+
+                            # Отправляем последнюю непустую часть с клавиатурой
+                            sent = await self.bot.send_message(
+                                user.user_id,
+                                message_parts[last_non_empty_idx],
+                                reply_markup=keyboard,
+                                disable_web_page_preview=True,
+                            )
+                            try:
+                                await self.bot.edit_message_reply_markup(
+                                    chat_id=user.user_id,
+                                    message_id=sent.message_id,
+                                    reply_markup=keyboard,
+                                )
+                            except Exception:
+                                pass
+                            logger.info(
+                                f"   Sent task part {last_non_empty_idx + 1}/{len(message_parts)} with keyboard"
+                            )
                     else:
-                        # Отправляем все части до последней непустой без клавиатуры
-                        for i, part in enumerate(message_parts[:last_non_empty_idx], 1):
-                            if part and part.strip():
-                                await self.bot.send_message(user.user_id, part, disable_web_page_preview=True)
-                                await asyncio.sleep(0.3)  # Небольшая пауза между сообщениями
-                                logger.info(f"   Sent task part {i}/{len(message_parts)}")
-                            else:
-                                logger.warning(f"   Skipped empty task part {i}/{len(message_parts)}")
-
-                        # Отправляем последнюю непустую часть с клавиатурой
-                        sent = await self.bot.send_message(
-                            user.user_id,
-                            message_parts[last_non_empty_idx],
-                            reply_markup=keyboard,
-                            disable_web_page_preview=True,
-                        )
+                        # Если сообщение короткое, отправляем как есть
+                        sent = await self.bot.send_message(user.user_id, task_message_clean, reply_markup=keyboard, disable_web_page_preview=True)
                         try:
                             await self.bot.edit_message_reply_markup(
                                 chat_id=user.user_id,
@@ -3179,20 +3193,6 @@ class CourseBot:
                             )
                         except Exception:
                             pass
-                        logger.info(
-                            f"   Sent task part {last_non_empty_idx + 1}/{len(message_parts)} with keyboard"
-                        )
-                else:
-                    # Если сообщение короткое, отправляем как есть
-                    sent = await self.bot.send_message(user.user_id, task_message_clean, reply_markup=keyboard, disable_web_page_preview=True)
-                    try:
-                        await self.bot.edit_message_reply_markup(
-                            chat_id=user.user_id,
-                            message_id=sent.message_id,
-                            reply_markup=keyboard,
-                        )
-                    except Exception:
-                        pass
 
                 # Если в задании есть ссылки на видео/картинки — показываем превью.
                 try:
