@@ -2202,11 +2202,13 @@ class CourseBot:
                 media_path = media_info.get("path")
                 
                 try:
+                    logger.info(f"   📎 Processing media marker {part} (type: {media_type}, path: {media_path})")
                     # Сначала проверяем, есть ли сохраненный file_id в базе
                     cached_file_id = await self.db.get_media_file_id(part, day)
                     
                     if cached_file_id:
                         # Используем сохраненный file_id (файл уже в контексте Telegram)
+                        logger.info(f"   💾 Found cached file_id for marker {part}, using it")
                         try:
                             if media_type == "photo":
                                 await self.bot.send_photo(user_id, cached_file_id)
@@ -2224,22 +2226,61 @@ class CourseBot:
                         from pathlib import Path
                         from aiogram.types import FSInputFile
                         
-                        if media_type == "photo":
-                            photo_file = FSInputFile(Path(media_path))
-                            sent_message = await self.bot.send_photo(user_id, photo_file)
-                            # Сохраняем file_id для фото (может быть список, берем самое большое)
-                            if sent_message.photo:
-                                file_id = sent_message.photo[-1].file_id
-                                await self.db.save_media_file_id(part, day, media_type, file_id)
-                                logger.info(f"   ✅ Sent inline photo and cached file_id for marker {part}, lesson {day}")
-                        elif media_type == "video":
-                            video_file = FSInputFile(Path(media_path))
-                            sent_message = await self.bot.send_video(user_id, video_file)
-                            # Сохраняем file_id для видео
-                            if sent_message.video:
-                                file_id = sent_message.video.file_id
-                                await self.db.save_media_file_id(part, day, media_type, file_id)
-                                logger.info(f"   ✅ Sent inline video and cached file_id for marker {part}, lesson {day}")
+                        # Определяем абсолютный путь к файлу
+                        # media_path может быть относительным (от project_root) или абсолютным
+                        file_path = Path(media_path)
+                        if not file_path.is_absolute():
+                            # Если путь относительный, делаем его абсолютным относительно рабочей директории
+                            file_path = Path.cwd() / media_path
+                        
+                        # Проверяем существование файла
+                        if not file_path.exists():
+                            logger.error(f"   ❌ Media file not found: {file_path} (original path: {media_path})")
+                            logger.error(f"   ❌ Current working directory: {Path.cwd()}")
+                            logger.error(f"   ❌ Media info: {media_info}")
+                            # Пытаемся найти файл в альтернативных местах
+                            alt_paths = [
+                                Path.cwd() / "media" / media_path,
+                                Path("/app") / media_path,
+                                Path("/app/media") / media_path,
+                            ]
+                            found = False
+                            for alt_path in alt_paths:
+                                if alt_path.exists():
+                                    file_path = alt_path
+                                    logger.info(f"   ✅ Found media file at alternative path: {file_path}")
+                                    found = True
+                                    break
+                            
+                            if not found:
+                                logger.error(f"   ❌ Could not find media file {media_path} in any location")
+                                # Отправляем текстовое сообщение об ошибке вместо файла
+                                await self._safe_send_message(
+                                    user_id, 
+                                    f"⚠️ Не удалось загрузить медиа-файл: {media_info.get('name', 'файл')}"
+                                )
+                                continue
+                        
+                        try:
+                            if media_type == "photo":
+                                photo_file = FSInputFile(file_path)
+                                sent_message = await self.bot.send_photo(user_id, photo_file)
+                                # Сохраняем file_id для фото (может быть список, берем самое большое)
+                                if sent_message.photo:
+                                    file_id = sent_message.photo[-1].file_id
+                                    await self.db.save_media_file_id(part, day, media_type, file_id)
+                                    logger.info(f"   ✅ Sent inline photo and cached file_id for marker {part}, lesson {day}")
+                            elif media_type == "video":
+                                video_file = FSInputFile(file_path)
+                                sent_message = await self.bot.send_video(user_id, video_file)
+                                # Сохраняем file_id для видео
+                                if sent_message.video:
+                                    file_id = sent_message.video.file_id
+                                    await self.db.save_media_file_id(part, day, media_type, file_id)
+                                    logger.info(f"   ✅ Sent inline video and cached file_id for marker {part}, lesson {day}")
+                        except Exception as send_error:
+                            logger.error(f"   ❌ Error sending media file {file_path}: {send_error}", exc_info=True)
+                            raise
                     
                     await asyncio.sleep(0.3)
                 except Exception as e:
