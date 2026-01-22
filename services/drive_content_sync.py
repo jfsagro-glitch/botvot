@@ -363,29 +363,54 @@ class DriveContentSync:
             combined_text = lesson_text + "\n" + task_text
             drive_links = self._find_drive_links_with_positions(combined_text)
             
+            logger.info(f"   📎 Day {day}: Found {len(drive_links)} Drive links in text")
+            if drive_links:
+                for link in drive_links:
+                    logger.info(f"   📎   - Link: {link['url'][:60]}... (file_id: {link['file_id']})")
+            
             # Process links in reverse order to preserve positions when replacing
             drive_links.sort(key=lambda x: x["start"], reverse=True)
+            
+            processed_links = 0
+            skipped_links = 0
+            error_links = 0
             
             for link_info in drive_links:
                 fid = link_info["file_id"]
                 link_url = link_info["url"]
                 try:
+                    logger.info(f"   📎 Processing Drive link: {link_url[:60]}... (file_id: {fid})")
                     meta = drive.files().get(fileId=fid, fields="id,name,mimeType,modifiedTime,size").execute()
                     mt = (meta.get("mimeType") or "").lower()
                     name = (meta.get("name") or f"file_{fid}").strip()
+                    
+                    logger.info(f"   📎   File name: {name}, MIME type: {mt}")
                     
                     if mt.startswith("image/"):
                         media_type = "photo"
                     elif mt.startswith("video/"):
                         media_type = "video"
                     else:
+                        logger.info(f"   📎   Skipping non-media file: {name} (MIME: {mt})")
+                        skipped_links += 1
                         continue  # Skip non-media files
                     
                     safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
                     dest = media_root / f"day_{day:02d}" / safe_name
-                    if not self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime")):
+                    
+                    should_skip = self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime"))
+                    logger.info(f"   📎   Destination: {dest}, Should skip: {should_skip}")
+                    
+                    if not should_skip:
+                        logger.info(f"   📎   Downloading file: {name} -> {dest}")
                         self._download_binary_file(drive, fid, dest)
                         media_downloaded += 1
+                        logger.info(f"   ✅ Downloaded media file: {name} (total downloaded: {media_downloaded})")
+                    else:
+                        logger.info(f"   📎   Skipping download (file already exists and up-to-date): {dest}")
+                        skipped_links += 1
+                    
+                    processed_links += 1
                     rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
                     
                     # Create unique marker for this media file
@@ -418,7 +443,13 @@ class DriveContentSync:
                     
                     media_items.append({"type": media_type, "path": rel_path, "marker_id": marker_id})
                 except Exception as e:
-                    warnings.append(f"day {day}: failed to download linked media ({fid}): {e}")
+                    error_links += 1
+                    error_msg = f"day {day}: failed to download linked media ({fid}): {e}"
+                    logger.error(f"   ❌ {error_msg}")
+                    warnings.append(error_msg)
+            
+            if drive_links:
+                logger.info(f"   📎 Day {day} summary: {processed_links} processed, {skipped_links} skipped, {error_links} errors, {media_downloaded} downloaded")
 
             entry: Dict[str, Any] = {
                 "day_number": day,
