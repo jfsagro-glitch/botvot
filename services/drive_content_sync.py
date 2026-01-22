@@ -469,9 +469,15 @@ class DriveContentSync:
             }
             if media_items:
                 entry["media"] = media_items
-            # Store media markers for inline insertion
+            # CRITICAL: Store media markers for inline insertion
+            # Always store markers if they exist, even if no files were downloaded
             if media_markers:
                 entry["media_markers"] = media_markers
+                logger.info(f"   ✅ Stored {len(media_markers)} media_markers in entry for day {day}")
+                for marker_id in media_markers.keys():
+                    logger.info(f"   📎     - {marker_id}")
+            else:
+                logger.warning(f"   ⚠️ No media_markers for day {day} (drive_links found: {len(drive_links)})")
             compiled[str(day)] = entry
 
         return compiled, media_downloaded
