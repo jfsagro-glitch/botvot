@@ -2174,7 +2174,11 @@ class CourseBot:
             media_markers: Словарь маркеров -> информация о медиа
             day: Номер дня урока
         """
+        logger.info(f"   📎 _send_text_with_inline_media called for user {user_id}, day {day}")
+        logger.info(f"   📎 Text length: {len(text)}, media_markers count: {len(media_markers) if media_markers else 0}")
+        
         if not text:
+            logger.warning(f"   ⚠️ Empty text provided to _send_text_with_inline_media")
             return
         
         # Находим все маркеры в тексте
@@ -2182,8 +2186,13 @@ class CourseBot:
         marker_pattern = r'\[(MEDIA_[a-zA-Z0-9_-]+)\]'
         markers = re.findall(marker_pattern, text)
         
+        logger.info(f"   📎 Found {len(markers)} markers in text: {markers}")
+        if media_markers:
+            logger.info(f"   📎 Available media_markers keys: {list(media_markers.keys())}")
+        
         if not markers:
             # Нет маркеров, отправляем текст как есть
+            logger.info(f"   📎 No markers found, sending text as-is")
             await self._safe_send_message(user_id, text)
             return
         
