@@ -69,15 +69,17 @@ class UserService:
         # Only grant access if user doesn't already have it
         if not user.has_access():
             user.tariff = tariff
-            # Set start_date to tomorrow at LESSON_DELIVERY_TIME_LOCAL in configured timezone (default: Europe/Moscow),
-            # stored as naive UTC datetime for backwards compatibility.
+            # Set start_date to tomorrow at user's lesson_delivery_time_local or LESSON_DELIVERY_TIME_LOCAL
+            # in configured timezone (default: Europe/Moscow), stored as naive UTC datetime for backwards compatibility.
             now_utc = datetime.now(timezone.utc)
             tz = get_schedule_timezone()
             now_local = now_utc.astimezone(tz)
             tomorrow_local_date = (now_local + timedelta(days=1)).date()
+            # Use user's custom time if set, otherwise use config default
+            delivery_time_str = getattr(user, "lesson_delivery_time_local", None) or Config.LESSON_DELIVERY_TIME_LOCAL
             # Parse "HH:MM" (fallback to 08:30)
             try:
-                hh, mm = (Config.LESSON_DELIVERY_TIME_LOCAL or "").strip().split(":", 1)
+                hh, mm = (delivery_time_str or "").strip().split(":", 1)
                 delivery_t = time(hour=int(hh), minute=int(mm))
             except Exception:
                 delivery_t = time(8, 30)

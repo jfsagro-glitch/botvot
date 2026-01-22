@@ -67,6 +67,8 @@ class CourseBot:
 
         # Per-user transient states for "send one message" flows
         self._user_question_context: dict[int, dict] = {}
+        # Per-user states for time input
+        self._user_time_input_context: dict[int, str] = {}  # user_id -> "lesson" | "reminder_start" | "reminder_end"
         self._user_assignment_context: dict[int, dict] = {}
         
         # Проверяем, что уроки загружены
@@ -272,6 +274,12 @@ class CourseBot:
         
         # Обработчики для настройки наставника
         self.dp.callback_query.register(self.handle_mentor_set_frequency, F.data.startswith("mentor:set:"))
+        self.dp.callback_query.register(self.handle_mentor_settings, F.data.startswith("mentor:settings:"))
+        self.dp.callback_query.register(self.handle_mentor_time_set, F.data.startswith("mentor:time:"))
+        self.dp.callback_query.register(self.handle_mentor_back, F.data == "mentor:back")
+        
+        # Обработчик ввода времени для настройки наставника (перед общими обработчиками)
+        self.dp.message.register(self.handle_time_input, F.text & ~F.command)
         
         # Общие обработчики сообщений (после команд!)
         # ВАЖНО: Используем F.text & ~F.command чтобы НЕ перехватывать команды
@@ -4189,13 +4197,36 @@ class CourseBot:
         else:
             status_text = f"☑️ Напоминаний в день: {user.mentor_reminders}"
         
+        # Получаем текущие настройки времени
+        lesson_time = getattr(user, "lesson_delivery_time_local", None) or Config.LESSON_DELIVERY_TIME_LOCAL
+        reminder_start = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
+        reminder_end = getattr(user, "mentor_reminder_end_local", None) or Config.MENTOR_REMINDER_END_LOCAL
+        
+        # Добавляем кнопки для настройки времени
+        buttons.append([InlineKeyboardButton(
+            text="⏰ Время получения заданий",
+            callback_data="mentor:settings:lesson_time"
+        )])
+        
+        if user.mentor_reminders > 1:
+            buttons.append([InlineKeyboardButton(
+                text="🕐 Временной промежуток уведомлений",
+                callback_data="mentor:settings:reminder_window"
+            )])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        
+        time_info = f"\n\n⏰ <b>Время получения заданий:</b> {lesson_time}"
+        if user.mentor_reminders > 1:
+            time_info += f"\n🕐 <b>Уведомления:</b> {reminder_start} - {reminder_end}"
+        
         await message.answer(
             f"👨‍🏫 <b>НАСТАВНИК</b>\n\n"
             f"Текущий статус: {status_text}\n\n"
             f"Выберите частоту напоминаний:\n"
             f"• <b>0</b> — напоминания отключены\n"
             f"• <b>1-5</b> — количество напоминаний в день\n\n"
-            f"Напоминания содержат задание текущего урока.",
+            f"Напоминания содержат задание текущего урока.{time_info}",
             reply_markup=keyboard
         )
     
@@ -4249,6 +4280,271 @@ class CourseBot:
                 pass
         
         logger.info(f"User {user_id} set mentor reminders frequency to {frequency}")
+    
+    async def handle_time_input(self, message: Message):
+        """Handle time input in format HH:MM for mentor settings."""
+        user_id = message.from_user.id
+        text = message.text.strip()
+        
+        # Проверяем, ожидает ли пользователь ввода времени
+        time_context = self._user_time_input_context.get(user_id)
+        if not time_context:
+            # Не ожидаем ввода времени, пропускаем обработку
+            raise SkipHandler()
+        
+        # Проверяем формат времени ЧЧ:ММ
+        time_pattern = re.compile(r'^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$')
+        if not time_pattern.match(text):
+            await message.answer("❌ Неверный формат времени. Используйте формат ЧЧ:ММ (например, 09:30)")
+            return
+        
+        user = await self.user_service.get_user(user_id)
+        if not user or not user.has_access():
+            del self._user_time_input_context[user_id]
+            raise SkipHandler()
+        
+        # Парсим время
+        try:
+            hh, mm = text.split(":")
+            hour = int(hh)
+            minute = int(mm)
+            if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+                raise ValueError("Invalid time")
+        except (ValueError, IndexError):
+            await message.answer("❌ Неверный формат времени. Используйте формат ЧЧ:ММ (например, 09:30)")
+            return
+        
+        # Удаляем контекст ожидания
+        del self._user_time_input_context[user_id]
+        
+        # Обновляем соответствующую настройку на основе контекста
+        if time_context == "lesson":
+            user.lesson_delivery_time_local = text
+            await self.db.update_user(user)
+            
+            # Пересчитываем start_date с новым временем
+            from datetime import datetime, timedelta, time, timezone
+            from utils.schedule_timezone import get_schedule_timezone
+            if user.start_date:
+                tz = get_schedule_timezone()
+                now_utc = datetime.now(timezone.utc)
+                now_local = now_utc.astimezone(tz)
+                tomorrow_local_date = (now_local + timedelta(days=1)).date()
+                delivery_t = time(hour=hour, minute=minute)
+                start_local = datetime.combine(tomorrow_local_date, delivery_t, tzinfo=tz)
+                user.start_date = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+                await self.db.update_user(user)
+            
+            persistent_keyboard = self._create_persistent_keyboard()
+            await message.answer(
+                f"✅ Время получения заданий установлено: <b>{text}</b>\n\n"
+                f"Новые задания будут приходить каждый день в это время.",
+                reply_markup=persistent_keyboard
+            )
+            logger.info(f"User {user_id} set lesson delivery time to {text}")
+        
+        elif time_context == "reminder_start":
+            user.mentor_reminder_start_local = text
+            await self.db.update_user(user)
+            await message.answer(
+                f"✅ Время начала уведомлений установлено: <b>{text}</b>\n\n"
+                f"Теперь установите время конца промежутка уведомлений."
+            )
+            logger.info(f"User {user_id} set reminder start time to {text}")
+        
+        elif time_context == "reminder_end":
+            reminder_start = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
+            user.mentor_reminder_end_local = text
+            await self.db.update_user(user)
+            persistent_keyboard = self._create_persistent_keyboard()
+            await message.answer(
+                f"✅ Временной промежуток уведомлений установлен: "
+                f"<b>{reminder_start} - {text}</b>\n\n"
+                f"Напоминания будут равномерно распределены в течение этого промежутка.",
+                reply_markup=persistent_keyboard
+            )
+            logger.info(f"User {user_id} set reminder window to {reminder_start} - {text}")
+    
+    async def handle_mentor_settings(self, callback: CallbackQuery):
+        """Handle mentor settings menu (time settings)."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user or not user.has_access():
+            await callback.message.answer("❌ У вас нет доступа.")
+            return
+        
+        setting_type = callback.data.split(":")[-1]
+        
+        if setting_type == "lesson_time":
+            # Настройка времени получения заданий
+            await self._show_lesson_time_settings(callback.message, user)
+        elif setting_type == "reminder_window":
+            # Настройка временного промежутка уведомлений
+            await self._show_reminder_window_settings(callback.message, user)
+    
+    async def _show_lesson_time_settings(self, message: Message, user: User):
+        """Show lesson delivery time settings."""
+        current_time = getattr(user, "lesson_delivery_time_local", None) or Config.LESSON_DELIVERY_TIME_LOCAL
+        
+        # Создаем кнопки с популярными временами
+        buttons = []
+        popular_times = ["06:00", "07:00", "08:00", "08:30", "09:00", "10:00", "12:00", "18:00", "20:00"]
+        row = []
+        for time_str in popular_times:
+            text = time_str
+            if time_str == current_time:
+                text = f"{time_str} ☑️"
+            row.append(InlineKeyboardButton(
+                text=text,
+                callback_data=f"mentor:time:lesson:{time_str}"
+            ))
+            if len(row) == 3:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        
+        buttons.append([InlineKeyboardButton(
+            text="✏️ Ввести своё время",
+            callback_data="mentor:time:lesson:custom"
+        )])
+        buttons.append([InlineKeyboardButton(
+            text="◀️ Назад",
+            callback_data="mentor:back"
+        )])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        
+        await message.answer(
+            f"⏰ <b>Время получения заданий</b>\n\n"
+            f"Текущее время: <b>{current_time}</b>\n\n"
+            f"Выберите время, когда вы хотите получать новые задания каждый день:",
+            reply_markup=keyboard
+        )
+    
+    async def _show_reminder_window_settings(self, message: Message, user: User):
+        """Show reminder window time settings."""
+        current_start = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
+        current_end = getattr(user, "mentor_reminder_end_local", None) or Config.MENTOR_REMINDER_END_LOCAL
+        
+        # Создаем кнопки для настройки начала и конца промежутка
+        buttons = [
+            [InlineKeyboardButton(
+                text=f"🕐 Начало: {current_start}",
+                callback_data="mentor:time:reminder_start:custom"
+            )],
+            [InlineKeyboardButton(
+                text=f"🕐 Конец: {current_end}",
+                callback_data="mentor:time:reminder_end:custom"
+            )],
+            [InlineKeyboardButton(
+                text="◀️ Назад",
+                callback_data="mentor:back"
+            )]
+        ]
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        
+        await message.answer(
+            f"🕐 <b>Временной промежуток уведомлений</b>\n\n"
+            f"Текущий промежуток: <b>{current_start} - {current_end}</b>\n\n"
+            f"Выберите, когда вы хотите получать напоминания от наставника.\n"
+            f"Напоминания будут равномерно распределены в течение этого промежутка.",
+            reply_markup=keyboard
+        )
+    
+    async def handle_mentor_time_set(self, callback: CallbackQuery):
+        """Handle time setting selection."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user or not user.has_access():
+            await callback.message.answer("❌ У вас нет доступа.")
+            return
+        
+        parts = callback.data.split(":")
+        setting_type = parts[2]  # "lesson" or "reminder_start" or "reminder_end"
+        
+        if setting_type == "lesson":
+            if parts[3] == "custom":
+                # Запрашиваем ввод времени
+                self._user_time_input_context[user_id] = "lesson"
+                await callback.message.answer(
+                    "⏰ Введите время получения заданий в формате ЧЧ:ММ (например, 09:30):\n\n"
+                    "Отправьте время текстом, например: 09:30"
+                )
+                return
+            else:
+                # Установлено конкретное время
+                time_str = parts[3]
+                user.lesson_delivery_time_local = time_str
+                await self.db.update_user(user)
+                
+                # Пересчитываем start_date с новым временем
+                from datetime import datetime, timedelta, time, timezone
+                from utils.schedule_timezone import get_schedule_timezone
+                if user.start_date:
+                    tz = get_schedule_timezone()
+                    now_utc = datetime.now(timezone.utc)
+                    now_local = now_utc.astimezone(tz)
+                    tomorrow_local_date = (now_local + timedelta(days=1)).date()
+                    try:
+                        hh, mm = time_str.strip().split(":", 1)
+                        delivery_t = time(hour=int(hh), minute=int(mm))
+                    except Exception:
+                        delivery_t = time(8, 30)
+                    start_local = datetime.combine(tomorrow_local_date, delivery_t, tzinfo=tz)
+                    user.start_date = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+                    await self.db.update_user(user)
+                
+                persistent_keyboard = self._create_persistent_keyboard()
+                await callback.message.answer(
+                    f"✅ Время получения заданий установлено: <b>{time_str}</b>\n\n"
+                    f"Новые задания будут приходить каждый день в это время.",
+                    reply_markup=persistent_keyboard
+                )
+                logger.info(f"User {user_id} set lesson delivery time to {time_str}")
+        
+        elif setting_type == "reminder_start":
+            self._user_time_input_context[user_id] = "reminder_start"
+            await callback.message.answer(
+                "🕐 Введите время начала промежутка уведомлений в формате ЧЧ:ММ (например, 09:30):\n\n"
+                "Отправьте время текстом, например: 09:30"
+            )
+        elif setting_type == "reminder_end":
+            self._user_time_input_context[user_id] = "reminder_end"
+            await callback.message.answer(
+                "🕐 Введите время конца промежутка уведомлений в формате ЧЧ:ММ (например, 22:00):\n\n"
+                "Отправьте время текстом, например: 22:00"
+            )
+    
+    async def handle_mentor_back(self, callback: CallbackQuery):
+        """Handle back button in mentor settings."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        user = await self.user_service.get_user(user_id)
+        
+        if not user or not user.has_access():
+            await callback.message.answer("❌ У вас нет доступа.")
+            return
+        
+        # Показываем главное меню наставника
+        await self.handle_keyboard_mentor(callback.message)
     
     async def _send_mentor_reminder(self, user: User):
         """

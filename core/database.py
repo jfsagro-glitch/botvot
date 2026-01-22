@@ -118,6 +118,36 @@ class Database:
             # Поле уже существует, игнорируем ошибку
             pass
         
+        # Миграция: добавляем поле lesson_delivery_time_local, если его нет
+        try:
+            await self.conn.execute("""
+                ALTER TABLE users ADD COLUMN lesson_delivery_time_local TEXT
+            """)
+            await self.conn.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
+        
+        # Миграция: добавляем поле mentor_reminder_start_local, если его нет
+        try:
+            await self.conn.execute("""
+                ALTER TABLE users ADD COLUMN mentor_reminder_start_local TEXT
+            """)
+            await self.conn.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
+        
+        # Миграция: добавляем поле mentor_reminder_end_local, если его нет
+        try:
+            await self.conn.execute("""
+                ALTER TABLE users ADD COLUMN mentor_reminder_end_local TEXT
+            """)
+            await self.conn.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
+        
         # Lessons table
         await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS lessons (
@@ -765,6 +795,7 @@ class Database:
                 tariff = ?, referral_partner_id = ?,
                 start_date = ?, current_day = ?, mentor_reminders = ?, last_mentor_reminder = ?,
                 legal_accepted_at = ?,
+                lesson_delivery_time_local = ?, mentor_reminder_start_local = ?, mentor_reminder_end_local = ?,
                 updated_at = ?
             WHERE user_id = ?
         """, (
@@ -775,6 +806,9 @@ class Database:
             user.current_day, user.mentor_reminders,
             user.last_mentor_reminder.isoformat() if user.last_mentor_reminder else None,
             user.legal_accepted_at.isoformat() if getattr(user, "legal_accepted_at", None) else None,
+            getattr(user, "lesson_delivery_time_local", None),
+            getattr(user, "mentor_reminder_start_local", None),
+            getattr(user, "mentor_reminder_end_local", None),
             datetime.utcnow().isoformat(),
             user.user_id
         ))
@@ -1150,7 +1184,10 @@ class Database:
             updated_at=datetime.fromisoformat(row["updated_at"]),
             mentor_reminders=row["mentor_reminders"] if "mentor_reminders" in row.keys() else 0,
             last_mentor_reminder=datetime.fromisoformat(row["last_mentor_reminder"]) if ("last_mentor_reminder" in row.keys() and row["last_mentor_reminder"]) else None,
-            legal_accepted_at=datetime.fromisoformat(row["legal_accepted_at"]) if ("legal_accepted_at" in row.keys() and row["legal_accepted_at"]) else None
+            legal_accepted_at=datetime.fromisoformat(row["legal_accepted_at"]) if ("legal_accepted_at" in row.keys() and row["legal_accepted_at"]) else None,
+            lesson_delivery_time_local=row["lesson_delivery_time_local"] if ("lesson_delivery_time_local" in row.keys() and row["lesson_delivery_time_local"]) else None,
+            mentor_reminder_start_local=row["mentor_reminder_start_local"] if ("mentor_reminder_start_local" in row.keys() and row["mentor_reminder_start_local"]) else None,
+            mentor_reminder_end_local=row["mentor_reminder_end_local"] if ("mentor_reminder_end_local" in row.keys() and row["mentor_reminder_end_local"]) else None
         )
     
     def _row_to_lesson(self, row) -> Lesson:

@@ -83,14 +83,6 @@ class MentorReminderScheduler:
                 return time(hour=int(hh), minute=int(mm))
             except Exception:
                 return default
-
-        window_start_t = _parse_hhmm(Config.MENTOR_REMINDER_START_LOCAL, time(9, 30))
-        window_end_t = _parse_hhmm(Config.MENTOR_REMINDER_END_LOCAL, time(22, 0))
-        window_start_dt = datetime.combine(local_now.date(), window_start_t, tzinfo=tz)
-        window_end_dt = datetime.combine(local_now.date(), window_end_t, tzinfo=tz)
-        # Guard against misconfig where end <= start (window spans midnight)
-        if window_end_dt <= window_start_dt:
-            window_end_dt = window_end_dt + timedelta(days=1)
         
         enabled = 0
         sent = 0
@@ -117,24 +109,34 @@ class MentorReminderScheduler:
                     continue
                 
                 # Respect the allowed local-time window (e.g., 09:30–22:00).
+                # Use user's custom window if set, otherwise use config default.
                 # We do NOT send reminders outside this window.
+                user_window_start_str = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
+                user_window_end_str = getattr(user, "mentor_reminder_end_local", None) or Config.MENTOR_REMINDER_END_LOCAL
+                
+                window_start_t = _parse_hhmm(user_window_start_str, time(9, 30))
+                window_end_t = _parse_hhmm(user_window_end_str, time(22, 0))
+                user_window_start_dt = datetime.combine(local_now.date(), window_start_t, tzinfo=tz)
+                user_window_end_dt = datetime.combine(local_now.date(), window_end_t, tzinfo=tz)
+                # Guard against misconfig where end <= start (window spans midnight)
+                if user_window_end_dt <= user_window_start_dt:
+                    user_window_end_dt = user_window_end_dt + timedelta(days=1)
+                
                 user_now = local_now
-                user_window_start = window_start_dt
-                user_window_end = window_end_dt
 
-                if user_now < user_window_start or user_now > user_window_end:
+                if user_now < user_window_start_dt or user_now > user_window_end_dt:
                     skipped_window += 1
                     continue
 
                 # Distribute reminders evenly within the window.
-                window_duration = user_window_end - user_window_start
+                window_duration = user_window_end_dt - user_window_start_dt
                 interval = window_duration / max(user.mentor_reminders, 1)
                 
                 # Проверяем, прошло ли достаточно времени с момента последнего напоминания
                 if user.last_mentor_reminder:
                     last_local = user.last_mentor_reminder.replace(tzinfo=timezone.utc).astimezone(tz)
                     # If last reminder was before today's window, treat it as "not sent today"
-                    if last_local < user_window_start:
+                    if last_local < user_window_start_dt:
                         pass
                     else:
                         time_since_last = user_now - last_local
@@ -171,7 +173,6 @@ class MentorReminderScheduler:
                 f"skipped_window={skipped_window} skipped_interval={skipped_interval} "
                 f"skipped_activity={skipped_started} errors={errors} "
                 f"local_now={local_now.strftime('%Y-%m-%d %H:%M')} "
-                f"window={window_start_t.strftime('%H:%M')}-{window_end_t.strftime('%H:%M')} "
                 f"tz={format_tz(tz)}"
             )
         except Exception:

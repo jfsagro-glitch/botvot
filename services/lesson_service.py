@@ -4,12 +4,13 @@ Lesson service for managing course lessons and delivery.
 Handles lesson retrieval, scheduling, and delivery logic.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time, timezone
 from typing import Optional, List
 
 from core.database import Database
 from core.models import User, Lesson, UserProgress
 from core.config import Config
+from utils.schedule_timezone import get_schedule_timezone
 
 # Импортируем LessonLoader с проверкой, чтобы избежать циклических зависимостей
 try:
@@ -61,6 +62,7 @@ class LessonService:
         - Lesson 0 is sent immediately after purchase (handled separately)
         - Lesson 1 is sent on start_date (configured local delivery time, stored in UTC)
         - Subsequent lessons are sent daily at the same delivery time
+        - Uses user's custom lesson_delivery_time_local if set, otherwise uses Config default
         """
         if not user.has_access() or not user.start_date:
             return False
@@ -69,14 +71,34 @@ class LessonService:
         if user.current_day == 0:
             return False
         
-        # Calculate when the lesson should be sent
-        # start_date is set to tomorrow at Config.LESSON_DELIVERY_TIME_LOCAL (local timezone) when access is granted
-        # Lesson 1 should be sent at start_date
-        # Lesson 2 should be sent at start_date + 1 day
-        # etc.
-        expected_lesson_time = user.start_date + timedelta(days=user.current_day - 1)
+        # Get user's delivery time or use default
+        delivery_time_str = getattr(user, "lesson_delivery_time_local", None) or Config.LESSON_DELIVERY_TIME_LOCAL
         
-        return datetime.utcnow() >= expected_lesson_time
+        # Parse delivery time
+        try:
+            hh, mm = delivery_time_str.strip().split(":", 1)
+            delivery_t = time(hour=int(hh), minute=int(mm))
+        except Exception:
+            delivery_t = time(8, 30)  # Default fallback
+        
+        # Calculate expected lesson time in user's timezone
+        tz = get_schedule_timezone()
+        now_utc = datetime.now(timezone.utc)
+        now_local = now_utc.astimezone(tz)
+        
+        # Calculate the day when lesson should be sent
+        # start_date is stored as naive UTC, convert to local timezone
+        start_date_utc = user.start_date.replace(tzinfo=timezone.utc) if user.start_date.tzinfo is None else user.start_date
+        start_date_local = start_date_utc.astimezone(tz)
+        
+        # Calculate expected lesson date
+        expected_lesson_date = start_date_local.date() + timedelta(days=user.current_day - 1)
+        expected_lesson_datetime_local = datetime.combine(expected_lesson_date, delivery_t, tzinfo=tz)
+        
+        # Convert to UTC for comparison
+        expected_lesson_time_utc = expected_lesson_datetime_local.astimezone(timezone.utc).replace(tzinfo=None)
+        
+        return datetime.utcnow() >= expected_lesson_time_utc
     
     async def get_next_lesson_day(self, user: User) -> Optional[int]:
         """Get the next lesson day number for a user."""
