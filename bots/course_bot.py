@@ -276,7 +276,6 @@ class CourseBot:
         self.dp.callback_query.register(self.handle_mentor_set_frequency, F.data.startswith("mentor:set:"))
         self.dp.callback_query.register(self.handle_mentor_settings, F.data.startswith("mentor:settings:"))
         self.dp.callback_query.register(self.handle_mentor_time_set, F.data.startswith("mentor:time:"))
-        self.dp.callback_query.register(self.handle_mentor_back, F.data == "mentor:back")
         
         # Обработчик ввода времени для настройки наставника (перед общими обработчиками)
         self.dp.message.register(self.handle_time_input, F.text & ~F.command)
@@ -2121,6 +2120,7 @@ class CourseBot:
     def _strip_url_only_lines(self, text: str, urls: set[str]) -> str:
         """
         Remove lines that contain only a URL (to avoid duplicate link + preview blocks).
+        Also removes URLs from lines that end with a URL (common pattern: "text https://...")
         """
         if not text or not urls:
             return text
@@ -2130,9 +2130,26 @@ class CourseBot:
             if not line:
                 cleaned.append(raw_line)
                 continue
+            # Check if line is exactly a URL
             if line in urls:
                 continue
-            cleaned.append(raw_line)
+            # Check if line ends with a URL (remove the URL part)
+            line_cleaned = line
+            for url in urls:
+                # Remove URL if it's at the end of the line (with optional whitespace)
+                if line.rstrip().endswith(url):
+                    # Remove URL and any trailing whitespace before it
+                    line_cleaned = line[:line.rfind(url)].rstrip()
+                    break
+                # Also check if URL is at the start of the line
+                if line.lstrip().startswith(url):
+                    # Remove URL and any leading whitespace after it
+                    remaining = line[line.find(url) + len(url):].lstrip()
+                    line_cleaned = remaining if remaining else ""
+                    break
+            # Only add non-empty lines
+            if line_cleaned and line_cleaned.strip():
+                cleaned.append(line_cleaned)
         return "\n".join(cleaned)
     # Assignment headings sometimes come with a leading emoji/icon, e.g. "🔗 #Задание 28".
     # We allow optional non-word prefix before the Markdown heading markers.
@@ -4414,10 +4431,6 @@ class CourseBot:
             text="✏️ Ввести своё время",
             callback_data="mentor:time:lesson:custom"
         )])
-        buttons.append([InlineKeyboardButton(
-            text="◀️ Назад",
-            callback_data="mentor:back"
-        )])
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
         
@@ -4442,10 +4455,6 @@ class CourseBot:
             [InlineKeyboardButton(
                 text=f"🕐 Конец: {current_end}",
                 callback_data="mentor:time:reminder_end:custom"
-            )],
-            [InlineKeyboardButton(
-                text="◀️ Назад",
-                callback_data="mentor:back"
             )]
         ]
         
@@ -4528,23 +4537,6 @@ class CourseBot:
                 "🕐 Введите время конца промежутка уведомлений в формате ЧЧ:ММ (например, 22:00):\n\n"
                 "Отправьте время текстом, например: 22:00"
             )
-    
-    async def handle_mentor_back(self, callback: CallbackQuery):
-        """Handle back button in mentor settings."""
-        try:
-            await callback.answer()
-        except:
-            pass
-        
-        user_id = callback.from_user.id
-        user = await self.user_service.get_user(user_id)
-        
-        if not user or not user.has_access():
-            await callback.message.answer("❌ У вас нет доступа.")
-            return
-        
-        # Показываем главное меню наставника
-        await self.handle_keyboard_mentor(callback.message)
     
     async def _send_mentor_reminder(self, user: User):
         """
