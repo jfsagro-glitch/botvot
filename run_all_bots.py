@@ -198,15 +198,31 @@ async def main():
     course_bot: Optional[CourseBot] = None
     admin_bot: Optional[AdminBot] = None
     web_runner: Optional[web.AppRunner] = None
+    
+    logger.info("=" * 60)
+    logger.info("🚀 Запуск платформы курсов")
+    logger.info("=" * 60)
+    
+    # Создаем и настраиваем HTTP приложение СРАЗУ для быстрого healthcheck
     web_app = web.Application()
     web_app.router.add_get("/", _handle_health)
     web_app.router.add_get("/health", _handle_health)
     web_app.router.add_get("/version", _handle_version)
     web_app.router.add_post("/payment/webhook", _handle_yookassa_webhook)
     
-    logger.info("=" * 60)
-    logger.info("🚀 Запуск платформы курсов")
-    logger.info("=" * 60)
+    # КРИТИЧЕСКИ ВАЖНО: Запускаем HTTP сервер САМЫМ ПЕРВЫМ
+    # Railway проверяет healthcheck сразу, даже если боты еще не готовы
+    logger.info("🌐 Запуск HTTP сервера для healthcheck (приоритет #1)...")
+    try:
+        web_runner = await start_web_server(web_app)
+        logger.info("✅ HTTP сервер успешно запущен и готов отвечать на healthcheck/webhook")
+        logger.info(f"🌐 Healthcheck endpoint: http://0.0.0.0:{_get_port()}/health")
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка при запуске HTTP сервера: {e}", exc_info=True)
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.error("❌ Не могу продолжить без HTTP сервера. Завершаю работу.")
+        sys.exit(1)
 
     # Railway / deploy diagnostics (helps confirm which revision is actually running)
     try:
@@ -318,24 +334,6 @@ async def main():
                 logger.warning("⚠️ Решение: подключить Volume и поставить DATABASE_PATH на примонтированный путь (например /app/data/course_platform.db).")
     except Exception as e:
         logger.warning(f"⚠️ Не удалось выполнить диагностику DATABASE_PATH: {e}")
-    
-    # КРИТИЧЕСКИ ВАЖНО: Запускаем HTTP сервер ПЕРВЫМ
-    # Railway проверяет healthcheck сразу, даже если боты еще не готовы
-    logger.info("Запуск HTTP сервера для healthcheck...")
-    web_runner = None
-    try:
-        web_runner = await start_web_server(web_app)
-        logger.info("✅ HTTP сервер успешно запущен и готов отвечать на healthcheck/webhook")
-        logger.info(f"🌐 Healthcheck endpoint: http://0.0.0.0:{_get_port()}/health")
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка при запуске HTTP сервера: {e}", exc_info=True)
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        logger.error("⚠️ Продолжаем без HTTP сервера (healthcheck НЕ БУДЕТ работать)")
-        web_runner = None
-        # Если HTTP сервер не запустился, приложение не может работать
-        logger.error("❌ Не могу продолжить без HTTP сервера. Завершаю работу.")
-        sys.exit(1)
     
     # Теперь проверяем конфигурацию (после запуска HTTP сервера)
     try:
