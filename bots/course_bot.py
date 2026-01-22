@@ -2499,6 +2499,14 @@ class CourseBot:
             
             # Получаем маркеры медиа для встроенной вставки
             media_markers = lesson_data.get("media_markers", {})
+            logger.info(f"   📎 Media markers in lesson_data for day {day}: {len(media_markers) if media_markers else 0} markers")
+            if media_markers:
+                logger.info(f"   📎 Media markers keys: {list(media_markers.keys())}")
+                for marker_id, marker_info in media_markers.items():
+                    logger.info(f"   📎   - {marker_id}: type={marker_info.get('type')}, path={marker_info.get('path')}, name={marker_info.get('name')}")
+            else:
+                logger.warning(f"   ⚠️ No media_markers found in lesson_data for day {day}!")
+                logger.warning(f"   ⚠️ Available keys in lesson_data: {list(lesson_data.keys())}")
 
             # Some sources put the assignment inside the main text. Extract it so it becomes a separate block.
             extracted_task_from_posts = ""
