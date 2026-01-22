@@ -88,6 +88,44 @@ class DriveContentSync:
             for m in re.findall(p, text):
                 ids.add(m)
         return list(ids)
+    
+    @staticmethod
+    def _find_drive_links_with_positions(text: str) -> List[Dict[str, str]]:
+        """
+        Find all Drive links in text with their positions and file IDs.
+        Returns list of dicts with 'url', 'file_id', 'start', 'end'.
+        """
+        if not text:
+            return []
+        
+        links = []
+        patterns = [
+            (r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]{10,})", lambda m: f"https://drive.google.com/file/d/{m.group(1)}"),
+            (r"https?://drive\.google\.com/open\?id=([a-zA-Z0-9_-]{10,})", lambda m: m.group(0)),
+            (r"https?://drive\.google\.com/uc\?id=([a-zA-Z0-9_-]{10,})", lambda m: m.group(0)),
+            (r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]{10,})", lambda m: m.group(0)),
+        ]
+        
+        for pattern, url_builder in patterns:
+            for match in re.finditer(pattern, text):
+                file_id = match.group(1)
+                full_url = url_builder(match)
+                links.append({
+                    "url": full_url,
+                    "file_id": file_id,
+                    "start": match.start(),
+                    "end": match.end()
+                })
+        
+        # Remove duplicates (same file_id)
+        seen_ids = set()
+        unique_links = []
+        for link in links:
+            if link["file_id"] not in seen_ids:
+                seen_ids.add(link["file_id"])
+                unique_links.append(link)
+        
+        return unique_links
 
     @staticmethod
     def _split_master_doc(text: str) -> Dict[int, Dict[str, str]]:
@@ -309,26 +347,55 @@ class DriveContentSync:
                 lesson_text = str(lesson_raw).strip()
             task_text = (data.get("task") or "").strip()
 
-            # Optional: download Drive-linked media referenced in the text/task
+            # Process Drive-linked media referenced in the text/task
+            # Replace links with markers and download files
             media_items: List[Dict[str, Any]] = []
-            for fid in self._extract_drive_file_ids(lesson_text + "\n" + task_text):
+            media_markers: Dict[str, Dict[str, Any]] = {}  # marker_id -> media_info
+            
+            # Find all Drive links in lesson and task text
+            combined_text = lesson_text + "\n" + task_text
+            drive_links = self._find_drive_links_with_positions(combined_text)
+            
+            # Process links in reverse order to preserve positions when replacing
+            drive_links.sort(key=lambda x: x["start"], reverse=True)
+            
+            for link_info in drive_links:
+                fid = link_info["file_id"]
+                link_url = link_info["url"]
                 try:
                     meta = drive.files().get(fileId=fid, fields="id,name,mimeType,modifiedTime,size").execute()
                     mt = (meta.get("mimeType") or "").lower()
                     name = (meta.get("name") or f"file_{fid}").strip()
+                    
                     if mt.startswith("image/"):
                         media_type = "photo"
                     elif mt.startswith("video/"):
                         media_type = "video"
                     else:
-                        continue
+                        continue  # Skip non-media files
+                    
                     safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
                     dest = media_root / f"day_{day:02d}" / safe_name
                     if not self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime")):
                         self._download_binary_file(drive, fid, dest)
                         media_downloaded += 1
                     rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
-                    media_items.append({"type": media_type, "path": rel_path})
+                    
+                    # Create unique marker for this media file
+                    marker_id = f"MEDIA_{fid}_{len(media_markers)}"
+                    media_markers[marker_id] = {
+                        "type": media_type,
+                        "path": rel_path,
+                        "file_id": fid,
+                        "name": name
+                    }
+                    
+                    # Replace link in text with marker
+                    marker_placeholder = f"[{marker_id}]"
+                    lesson_text = lesson_text.replace(link_url, marker_placeholder)
+                    task_text = task_text.replace(link_url, marker_placeholder)
+                    
+                    media_items.append({"type": media_type, "path": rel_path, "marker_id": marker_id})
                 except Exception as e:
                     warnings.append(f"day {day}: failed to download linked media ({fid}): {e}")
 
@@ -340,6 +407,9 @@ class DriveContentSync:
             }
             if media_items:
                 entry["media"] = media_items
+            # Store media markers for inline insertion
+            if media_markers:
+                entry["media_markers"] = media_markers
             compiled[str(day)] = entry
 
         return compiled, media_downloaded

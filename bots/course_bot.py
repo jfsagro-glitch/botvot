@@ -17,7 +17,7 @@ import re
 import sys
 import aiohttp
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from urllib.parse import parse_qs, urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
@@ -2164,6 +2164,65 @@ class CourseBot:
         re.IGNORECASE,
     )
 
+    async def _send_text_with_inline_media(self, user_id: int, text: str, media_markers: Dict[str, Dict[str, Any]], day: int):
+        """
+        Отправляет текст с встроенными медиа-файлами в местах маркеров.
+        
+        Args:
+            user_id: ID пользователя
+            text: Текст урока с маркерами вида [MEDIA_fileid_index]
+            media_markers: Словарь маркеров -> информация о медиа
+            day: Номер дня урока
+        """
+        if not text:
+            return
+        
+        # Находим все маркеры в тексте
+        import re
+        marker_pattern = r'\[(MEDIA_[a-zA-Z0-9_-]+)\]'
+        markers = re.findall(marker_pattern, text)
+        
+        if not markers:
+            # Нет маркеров, отправляем текст как есть
+            await self._safe_send_message(user_id, text)
+            return
+        
+        # Разбиваем текст на части по маркерам
+        parts = re.split(marker_pattern, text)
+        
+        for i, part in enumerate(parts):
+            if not part.strip():
+                continue
+            
+            # Проверяем, является ли часть маркером
+            if part in markers and part in media_markers:
+                # Отправляем медиа-файл
+                media_info = media_markers[part]
+                media_type = media_info.get("type")
+                media_path = media_info.get("path")
+                
+                try:
+                    if media_type == "photo":
+                        from pathlib import Path
+                        from aiogram.types import FSInputFile
+                        photo_file = FSInputFile(Path(media_path))
+                        await self.bot.send_photo(user_id, photo_file)
+                        logger.info(f"   ✅ Sent inline photo from marker {part} for lesson {day}")
+                    elif media_type == "video":
+                        from pathlib import Path
+                        from aiogram.types import FSInputFile
+                        video_file = FSInputFile(Path(media_path))
+                        await self.bot.send_video(user_id, video_file)
+                        logger.info(f"   ✅ Sent inline video from marker {part} for lesson {day}")
+                    await asyncio.sleep(0.3)
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Failed to send inline media from marker {part}: {e}")
+            else:
+                # Отправляем текстовую часть
+                if part.strip():
+                    await self._safe_send_message(user_id, part.strip())
+                    await asyncio.sleep(0.2)
+    
     def _split_assignment_from_text(self, text: str) -> tuple[str, str]:
         """
         Split a combined lesson text into (lesson_text, assignment_text).
@@ -2346,6 +2405,9 @@ class CourseBot:
                 lesson_posts = lesson_text_raw
             else:
                 lesson_posts = []
+            
+            # Получаем маркеры медиа для встроенной вставки
+            media_markers = lesson_data.get("media_markers", {})
 
             # Some sources put the assignment inside the main text. Extract it so it becomes a separate block.
             extracted_task_from_posts = ""
@@ -2729,79 +2791,108 @@ class CourseBot:
                         media_index += 1
                         await asyncio.sleep(0.3)
                 else:
-                    # Стандартная логика распределения медиа для всех остальных уроков
-                    # Разбиваем текст на абзацы (по двойным переносам строк)
-                    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-                    
-                    if len(paragraphs) > 0:
-                        # Распределяем медиа равномерно по абзацам
-                        # Вычисляем интервалы между медиа
-                        if len(paragraphs) >= remaining_media:
-                            # Если абзацев больше или равно медиа, распределяем равномерно
-                            step = len(paragraphs) // (remaining_media + 1)
-                            media_positions = [step * (i + 1) for i in range(remaining_media)]
-                        else:
-                            # Если абзацев меньше медиа, размещаем медиа после каждого абзаца
-                            media_positions = list(range(1, len(paragraphs) + 1))[:remaining_media]
+                    # Проверяем, есть ли маркеры медиа в тексте для встроенной вставки
+                    if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
+                        # Используем встроенную вставку медиа по маркерам
+                        await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                        logger.info(f"   ✅ Sent lesson text with inline media markers for day {day}")
                         
-                        # Отправляем абзацы с медиа между ними
-                        for i, paragraph in enumerate(paragraphs):
-                            # Отправляем абзац
-                            if paragraph:
-                                await self._safe_send_message(user.user_id, paragraph)
-                                await asyncio.sleep(0.2)
+                        # Отправляем оставшиеся медиа из списка (если есть)
+                        while media_index < media_count:
+                            await self._send_media_item(user.user_id, media_list[media_index], day)
+                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after inline media for lesson {day}")
+                            media_index += 1
+                            await asyncio.sleep(0.3)
+                    else:
+                        # Стандартная логика распределения медиа для всех остальных уроков
+                        # Разбиваем текст на абзацы (по двойным переносам строк)
+                        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+                        
+                        if len(paragraphs) > 0:
+                            # Распределяем медиа равномерно по абзацам
+                            # Вычисляем интервалы между медиа
+                            if len(paragraphs) >= remaining_media:
+                                # Если абзацев больше или равно медиа, распределяем равномерно
+                                step = len(paragraphs) // (remaining_media + 1)
+                                media_positions = [step * (i + 1) for i in range(remaining_media)]
+                            else:
+                                # Если абзацев меньше медиа, размещаем медиа после каждого абзаца
+                                media_positions = list(range(1, len(paragraphs) + 1))[:remaining_media]
                             
-                            # Если наступила позиция для медиа, отправляем его
-                            if (i + 1) in media_positions and media_index < media_count:
+                            # Отправляем абзацы с медиа между ними
+                            for i, paragraph in enumerate(paragraphs):
+                                # Отправляем абзац
+                                if paragraph:
+                                    await self._safe_send_message(user.user_id, paragraph)
+                                    await asyncio.sleep(0.2)
+                                
+                                # Если наступила позиция для медиа, отправляем его
+                                if (i + 1) in media_positions and media_index < media_count:
+                                    await self._send_media_item(user.user_id, media_list[media_index], day)
+                                    logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} in text for lesson {day}")
+                                    media_index += 1
+                                    await asyncio.sleep(0.3)
+                            
+                            # Отправляем оставшиеся медиа после последнего абзаца (если есть)
+                            while media_index < media_count:
                                 await self._send_media_item(user.user_id, media_list[media_index], day)
-                                logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} in text for lesson {day}")
+                                logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
                                 media_index += 1
                                 await asyncio.sleep(0.3)
                         
-                        # Отправляем оставшиеся медиа после последнего абзаца (если есть)
-                        while media_index < media_count:
-                            await self._send_media_item(user.user_id, media_list[media_index], day)
-                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
-                            media_index += 1
-                            await asyncio.sleep(0.3)
-                    
                         # Если урок разбит на несколько постов, отправляем остальные посты после медиа
                         if len(lesson_posts) > 1:
                             for i in range(1, len(lesson_posts)):
                                 post_text = lesson_posts[i]
                                 if post_text and post_text.strip():
-                                    await self._safe_send_message(user.user_id, post_text.strip())
+                                    # Проверяем маркеры и в этом посте
+                                    if media_markers and any(f"[{marker}]" in post_text for marker in media_markers.keys()):
+                                        await self._send_text_with_inline_media(user.user_id, post_text.strip(), media_markers, day)
+                                    else:
+                                        await self._safe_send_message(user.user_id, post_text.strip())
                                     if i < len(lesson_posts) - 1:
                                         await asyncio.sleep(0.5)
                             logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
-                    else:
-                        # Если нет абзацев, отправляем весь текст и медиа после него
-                        # Если урок разбит на несколько постов, отправляем первый пост, затем медиа, затем остальные посты
-                        if len(lesson_posts) > 1:
-                            # Отправляем первый пост
-                            if lesson_posts[0] and lesson_posts[0].strip():
-                                await self._safe_send_message(user.user_id, lesson_posts[0].strip())
+                        else:
+                            # Если нет абзацев, отправляем весь текст и медиа после него
+                            # Если урок разбит на несколько постов, отправляем первый пост, затем медиа, затем остальные посты
+                            if len(lesson_posts) > 1:
+                                # Отправляем первый пост
+                                if lesson_posts[0] and lesson_posts[0].strip():
+                                    # Проверяем маркеры в первом посте
+                                    if media_markers and any(f"[{marker}]" in lesson_posts[0] for marker in media_markers.keys()):
+                                        await self._send_text_with_inline_media(user.user_id, lesson_posts[0].strip(), media_markers, day)
+                                    else:
+                                        await self._safe_send_message(user.user_id, lesson_posts[0].strip())
+                                    await asyncio.sleep(0.3)
+                            elif text.strip():
+                                # Проверяем маркеры в тексте
+                                if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
+                                    await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                                else:
+                                    await self._safe_send_message(user.user_id, text)
                                 await asyncio.sleep(0.3)
-                        elif text.strip():
-                            await self._safe_send_message(user.user_id, text)
-                            await asyncio.sleep(0.3)
-                        
-                        # Отправляем все оставшиеся медиа
-                        while media_index < media_count:
-                            await self._send_media_item(user.user_id, media_list[media_index], day)
-                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
-                            media_index += 1
-                            await asyncio.sleep(0.3)
-                    
-                    # Если урок разбит на несколько постов, отправляем остальные посты после медиа
-                    if len(lesson_posts) > 1:
-                        for i in range(1, len(lesson_posts)):
-                            post_text = lesson_posts[i]
-                            if post_text and post_text.strip():
-                                await self._safe_send_message(user.user_id, post_text.strip())
-                                if i < len(lesson_posts) - 1:
-                                    await asyncio.sleep(0.5)
-                        logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
+                            
+                            # Отправляем все оставшиеся медиа
+                            while media_index < media_count:
+                                await self._send_media_item(user.user_id, media_list[media_index], day)
+                                logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
+                                media_index += 1
+                                await asyncio.sleep(0.3)
+                            
+                            # Если урок разбит на несколько постов, отправляем остальные посты после медиа
+                            if len(lesson_posts) > 1:
+                                for i in range(1, len(lesson_posts)):
+                                    post_text = lesson_posts[i]
+                                    if post_text and post_text.strip():
+                                        # Проверяем маркеры и в этом посте
+                                        if media_markers and any(f"[{marker}]" in post_text for marker in media_markers.keys()):
+                                            await self._send_text_with_inline_media(user.user_id, post_text.strip(), media_markers, day)
+                                        else:
+                                            await self._safe_send_message(user.user_id, post_text.strip())
+                                        if i < len(lesson_posts) - 1:
+                                            await asyncio.sleep(0.5)
+                                logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
             else:
                 # Если медиа нет или уже все отправлены, отправляем текст как обычно
                 # Если урок разбит на несколько постов, отправляем их последовательно
@@ -2812,7 +2903,11 @@ class CourseBot:
                             # Анимация перед отправкой поста (только для первого)
                             if i == 0:
                                 await send_typing_action(self.bot, user.user_id, 0.5)
-                            await self._safe_send_message(user.user_id, post_text.strip())
+                            # Проверяем маркеры в посте
+                            if media_markers and any(f"[{marker}]" in post_text for marker in media_markers.keys()):
+                                await self._send_text_with_inline_media(user.user_id, post_text.strip(), media_markers, day)
+                            else:
+                                await self._safe_send_message(user.user_id, post_text.strip())
                             # Пауза между постами (кроме последнего)
                             if i < len(lesson_posts) - 1:
                                 await asyncio.sleep(0.5)
@@ -2821,7 +2916,11 @@ class CourseBot:
                     # Single post: send as before (backward compatible)
                     # Анимация перед отправкой текста
                     await send_typing_action(self.bot, user.user_id, 0.5)
-                    await self._safe_send_message(user.user_id, text)
+                    # Проверяем маркеры в тексте
+                    if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
+                        await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                    else:
+                        await self._safe_send_message(user.user_id, text)
                     await asyncio.sleep(0.5)  # Пауза для плавности
             
             # Для урока 19 отправляем кнопку "Показать все уровни" ПЕРЕД заданием
@@ -3015,11 +3114,31 @@ class CourseBot:
                         logger.info(f"   ✅ Added download button to task keyboard for lesson 21")
                 
                 logger.info(f"   Sending task message to user {user.user_id}, day {day}")
-                logger.info(f"   Task message length: {len(task_message_clean)} characters")
                 
-                # Разбиваем длинные сообщения на части (лимит Telegram: 4096 символов)
-                MAX_MESSAGE_LENGTH = 4000  # Оставляем запас
-                if len(task_message_clean) > MAX_MESSAGE_LENGTH:
+                # Проверяем, есть ли маркеры медиа в задании
+                task_sent_with_media = False
+                if media_markers and any(f"[{marker}]" in task_message_clean for marker in media_markers.keys()):
+                    # Используем встроенную вставку медиа по маркерам в задании
+                    # Отправляем задание с маркерами (без префикса "📝 Задание:")
+                    task_text_without_prefix = task if task else ""
+                    await self._send_text_with_inline_media(user.user_id, task_text_without_prefix, media_markers, day)
+                    # Отправляем заголовок задания с клавиатурой отдельно
+                    if keyboard:
+                        await self.bot.send_message(
+                            user.user_id,
+                            "📝 <b>Задание</b>",
+                            reply_markup=keyboard,
+                            disable_web_page_preview=True
+                        )
+                    logger.info(f"   ✅ Sent task with inline media markers for day {day}")
+                    task_sent_with_media = True
+                
+                if not task_sent_with_media:
+                    logger.info(f"   Task message length: {len(task_message_clean)} characters")
+                    
+                    # Разбиваем длинные сообщения на части (лимит Telegram: 4096 символов)
+                    MAX_MESSAGE_LENGTH = 4000  # Оставляем запас
+                    if len(task_message_clean) > MAX_MESSAGE_LENGTH:
                     # Разбиваем сообщение на части
                     message_parts = self._split_long_message(task_message_clean, MAX_MESSAGE_LENGTH)
                     logger.info(f"   Task message split into {len(message_parts)} parts")
@@ -3646,7 +3765,7 @@ class CourseBot:
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
             "✅ <b>Вопрос отправлен!</b>\n\n"
-            "📤 Ваш вопрос отправлен в ПУП 👥.\n"
+            "📤 Ваш вопрос отправлен куратору.\n"
             "⏳ Мы ответим вам как можно скорее 💬.",
             reply_markup=persistent_keyboard
         )
@@ -3740,7 +3859,7 @@ class CourseBot:
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
             "✅ <b>Вопрос отправлен!</b>\n\n"
-            "📤 Ваше голосовое отправлено в ПУП 👥.\n"
+            "📤 Ваше голосовое отправлено куратору.\n"
             "⏳ Мы ответим вам как можно скорее 💬.",
             reply_markup=persistent_keyboard
         )
@@ -4074,7 +4193,13 @@ class CourseBot:
         should_send_final = (assignment.day_number == 30 and assignment.status != "feedback_sent")
         
         # Add feedback
-        feedback_text = message.text or message.caption or ""
+        feedback_text = (message.text or message.caption or "").strip()
+        
+        # Проверяем, что текст не пустой
+        if not feedback_text:
+            await message.answer("❌ Обратная связь не может быть пустой. Пожалуйста, отправьте текст или голосовое сообщение.")
+            return
+        
         await self.assignment_service.add_feedback(assignment_id, feedback_text)
         
         # Send feedback to user
@@ -4086,20 +4211,24 @@ class CourseBot:
                 f"{feedback_text}"
             )
             
-            await self.bot.send_message(user.user_id, feedback_message)
-            await self.assignment_service.mark_feedback_sent(assignment_id)
-
-            # После обратной связи по дню 30 автоматически отправляем финальное сообщение
-            if should_send_final and self.lesson_loader:
-                try:
-                    lesson30 = self.lesson_loader.get_lesson(30)
-                    if lesson30:
-                        await asyncio.sleep(0.8)
-                        await self._send_lesson30_final_message_to_user(user_id=user.user_id, lesson_data=lesson30, send_keyboard=True)
-                except Exception as e:
-                    logger.error(f"   ❌ Failed to auto-send final message after feedback (user={user.user_id}): {e}", exc_info=True)
-            
-            await message.answer("✅ Обратная связь отправлена пользователю.")
+            try:
+                await self.bot.send_message(user.user_id, feedback_message)
+                await self.assignment_service.mark_feedback_sent(assignment_id)
+                
+                # После обратной связи по дню 30 автоматически отправляем финальное сообщение
+                if should_send_final and self.lesson_loader:
+                    try:
+                        lesson30 = self.lesson_loader.get_lesson(30)
+                        if lesson30:
+                            await asyncio.sleep(0.8)
+                            await self._send_lesson30_final_message_to_user(user_id=user.user_id, lesson_data=lesson30, send_keyboard=True)
+                    except Exception as e:
+                        logger.error(f"   ❌ Failed to auto-send final message after feedback (user={user.user_id}): {e}", exc_info=True)
+                
+                await message.answer("✅ Обратная связь отправлена пользователю.")
+            except Exception as e:
+                logger.error(f"Error sending feedback to user {assignment.user_id}: {e}", exc_info=True)
+                await message.answer(f"❌ Ошибка при отправке обратной связи: {e}")
         else:
             await message.answer("❌ Пользователь не найден.")
     
@@ -4136,7 +4265,13 @@ class CourseBot:
         should_send_final = (assignment.day_number == 30 and assignment.status != "feedback_sent")
         
         # Add feedback
-        feedback_text = message.text or message.caption or ""
+        feedback_text = (message.text or message.caption or "").strip()
+        
+        # Проверяем, что текст не пустой
+        if not feedback_text:
+            await message.answer("❌ Обратная связь не может быть пустой. Пожалуйста, отправьте текст или голосовое сообщение.")
+            return
+        
         await self.assignment_service.add_feedback(assignment_id, feedback_text)
         
         # Send feedback to user
@@ -4148,20 +4283,24 @@ class CourseBot:
                 f"{feedback_text}"
             )
             
-            await self.bot.send_message(user.user_id, feedback_message)
-            await self.assignment_service.mark_feedback_sent(assignment_id)
-
-            # После обратной связи по дню 30 автоматически отправляем финальное сообщение
-            if should_send_final and self.lesson_loader:
-                try:
-                    lesson30 = self.lesson_loader.get_lesson(30)
-                    if lesson30:
-                        await asyncio.sleep(0.8)
-                        await self._send_lesson30_final_message_to_user(user_id=user.user_id, lesson_data=lesson30, send_keyboard=True)
-                except Exception as e:
-                    logger.error(f"   ❌ Failed to auto-send final message after admin feedback (user={user.user_id}): {e}", exc_info=True)
-            
-            await message.answer("✅ Обратная связь отправлена пользователю.")
+            try:
+                await self.bot.send_message(user.user_id, feedback_message)
+                await self.assignment_service.mark_feedback_sent(assignment_id)
+                
+                # После обратной связи по дню 30 автоматически отправляем финальное сообщение
+                if should_send_final and self.lesson_loader:
+                    try:
+                        lesson30 = self.lesson_loader.get_lesson(30)
+                        if lesson30:
+                            await asyncio.sleep(0.8)
+                            await self._send_lesson30_final_message_to_user(user_id=user.user_id, lesson_data=lesson30, send_keyboard=True)
+                    except Exception as e:
+                        logger.error(f"   ❌ Failed to auto-send final message after admin feedback (user={user.user_id}): {e}", exc_info=True)
+                
+                await message.answer("✅ Обратная связь отправлена пользователю.")
+            except Exception as e:
+                logger.error(f"Error sending feedback to user {assignment.user_id}: {e}", exc_info=True)
+                await message.answer(f"❌ Ошибка при отправке обратной связи: {e}")
         else:
             await message.answer("❌ Пользователь не найден.")
     
