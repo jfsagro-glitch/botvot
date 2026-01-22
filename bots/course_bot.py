@@ -2197,14 +2197,27 @@ class CourseBot:
             return
         
         # Разбиваем текст на части по маркерам
+        # re.split с группой в паттерне возвращает список: [text_before, marker, text_after, marker, ...]
         parts = re.split(marker_pattern, text)
+        
+        logger.info(f"   📎 Split text into {len(parts)} parts")
         
         for i, part in enumerate(parts):
             if not part.strip():
                 continue
             
             # Проверяем, является ли часть маркером
-            if part in markers and part in media_markers:
+            # В re.split с группой в паттерне маркеры находятся в нечетных позициях (1, 3, 5...)
+            is_marker = (i % 2 == 1) and part in markers
+            
+            if is_marker:
+                if part not in media_markers:
+                    logger.error(f"   ❌ Marker {part} found in text but not in media_markers!")
+                    logger.error(f"   ❌ Available media_markers: {list(media_markers.keys()) if media_markers else 'None'}")
+                    logger.error(f"   ❌ This means the marker was not created during sync or media_markers are missing from lesson_data")
+                    # Пропускаем маркер, не отправляем текст с маркером
+                    continue
+                
                 # Отправляем медиа-файл
                 media_info = media_markers[part]
                 media_type = media_info.get("type")
@@ -2268,6 +2281,7 @@ class CourseBot:
                                     user_id, 
                                     f"⚠️ Не удалось загрузить медиа-файл: {media_info.get('name', 'файл')}"
                                 )
+                                # Пропускаем этот маркер, продолжаем с текстом
                                 continue
                         
                         try:
