@@ -2051,10 +2051,7 @@ class CourseBot:
                     if kind == "image":
                         photo = BufferedInputFile(data, filename=(filename or "image.jpg"))
                         await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None))
-                        seen.add(url)
-                        sent += 1
-                        continue
-                    if kind == "video":
+                    elif kind == "video":
                         video = BufferedInputFile(data, filename=(filename or "video.mp4"))
                         try:
                             await self.bot.send_video(
@@ -2067,25 +2064,69 @@ class CourseBot:
                             await self.bot.send_document(
                                 user_id, video, caption=(caption if caption != url else None)
                             )
-                        seen.add(url)
-                        sent += 1
-                        continue
-                except Exception:
-                    pass
-
-                # Fallback: send the URL with link preview enabled (works for pages with OG metadata).
-                try:
-                    await self.bot.send_message(
-                        user_id,
-                        url,
-                        disable_web_page_preview=False,
-                        parse_mode=None,
-                    )
+                    else:
+                        await self.bot.send_message(
+                            user_id,
+                            url,
+                            disable_web_page_preview=False,
+                            parse_mode=None,
+                        )
                     seen.add(url)
                     sent += 1
                 except Exception:
                     pass
+                continue
 
+    def _collect_preview_urls(self, text: str, *, seen: Optional[set[str]] = None, limit: int = 6) -> list[str]:
+        """
+        Collect URLs that would be sent as preview blocks.
+        Keeps ordering and respects the same limit/seen logic.
+        """
+        if not text:
+            return []
+        if seen is None:
+            seen = set()
+
+        candidates: list[tuple[str, str]] = []
+        for raw_line in (text or "").splitlines():
+            line = (raw_line or "").strip()
+            if not line:
+                continue
+            for u in self._URL_RE.findall(line):
+                url = self._clean_url(u)
+                if not url:
+                    continue
+                candidates.append((url, line))
+
+        if not candidates:
+            urls = [self._clean_url(u) for u in self._URL_RE.findall(text or "")]
+            candidates = [(u, u) for u in urls if u]
+
+        out: list[str] = []
+        for url, _line in candidates:
+            if url in seen:
+                continue
+            out.append(url)
+            if len(out) >= int(limit):
+                break
+        return out
+
+    def _strip_url_only_lines(self, text: str, urls: set[str]) -> str:
+        """
+        Remove lines that contain only a URL (to avoid duplicate link + preview blocks).
+        """
+        if not text or not urls:
+            return text
+        cleaned: list[str] = []
+        for raw_line in text.splitlines():
+            line = (raw_line or "").strip()
+            if not line:
+                cleaned.append(raw_line)
+                continue
+            if line in urls:
+                continue
+            cleaned.append(raw_line)
+        return "\n".join(cleaned)
     # Assignment headings sometimes come with a leading emoji/icon, e.g. "🔗 #Задание 28".
     # We allow optional non-word prefix before the Markdown heading markers.
     _ASSIGNMENT_HEADING_RE = re.compile(
@@ -2304,6 +2345,25 @@ class CourseBot:
             # Формируем сообщение урока
             # Проверяем, есть ли вводный текст (intro_text) - для урока 22
             intro_text = lesson_data.get("intro_text", "")
+            about_me_text = lesson_data.get("about_me_text", "")
+
+            intro_text_raw = intro_text
+            about_me_text_raw = about_me_text
+            lesson_posts_raw = list(lesson_posts)
+
+            # Collect preview URLs once and strip URL-only lines to avoid duplicates
+            combined_text_raw = "\n\n".join(
+                [
+                    (intro_text_raw or ""),
+                    (about_me_text_raw or ""),
+                    "\n\n".join([p for p in lesson_posts_raw if isinstance(p, str) and p.strip()]),
+                ]
+            )
+            preview_urls = set(self._collect_preview_urls(combined_text_raw, seen=link_preview_seen, limit=6))
+            if preview_urls:
+                intro_text = self._strip_url_only_lines(intro_text, preview_urls)
+                about_me_text = self._strip_url_only_lines(about_me_text, preview_urls)
+                lesson_posts = [self._strip_url_only_lines(p, preview_urls) for p in lesson_posts]
             
             # Проверяем, есть ли фото для начала урока (для урока 30)
             intro_photo_file_id = lesson_data.get("intro_photo_file_id", "")
@@ -2477,7 +2537,6 @@ class CourseBot:
                 logger.info(f"   Skipped intro_text for lesson {day} (already sent with video)")
             
             # Отправляем "ОБО МНЕ" отдельным сообщением с фото (для урока 1) - сразу после intro_text (пропускаем для навигатора)
-            about_me_text = lesson_data.get("about_me_text", "")
             about_me_photo_file_id = lesson_data.get("about_me_photo_file_id", "")
             about_me_photo_path = lesson_data.get("about_me_photo_path", "")
             
@@ -2843,13 +2902,7 @@ class CourseBot:
             # Если в тексте урока есть ссылки на видео/картинки — показываем превью отдельными сообщениями.
             # (Например, YouTube: отправляем миниатюру, чтобы было «видно».)
             try:
-                combined_text = "\n\n".join(
-                    [
-                        (lesson_data.get("intro_text", "") or ""),
-                        (lesson_data.get("about_me_text", "") or ""),
-                        "\n\n".join([p for p in lesson_posts if isinstance(p, str) and p.strip()]),
-                    ]
-                )
+                combined_text = combined_text_raw
                 await self._send_previews_from_text(
                     user.user_id,
                     combined_text,
@@ -2867,8 +2920,14 @@ class CourseBot:
                 # Выделяем задание отдельным блоком
                 task_message = f"📝 Задание:\n\n{task}".strip()
             
+            # If we will show previews for task links, remove URL-only lines from the task message.
+            task_message_clean = task_message
+            task_preview_urls = set(self._collect_preview_urls(task_message, seen=link_preview_seen, limit=6))
+            if task_preview_urls:
+                task_message_clean = self._strip_url_only_lines(task_message, task_preview_urls)
+            
             # Отправляем задание, если есть
-            if task_message:
+            if task_message_clean:
                 # Передаем day в lesson_data для создания клавиатуры
                 lesson_data_with_day = lesson_data.copy()
                 lesson_data_with_day["day_number"] = day
@@ -2926,13 +2985,13 @@ class CourseBot:
                         logger.info(f"   ✅ Added download button to task keyboard for lesson 21")
                 
                 logger.info(f"   Sending task message to user {user.user_id}, day {day}")
-                logger.info(f"   Task message length: {len(task_message)} characters")
+                logger.info(f"   Task message length: {len(task_message_clean)} characters")
                 
                 # Разбиваем длинные сообщения на части (лимит Telegram: 4096 символов)
                 MAX_MESSAGE_LENGTH = 4000  # Оставляем запас
-                if len(task_message) > MAX_MESSAGE_LENGTH:
+                if len(task_message_clean) > MAX_MESSAGE_LENGTH:
                     # Разбиваем сообщение на части
-                    message_parts = self._split_long_message(task_message, MAX_MESSAGE_LENGTH)
+                    message_parts = self._split_long_message(task_message_clean, MAX_MESSAGE_LENGTH)
                     logger.info(f"   Task message split into {len(message_parts)} parts")
 
                     # Кнопка должна быть прямо "под заданием", поэтому:
@@ -2976,7 +3035,7 @@ class CourseBot:
                         )
                 else:
                     # Если сообщение короткое, отправляем как есть
-                    sent = await self.bot.send_message(user.user_id, task_message, reply_markup=keyboard, disable_web_page_preview=True)
+                    sent = await self.bot.send_message(user.user_id, task_message_clean, reply_markup=keyboard, disable_web_page_preview=True)
                     try:
                         await self.bot.edit_message_reply_markup(
                             chat_id=user.user_id,
