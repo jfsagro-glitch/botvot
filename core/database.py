@@ -231,6 +231,33 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_assignments_user_day
             ON assignments(user_id, day_number)
         """)
+        
+        # Questions table
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS questions (
+                question_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                lesson_id INTEGER,
+                day_number INTEGER,
+                question_text TEXT,
+                question_voice_file_id TEXT,
+                pup_message_id INTEGER,
+                answered_at TEXT,
+                answer_text TEXT,
+                answer_voice_file_id TEXT,
+                answered_by_user_id INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_questions_user_id
+            ON questions(user_id)
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_questions_answered_at
+            ON questions(answered_at)
+        """)
 
         # Assignment intents ("user clicked submit assignment" flag)
         # Used to stop mentor reminders once the user has started submission flow,

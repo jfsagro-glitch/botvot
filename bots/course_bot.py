@@ -11,6 +11,7 @@ Handles:
 
 import asyncio
 import html
+from html import escape
 import logging
 import re
 import sys
@@ -257,6 +258,9 @@ class CourseBot:
         self.dp.callback_query.register(self.handle_ask_question, F.data.startswith("question:ask:"))
         self.dp.callback_query.register(self.handle_admin_reply, F.data.startswith("admin_reply:"))
         self.dp.callback_query.register(self.handle_curator_reply, F.data.startswith("curator_reply:"))
+        self.dp.callback_query.register(self.handle_questions_list, F.data == "questions:list")
+        self.dp.callback_query.register(self.handle_question_view, F.data.startswith("question:view:"))
+        self.dp.callback_query.register(self.handle_question_answer, F.data.startswith("question:answer:"))
         self.dp.callback_query.register(self.handle_lesson21_card, F.data.startswith("lesson21_card:"))
         self.dp.callback_query.register(self.handle_lesson21_download_cards, F.data == "lesson21_download_cards")
         self.dp.callback_query.register(self.handle_lesson19_show_levels, F.data == "lesson19_show_levels")
@@ -287,6 +291,8 @@ class CourseBot:
         self.dp.message.register(self.handle_question_voice, F.voice)
         self.dp.message.register(self.handle_assignment_text, F.text & ~F.command)
         self.dp.message.register(self.handle_question_text, F.text & ~F.command)
+        # Обработчик ответов на вопросы в ПУП (должен быть перед общими обработчиками)
+        self.dp.message.register(self.handle_curator_feedback, F.text & ~F.command & F.reply_to_message)
         self.dp.message.register(self.handle_unclassified_voice, F.voice)
         self.dp.message.register(self.handle_unclassified_media, F.photo | F.video | F.document)
         self.dp.message.register(self.handle_unclassified_text, F.text & ~F.command)
@@ -3568,6 +3574,7 @@ class CourseBot:
             user_id=user_id,
             lesson_id=lesson_id,
             question_text=message.text,
+            question_voice_file_id=None,
             context=f"День {lesson_day}" if lesson_day else None
         )
         
@@ -3577,33 +3584,62 @@ class CourseBot:
         except Exception:
             pass
         
-        # Форматируем вопрос для кураторов
+        # Форматируем вопрос для ПУП (премиум-группы)
         curator_message = await self.question_service.format_question_for_admin(question_data)
         
-        # Send ONLY to PUP (admin bot)
+        # Send to PUP (premium group) so all users with access can see and reply
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="💬 Ответить",
+                    text="💬 Ответить пользователю",
                     callback_data=f"curator_reply:{user_id}:{lesson_day}"
                 )
             ]
         ])
         
-        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-        if not is_admin_bot_configured():
-            logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward question.")
+        # Отправляем в ПУП (премиум-группу) вместо личного чата админа
+        if not Config.PREMIUM_GROUP_ID:
+            logger.error("PREMIUM_GROUP_ID not configured. Cannot forward question to PUP.")
             await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
             return
 
         try:
-            ok = await send_to_admin_bot(curator_message, reply_markup=keyboard)
-            if not ok:
-                await message.answer("❌ Не удалось отправить вопрос в ПУП. Откройте ПУП и нажмите /start.")
+            # Парсим chat_id из строки (используем тот же метод, что в Config)
+            def parse_chat_id(raw: str) -> int:
+                s = (raw or "").strip()
+                if not s:
+                    return 0
+                if s.startswith("#-") and s[2:].isdigit():
+                    return int(f"-100{s[2:]}")
+                try:
+                    return int(s)
+                except Exception:
+                    return 0
+            
+            pup_chat_id = parse_chat_id(Config.PREMIUM_GROUP_ID)
+            if pup_chat_id == 0:
+                logger.error(f"Invalid PREMIUM_GROUP_ID: {Config.PREMIUM_GROUP_ID}")
+                await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
                 return
-            logger.info(f"✅ Question sent to admin bot from user {user_id}")
+            
+            # Отправляем в ПУП через курс-бота
+            sent_message = await self.bot.send_message(
+                pup_chat_id,
+                curator_message,
+                reply_markup=keyboard
+            )
+            
+            # Сохраняем message_id вопроса в БД
+            question_id = question_data.get("question_id")
+            if question_id and sent_message:
+                await self.question_service.update_pup_message_id(question_id, sent_message.message_id)
+            
+            # Обновляем закрепленное сообщение с кнопкой "Вопросы"
+            await self._update_pup_questions_pinned_message(pup_chat_id)
+            
+            logger.info(f"✅ Question sent to PUP (premium group) from user {user_id}")
         except Exception as e:
-            logger.error(f"Error sending question to admin bot: {e}", exc_info=True)
+            logger.error(f"Error sending question to PUP: {e}", exc_info=True)
             await message.answer("❌ Не удалось отправить вопрос в ПУП. Попробуйте позже.")
             return
         
@@ -3634,7 +3670,8 @@ class CourseBot:
         question_data = await self.question_service.create_question(
             user_id=user_id,
             lesson_id=lesson_day,
-            question_text="[voice]",
+            question_text=None,
+            question_voice_file_id=message.voice.file_id if message.voice else None,
             context=f"День {lesson_day}",
         )
         curator_message = await self.question_service.format_question_for_admin(question_data)
@@ -3642,24 +3679,62 @@ class CourseBot:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="💬 Ответить",
+                    text="💬 Ответить пользователю",
                     callback_data=f"curator_reply:{user_id}:{lesson_day}"
                 )
             ]
         ])
 
-        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-        if not is_admin_bot_configured():
+        # Отправляем в ПУП (премиум-группу) вместо личного чата админа
+        if not Config.PREMIUM_GROUP_ID:
             await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
             return
 
-        # Re-upload voice to PUP: file_id from course bot is not valid for admin bot token.
-        import io
-        buf = io.BytesIO()
-        await self.bot.download(message.voice, destination=buf)
-        ok = await send_to_admin_bot(curator_message, voice_bytes=buf.getvalue(), voice_filename="voice.ogg", reply_markup=keyboard)
-        if not ok:
-            await message.answer("❌ Не удалось отправить вопрос в ПУП. Откройте ПУП и нажмите /start.")
+        try:
+            # Парсим chat_id из строки (используем тот же метод, что в Config)
+            def parse_chat_id(raw: str) -> int:
+                s = (raw or "").strip()
+                if not s:
+                    return 0
+                if s.startswith("#-") and s[2:].isdigit():
+                    return int(f"-100{s[2:]}")
+                try:
+                    return int(s)
+                except Exception:
+                    return 0
+            
+            pup_chat_id = parse_chat_id(Config.PREMIUM_GROUP_ID)
+            if pup_chat_id == 0:
+                logger.error(f"Invalid PREMIUM_GROUP_ID: {Config.PREMIUM_GROUP_ID}")
+                await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
+                return
+            
+            # Загружаем голосовое сообщение
+            import io
+            buf = io.BytesIO()
+            await self.bot.download(message.voice, destination=buf)
+            
+            # Отправляем в ПУП через курс-бота
+            from aiogram.types import BufferedInputFile
+            sent_message = await self.bot.send_voice(
+                pup_chat_id,
+                BufferedInputFile(buf.getvalue(), filename="voice.ogg"),
+                caption=curator_message,
+                reply_markup=keyboard
+            )
+            
+            # Сохраняем message_id вопроса в БД
+            question_id = question_data.get("question_id")
+            if question_id and sent_message:
+                await self.question_service.update_pup_message_id(question_id, sent_message.message_id)
+            
+            # Обновляем закрепленное сообщение с кнопкой "Вопросы"
+            await self._update_pup_questions_pinned_message(pup_chat_id)
+            
+            logger.info(f"✅ Voice question sent to PUP (premium group) from user {user_id}")
+        except Exception as e:
+            logger.error(f"Error sending voice question to PUP: {e}", exc_info=True)
+            await message.answer("❌ Не удалось отправить вопрос в ПУП. Попробуйте позже.")
             return
 
         persistent_keyboard = self._create_persistent_keyboard()
@@ -3755,7 +3830,10 @@ class CourseBot:
     
     async def handle_curator_reply(self, callback: CallbackQuery):
         """Handle curator reply button click for questions."""
-        await callback.answer()
+        try:
+            await callback.answer()
+        except:
+            pass
         
         try:
             # Парсим user_id и lesson_day из callback
@@ -3767,72 +3845,173 @@ class CourseBot:
                 await callback.message.answer("❌ Ошибка: неверный формат данных.")
                 return
             
-            await callback.message.answer(
-                f"💬 <b>Ответ на вопрос</b>\n\n"
-                f"👤 Пользователь ID: {user_id}\n"
-                f"Урок: День {lesson_day}\n\n"
-                f"✍️ Ответьте на это сообщение с вашим ответом пользователю.\n\n"
-                f"💡 Ответ будет отправлен анонимно от имени бота."
-            )
+            # Проверяем, откуда пришел callback (группа или личный чат)
+            if callback.message.chat.type in ["group", "supergroup"]:
+                # В группе ПУП - можно отвечать прямо в группе через reply
+                await callback.message.answer(
+                    f"💬 <b>Ответ на вопрос</b>\n\n"
+                    f"👤 Пользователь ID: {user_id}\n"
+                    f"Урок: День {lesson_day}\n\n"
+                    f"✍️ Ответьте на это сообщение (reply) с вашим ответом пользователю.\n\n"
+                    f"💡 Ответ будет отправлен пользователю анонимно от имени бота.\n"
+                    f"💬 Или ответьте прямо в группе - все увидят ваш ответ."
+                )
+            else:
+                # В личном чате - стандартный ответ
+                await callback.message.answer(
+                    f"💬 <b>Ответ на вопрос</b>\n\n"
+                    f"👤 Пользователь ID: {user_id}\n"
+                    f"Урок: День {lesson_day}\n\n"
+                    f"✍️ Ответьте на это сообщение с вашим ответом пользователю.\n\n"
+                    f"💡 Ответ будет отправлен анонимно от имени бота."
+                )
         except Exception as e:
             logger.error(f"❌ Error in handle_curator_reply: {e}", exc_info=True)
-            await callback.message.answer("❌ Ошибка при обработке запроса.")
+            try:
+                await callback.message.answer("❌ Ошибка при обработке запроса.")
+            except:
+                pass
     
     async def handle_curator_feedback(self, message: Message):
-        """Handle curator feedback reply to question (anonymous response)."""
+        """
+        Handle curator feedback reply to question (anonymous response).
+        Works in PUP (premium group) - any user with access can reply.
+        """
         if not message.reply_to_message:
-            return
+            raise SkipHandler()
+        
+        # Проверяем, что сообщение из ПУП (премиум-группы)
+        # Если это не группа или не ПУП, пропускаем обработку
+        if message.chat.type not in ["group", "supergroup"]:
+            raise SkipHandler()
+        
+        # Проверяем, что это ПУП (премиум-группа)
+        def parse_chat_id(raw: str) -> int:
+            s = (raw or "").strip()
+            if not s:
+                return 0
+            if s.startswith("#-") and s[2:].isdigit():
+                return int(f"-100{s[2:]}")
+            try:
+                return int(s)
+            except Exception:
+                return 0
+        
+        pup_chat_id = parse_chat_id(Config.PREMIUM_GROUP_ID) if Config.PREMIUM_GROUP_ID else 0
+        if message.chat.id != pup_chat_id:
+            raise SkipHandler()
         
         reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
         
         # Проверяем, это ответ на вопрос или на задание
         # Если в сообщении есть "Новый вопрос" или "Вопрос:", это вопрос
-        is_question = "❓" in reply_text or "Новый вопрос" in reply_text or "Вопрос:" in reply_text
+        # Также проверяем, если это ответ на сообщение с кнопкой "Ответить"
+        is_question = (
+            "❓" in reply_text or 
+            "Новый вопрос" in reply_text or 
+            "Вопрос:" in reply_text or
+            "Ответ на вопрос" in reply_text or
+            "question:answer:" in str(message.reply_to_message.reply_markup) if message.reply_to_message and message.reply_to_message.reply_markup else False
+        )
+        
+        # Проверяем, есть ли в callback_data кнопки question:answer:
+        if not is_question and message.reply_to_message and message.reply_to_message.reply_markup:
+            try:
+                for row in message.reply_to_message.reply_markup.inline_keyboard:
+                    for button in row:
+                        if button.callback_data and "question:answer:" in button.callback_data:
+                            is_question = True
+                            break
+                    if is_question:
+                        break
+            except:
+                pass
         
         if is_question:
             # Это ответ на вопрос
-            # Извлекаем user_id из сообщения
-            user_id = None
-            lesson_day = None
-            
-            if "🆔 ID:" in reply_text:
+            # Сначала пытаемся извлечь question_id из кнопки
+            question_id = None
+            if message.reply_to_message and message.reply_to_message.reply_markup:
                 try:
-                    parts = reply_text.split("🆔 ID:")
-                    if len(parts) > 1:
-                        user_id_str = parts[1].split("\n")[0].strip()
-                        user_id = int(user_id_str)
-                except (ValueError, IndexError):
+                    for row in message.reply_to_message.reply_markup.inline_keyboard:
+                        for button in row:
+                            if button.callback_data and "question:answer:" in button.callback_data:
+                                question_id = int(button.callback_data.split(":")[-1])
+                                break
+                        if question_id:
+                            break
+                except:
                     pass
             
-            if "Урок:" in reply_text:
-                try:
-                    parts = reply_text.split("Урок:")
-                    if len(parts) > 1:
-                        lesson_str = parts[1].split("\n")[0].strip()
-                        if "День" in lesson_str:
-                            lesson_day = int(lesson_str.replace("День", "").strip())
-                except (ValueError, IndexError):
-                    pass
-            
-            # Или пытаемся извлечь из текста сообщения с кнопкой
-            if not user_id and "👤 Пользователь ID:" in reply_text:
-                try:
-                    parts = reply_text.split("👤 Пользователь ID:")
-                    if len(parts) > 1:
-                        user_id_str = parts[1].split("\n")[0].strip()
-                        user_id = int(user_id_str)
-                except (ValueError, IndexError):
-                    pass
-            
-            if not user_id:
-                await message.answer("❌ Не удалось найти ID пользователя. Пожалуйста, ответьте на сообщение с вопросом.")
-                return
+            # Если не нашли question_id, пытаемся извлечь из текста
+            if not question_id:
+                # Извлекаем user_id из сообщения
+                user_id = None
+                lesson_day = None
+                
+                if "🆔 ID:" in reply_text:
+                    try:
+                        parts = reply_text.split("🆔 ID:")
+                        if len(parts) > 1:
+                            user_id_str = parts[1].split("\n")[0].strip()
+                            user_id = int(user_id_str)
+                    except (ValueError, IndexError):
+                        pass
+                
+                if "Урок:" in reply_text:
+                    try:
+                        parts = reply_text.split("Урок:")
+                        if len(parts) > 1:
+                            lesson_str = parts[1].split("\n")[0].strip()
+                            if "День" in lesson_str:
+                                lesson_day = int(lesson_str.replace("День", "").strip())
+                    except (ValueError, IndexError):
+                        pass
+                
+                # Или пытаемся извлечь из текста сообщения с кнопкой
+                if not user_id and "👤 Пользователь ID:" in reply_text:
+                    try:
+                        parts = reply_text.split("👤 Пользователь ID:")
+                        if len(parts) > 1:
+                            user_id_str = parts[1].split("\n")[0].strip()
+                            user_id = int(user_id_str)
+                    except (ValueError, IndexError):
+                        pass
+                
+                if not user_id:
+                    await message.answer("❌ Не удалось найти ID пользователя. Пожалуйста, ответьте на сообщение с вопросом.")
+                    return
             
             # Отправляем ответ пользователю анонимно
             answer_text = message.text or message.caption or ""
             if answer_text:
+                # Если есть question_id, используем его
+                if question_id:
+                    question = await self.question_service.get_question(question_id)
+                    if not question:
+                        await message.answer("❌ Вопрос не найден.")
+                        return
+                    user_id = question["user_id"]
+                    lesson_day = question.get("day_number") or question.get("lesson_id")
+                else:
+                    # Иначе ищем вопрос по user_id и lesson_day
+                    unanswered_questions = await self.question_service.get_unanswered_questions(limit=100)
+                    question = None
+                    for q in unanswered_questions:
+                        if q["user_id"] == user_id and (q.get("day_number") == lesson_day or q.get("lesson_id") == lesson_day):
+                            question = q
+                            break
+                
                 user = await self.user_service.get_user(user_id)
                 if user:
+                    if question:
+                        # Сохраняем ответ в БД
+                        await self.question_service.answer_question(
+                            question["question_id"] if isinstance(question, dict) else question_id,
+                            answer_text=answer_text,
+                            answered_by_user_id=message.from_user.id if message.from_user else None
+                        )
+                    
                     answer_message = (
                         f"💬 <b>Ответ на ваш вопрос</b>\n\n"
                     )
@@ -3840,8 +4019,30 @@ class CourseBot:
                         answer_message += f"Урок: День {lesson_day}\n\n"
                     answer_message += f"{answer_text}"
                     
-                    await self.bot.send_message(user.user_id, answer_message)
-                    await message.answer("✅ Ответ отправлен пользователю анонимно.")
+                    # Отправляем ответ пользователю
+                    try:
+                        await self.bot.send_message(user.user_id, answer_message)
+                        
+                        # Обновляем закрепленное сообщение в ПУП
+                        if message.chat.type in ["group", "supergroup"]:
+                            from core.config import _parse_chat_id as parse_chat_id
+                            pup_chat_id = parse_chat_id(Config.PREMIUM_GROUP_ID) if Config.PREMIUM_GROUP_ID else 0
+                            if message.chat.id == pup_chat_id:
+                                await self._update_pup_questions_pinned_message(pup_chat_id)
+                        
+                        # Подтверждаем отправку в группе
+                        if message.chat.type in ["group", "supergroup"]:
+                            # В группе - просто подтверждаем, не отправляем отдельное сообщение
+                            try:
+                                await message.react("✅")
+                            except:
+                                # Если реакции не поддерживаются, отправляем сообщение
+                                await message.answer("✅ Ответ отправлен пользователю.")
+                        else:
+                            await message.answer("✅ Ответ отправлен пользователю анонимно.")
+                    except Exception as e:
+                        logger.error(f"Error sending answer to user {user_id}: {e}", exc_info=True)
+                        await message.answer("❌ Не удалось отправить ответ пользователю.")
                 else:
                     await message.answer("❌ Пользователь не найден.")
             else:
@@ -4577,6 +4778,242 @@ class CourseBot:
         except Exception as e:
             logger.error(f"   ❌ Error sending mentor reminder to user {user.user_id}: {e}", exc_info=True)
     
+    async def _update_pup_questions_pinned_message(self, pup_chat_id: int):
+        """Update or create pinned message with questions button in PUP."""
+        try:
+            # Получаем статистику вопросов
+            stats = await self.question_service.get_questions_stats()
+            
+            # Формируем текст сообщения
+            message_text = (
+                f"📋 <b>Вопросы</b>\n\n"
+                f"📊 Всего вопросов: {stats['total']}\n"
+                f"⏳ Неотвеченных: {stats['unanswered']}\n"
+                f"✅ Отвеченных: {stats['answered']}\n\n"
+                f"Нажмите кнопку ниже, чтобы открыть список вопросов 👇"
+            )
+            
+            # Создаем клавиатуру
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"📋 Вопросы ({stats['unanswered']})",
+                        callback_data="questions:list"
+                    )
+                ]
+            ])
+            
+            # Проверяем, есть ли уже закрепленное сообщение
+            await self.db._ensure_connection()
+            pinned_msg_id = await self.db.get_setting("pup_questions_pinned_message_id")
+            
+            if pinned_msg_id:
+                try:
+                    # Обновляем существующее сообщение
+                    await self.bot.edit_message_text(
+                        message_text,
+                        chat_id=pup_chat_id,
+                        message_id=int(pinned_msg_id),
+                        reply_markup=keyboard
+                    )
+                    return
+                except Exception as e:
+                    logger.warning(f"Failed to edit pinned message: {e}, creating new one")
+            
+            # Создаем новое сообщение
+            sent_message = await self.bot.send_message(
+                pup_chat_id,
+                message_text,
+                reply_markup=keyboard
+            )
+            
+            # Сохраняем message_id
+            await self.db.set_setting("pup_questions_pinned_message_id", str(sent_message.message_id))
+            
+            # Закрепляем сообщение
+            try:
+                await self.bot.pin_chat_message(pup_chat_id, sent_message.message_id)
+            except Exception as e:
+                logger.warning(f"Failed to pin message (may need admin rights): {e}")
+                
+        except Exception as e:
+            logger.error(f"Error updating PUP questions pinned message: {e}", exc_info=True)
+    
+    async def handle_questions_list(self, callback: CallbackQuery):
+        """Handle questions list button click."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        try:
+            # Получаем неотвеченные вопросы
+            unanswered = await self.question_service.get_unanswered_questions(limit=20)
+            all_questions = await self.question_service.get_all_questions(limit=20)
+            stats = await self.question_service.get_questions_stats()
+            
+            if not all_questions:
+                await callback.message.answer("📋 Пока нет вопросов.")
+                return
+            
+            # Формируем список вопросов
+            message_text = (
+                f"📋 <b>Список вопросов</b>\n\n"
+                f"📊 Всего: {stats['total']} | ⏳ Неотвеченных: {stats['unanswered']} | ✅ Отвеченных: {stats['answered']}\n\n"
+            )
+            
+            # Добавляем неотвеченные вопросы первыми
+            if unanswered:
+                message_text += "<b>⏳ Неотвеченные:</b>\n"
+                for q in unanswered[:10]:
+                    formatted = await self.question_service.format_question_for_list(q)
+                    message_text += f"{formatted}\n\n"
+            
+            # Добавляем остальные вопросы
+            answered = [q for q in all_questions if q.get("answered_at")]
+            if answered and len(unanswered) < 10:
+                message_text += "<b>✅ Отвеченные:</b>\n"
+                for q in answered[:10 - len(unanswered)]:
+                    formatted = await self.question_service.format_question_for_list(q)
+                    message_text += f"{formatted}\n\n"
+            
+            # Создаем клавиатуру с вопросами
+            keyboard_rows = []
+            for q in all_questions[:10]:
+                question_id = q.get("question_id")
+                status = "✅" if q.get("answered_at") else "⏳"
+                keyboard_rows.append([
+                    InlineKeyboardButton(
+                        text=f"{status} #{question_id}",
+                        callback_data=f"question:view:{question_id}"
+                    )
+                ])
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+            
+            await callback.message.answer(message_text, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Error in handle_questions_list: {e}", exc_info=True)
+            try:
+                await callback.message.answer("❌ Ошибка при загрузке списка вопросов.")
+            except:
+                pass
+    
+    async def handle_question_view(self, callback: CallbackQuery):
+        """Handle question view button click."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        try:
+            question_id = int(callback.data.split(":")[-1])
+            question = await self.question_service.get_question(question_id)
+            
+            if not question:
+                await callback.message.answer("❌ Вопрос не найден.")
+                return
+            
+            # Форматируем вопрос для просмотра
+            user_name = html.escape(str(question.get("first_name") or "Unknown"))
+            if question.get("last_name"):
+                user_name += f" {html.escape(str(question['last_name']))}"
+            username = question.get("username")
+            if username:
+                user_name += f" (@{html.escape(str(username))})"
+            
+            message_text = f"❓ <b>Вопрос #{question_id}</b>\n\n"
+            message_text += f"👤 Пользователь: {user_name}\n"
+            message_text += f"🆔 ID: {question['user_id']}\n"
+            
+            if question.get("day_number"):
+                message_text += f"📚 Урок: День {question['day_number']}\n"
+            
+            message_text += f"🕐 Создан: {question['created_at'][:19] if question.get('created_at') else '?'}\n"
+            
+            if question.get("answered_at"):
+                message_text += f"✅ Отвечен: {question['answered_at'][:19]}\n"
+            
+            message_text += "\n💭 <b>Вопрос:</b>\n"
+            if question.get("question_text"):
+                message_text += html.escape(str(question["question_text"]))
+            elif question.get("question_voice_file_id"):
+                message_text += "🎤 Голосовое сообщение"
+            
+            if question.get("answer_text"):
+                message_text += f"\n\n💬 <b>Ответ:</b>\n{html.escape(str(question['answer_text']))}"
+            
+            # Создаем клавиатуру
+            keyboard_rows = []
+            if not question.get("answered_at"):
+                keyboard_rows.append([
+                    InlineKeyboardButton(
+                        text="💬 Ответить",
+                        callback_data=f"question:answer:{question_id}"
+                    )
+                ])
+            keyboard_rows.append([
+                InlineKeyboardButton(
+                    text="◀️ Назад к списку",
+                    callback_data="questions:list"
+                )
+            ])
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+            
+            # Если есть голосовое сообщение, отправляем его отдельно
+            if question.get("question_voice_file_id"):
+                try:
+                    await callback.message.answer_voice(
+                        question["question_voice_file_id"],
+                        caption=message_text,
+                        reply_markup=keyboard
+                    )
+                except:
+                    await callback.message.answer(message_text, reply_markup=keyboard)
+            else:
+                await callback.message.answer(message_text, reply_markup=keyboard)
+                
+        except Exception as e:
+            logger.error(f"Error in handle_question_view: {e}", exc_info=True)
+            try:
+                await callback.message.answer("❌ Ошибка при загрузке вопроса.")
+            except:
+                pass
+    
+    async def handle_question_answer(self, callback: CallbackQuery):
+        """Handle question answer button click."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        try:
+            question_id = int(callback.data.split(":")[-1])
+            question = await self.question_service.get_question(question_id)
+            
+            if not question:
+                await callback.message.answer("❌ Вопрос не найден.")
+                return
+            
+            if question.get("answered_at"):
+                await callback.message.answer("✅ Этот вопрос уже отвечен.")
+                return
+            
+            await callback.message.answer(
+                f"💬 <b>Ответ на вопрос #{question_id}</b>\n\n"
+                f"👤 Пользователь ID: {question['user_id']}\n"
+                f"📚 Урок: День {question.get('day_number', '?')}\n\n"
+                f"✍️ Ответьте на это сообщение с вашим ответом пользователю.\n\n"
+                f"💡 Ответ будет отправлен анонимно от имени бота."
+            )
+        except Exception as e:
+            logger.error(f"Error in handle_question_answer: {e}", exc_info=True)
+            try:
+                await callback.message.answer("❌ Ошибка при обработке запроса.")
+            except:
+                pass
+    
     async def start(self):
         """Start the bot and scheduler."""
         await self.db.connect()
@@ -4598,6 +5035,29 @@ class CourseBot:
         # Start schedulers in background
         scheduler_task = asyncio.create_task(self.scheduler.start())
         mentor_scheduler_task = asyncio.create_task(self.mentor_scheduler.start())
+        
+        # Инициализируем закрепленное сообщение с кнопкой "Вопросы" в ПУП
+        if Config.PREMIUM_GROUP_ID:
+            try:
+                def parse_chat_id(raw: str) -> int:
+                    s = (raw or "").strip()
+                    if not s:
+                        return 0
+                    if s.startswith("#-") and s[2:].isdigit():
+                        return int(f"-100{s[2:]}")
+                    try:
+                        return int(s)
+                    except Exception:
+                        return 0
+                
+                pup_chat_id = parse_chat_id(Config.PREMIUM_GROUP_ID)
+                if pup_chat_id != 0:
+                    # Небольшая задержка, чтобы бот успел подключиться
+                    await asyncio.sleep(2)
+                    await self._update_pup_questions_pinned_message(pup_chat_id)
+                    logger.info("✅ PUP questions pinned message initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize PUP questions pinned message: {e}")
         
         logger.info("Course Bot started")
         try:
