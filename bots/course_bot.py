@@ -93,7 +93,6 @@ class CourseBot:
                     KeyboardButton(text="❓"),
                 ],
                 [
-                    KeyboardButton(text="📝"),
                     KeyboardButton(text="💬"),
                     KeyboardButton(text="👨‍🏫"),
                 ],
