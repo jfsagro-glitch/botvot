@@ -224,6 +224,8 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_admin_promo_share, F.data.startswith("admin:promo:share:"))
         self.dp.callback_query.register(self.handle_admin_promo_delete, F.data.startswith("admin:promo:delete:"))
         self.dp.callback_query.register(self.handle_admin_promo_send, F.data.startswith("admin:promo:send:"))
+        # Always restore persistent keyboard after inline callbacks (some clients hide it).
+        self.dp.callback_query.register(self._restore_admin_keyboard_after_callback)
         
         # Commands for user stats
         self.dp.message.register(self.handle_user_stats, Command("user_stats"))
@@ -265,6 +267,13 @@ class AdminBot:
             "Ответьте на сообщение с вопросом или заданием, чтобы отправить ответ пользователю."
         )
         await message.answer(help_text)
+
+    async def _restore_admin_keyboard_after_callback(self, callback: CallbackQuery):
+        """Best-effort restore of persistent admin keyboard after inline interactions."""
+        try:
+            await callback.message.answer("\u200B", reply_markup=self._create_admin_keyboard())
+        except Exception:
+            pass
     
     def _create_admin_keyboard(self) -> ReplyKeyboardMarkup:
         """Create persistent admin keyboard."""
