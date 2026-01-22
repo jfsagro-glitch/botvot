@@ -398,22 +398,31 @@ class DriveContentSync:
                     safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
                     dest = media_root / f"day_{day:02d}" / safe_name
                     
-                    should_skip = self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime"))
-                    logger.info(f"   📎   Destination: {dest}, Should skip: {should_skip}")
+                    # Ensure destination directory exists
+                    dest.parent.mkdir(parents=True, exist_ok=True)
                     
-                    if not should_skip:
-                        logger.info(f"   📎   Downloading file: {name} -> {dest}")
+                    should_skip = self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime"))
+                    file_exists = dest.exists()
+                    logger.info(f"   📎   Destination: {dest}, File exists: {file_exists}, Should skip: {should_skip}")
+                    
+                    if not should_skip or not file_exists:
+                        if not file_exists:
+                            logger.info(f"   📎   File doesn't exist, downloading: {name} -> {dest}")
+                        else:
+                            logger.info(f"   📎   File outdated or size mismatch, re-downloading: {name} -> {dest}")
                         self._download_binary_file(drive, fid, dest)
                         media_downloaded += 1
                         logger.info(f"   ✅ Downloaded media file: {name} (total downloaded: {media_downloaded})")
                     else:
-                        logger.info(f"   📎   Skipping download (file already exists and up-to-date): {dest}")
+                        logger.info(f"   📎   File already exists and up-to-date, skipping download: {dest}")
+                        # Count existing files as "processed" for reporting
                         skipped_links += 1
                     
                     processed_links += 1
                     rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
                     
-                    # Create unique marker for this media file
+                    # CRITICAL: Create marker ALWAYS, even if file was skipped
+                    # The marker is needed for inline insertion regardless of download status
                     marker_id = f"MEDIA_{fid}_{len(media_markers)}"
                     media_markers[marker_id] = {
                         "type": media_type,
@@ -421,6 +430,7 @@ class DriveContentSync:
                         "file_id": fid,
                         "name": name
                     }
+                    logger.info(f"   ✅ Created media marker: [{marker_id}] for file {name} (path: {rel_path})")
                     
                     # Replace link in text with marker
                     # Use the original URL from text (link_url) for exact replacement
