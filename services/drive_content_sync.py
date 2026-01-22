@@ -93,31 +93,38 @@ class DriveContentSync:
     def _find_drive_links_with_positions(text: str) -> List[Dict[str, str]]:
         """
         Find all Drive links in text with their positions and file IDs.
-        Returns list of dicts with 'url', 'file_id', 'start', 'end'.
+        Returns list of dicts with 'url' (original from text), 'file_id', 'start', 'end'.
         """
         if not text:
             return []
         
         links = []
+        # Patterns to match various Google Drive URL formats
+        # Important: we capture the FULL original URL from text for replacement
         patterns = [
-            (r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]{10,})", lambda m: f"https://drive.google.com/file/d/{m.group(1)}"),
-            (r"https?://drive\.google\.com/open\?id=([a-zA-Z0-9_-]{10,})", lambda m: m.group(0)),
-            (r"https?://drive\.google\.com/uc\?id=([a-zA-Z0-9_-]{10,})", lambda m: m.group(0)),
-            (r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]{10,})", lambda m: m.group(0)),
+            # Standard file link: https://drive.google.com/file/d/FILE_ID/view?usp=drive_link
+            (r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]{10,})(?:/[^?\s]*)?(?:\?[^\s]*)?", lambda m: m.group(0)),
+            # Open link: https://drive.google.com/open?id=FILE_ID
+            (r"https?://drive\.google\.com/open\?id=([a-zA-Z0-9_-]{10,})(?:&[^\s]*)?", lambda m: m.group(0)),
+            # UC link: https://drive.google.com/uc?id=FILE_ID
+            (r"https?://drive\.google\.com/uc\?id=([a-zA-Z0-9_-]{10,})(?:&[^\s]*)?", lambda m: m.group(0)),
+            # Document link: https://docs.google.com/document/d/FILE_ID/...
+            (r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]{10,})(?:/[^\s]*)?", lambda m: m.group(0)),
         ]
         
-        for pattern, url_builder in patterns:
+        for pattern, url_extractor in patterns:
             for match in re.finditer(pattern, text):
                 file_id = match.group(1)
-                full_url = url_builder(match)
+                # Use the FULL original URL from text (including /view?usp=drive_link etc.)
+                original_url = url_extractor(match)
                 links.append({
-                    "url": full_url,
+                    "url": original_url,  # Original URL from text for exact replacement
                     "file_id": file_id,
                     "start": match.start(),
                     "end": match.end()
                 })
         
-        # Remove duplicates (same file_id)
+        # Remove duplicates (same file_id, keep first occurrence)
         seen_ids = set()
         unique_links = []
         for link in links:
@@ -391,9 +398,23 @@ class DriveContentSync:
                     }
                     
                     # Replace link in text with marker
+                    # Use the original URL from text (link_url) for exact replacement
                     marker_placeholder = f"[{marker_id}]"
-                    lesson_text = lesson_text.replace(link_url, marker_placeholder)
-                    task_text = task_text.replace(link_url, marker_placeholder)
+                    # Replace all occurrences of the link URL in both texts
+                    replaced_in_lesson = False
+                    replaced_in_task = False
+                    if link_url in lesson_text:
+                        lesson_text = lesson_text.replace(link_url, marker_placeholder)
+                        replaced_in_lesson = True
+                        logger.info(f"   ✅ Replaced Drive link in lesson_text: {link_url[:60]}... -> [{marker_id}]")
+                    if link_url in task_text:
+                        task_text = task_text.replace(link_url, marker_placeholder)
+                        replaced_in_task = True
+                        logger.info(f"   ✅ Replaced Drive link in task_text: {link_url[:60]}... -> [{marker_id}]")
+                    
+                    if not replaced_in_lesson and not replaced_in_task:
+                        logger.warning(f"   ⚠️ Drive link not found in lesson_text or task_text: {link_url[:60]}...")
+                        logger.warning(f"   ⚠️ This may indicate the link format changed or was already replaced")
                     
                     media_items.append({"type": media_type, "path": rel_path, "marker_id": marker_id})
                 except Exception as e:
