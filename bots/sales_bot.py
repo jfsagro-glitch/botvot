@@ -82,6 +82,8 @@ class SalesBot:
         self._pending_after_legal: dict[int, dict] = {}
         # Tracks user's last selected program in sales flow ("online"/"offline")
         self._selected_program: dict[int, str] = {}
+        # Test state: stores current test step and results
+        self._test_state: dict[int, dict] = {}  # user_id -> {step: int, results: dict}
         
         # Initialize lesson loader with error handling
         try:
@@ -154,6 +156,14 @@ class SalesBot:
 
         # Voice questions in talk-to-human mode
         self.dp.message.register(self.handle_voice_question_from_sales, F.voice)
+
+        # Test handlers (before email/promo to catch test responses)
+        self.dp.callback_query.register(self.handle_test_skill_rating, F.data.startswith("test:skill:"))
+        self.dp.callback_query.register(self.handle_test_time_selection, F.data.startswith("test:time:"))
+        self.dp.callback_query.register(self.handle_test_mentor_setting, F.data.startswith("test:mentor:"))
+
+        # Test time input (before email/promo)
+        self.dp.message.register(self.handle_test_time_input, F.text & ~F.command)
 
         # Email input (receipt requirement)
         self.dp.message.register(self.handle_email_input, F.text & ~F.command)
@@ -3113,14 +3123,467 @@ class SalesBot:
             logger.error(f"❌ Error in handle_payment_check: {e}", exc_info=True)
             await callback.message.edit_text("❌ Ошибка при проверке платежа. Попробуйте позже.")
     
+    async def _start_test(self, message: Message, user):
+        """Start onboarding test for new user."""
+        self._test_state[user.user_id] = {
+            "step": 1,
+            "results": {}
+        }
+        await self._show_test_step_1(message, user)
+    
+    async def _show_test_step_1(self, message: Message, user):
+        """Show step 1: Skills assessment."""
+        text = (
+            "📋 <b>ТЕСТИРОВАНИЕ</b>\n\n"
+            "Помогите нам лучше настроить курс под вас!\n\n"
+            "<b>Этап 1 из 3: Оценка компетенций</b>\n\n"
+            "Оцените свои навыки от 1 до 5:\n\n"
+            "1️⃣ <b>Умение задавать вопросы</b>"
+        )
+        buttons = []
+        row = []
+        for i in range(1, 6):
+            row.append(InlineKeyboardButton(
+                text=str(i),
+                callback_data=f"test:skill:asking:{i}"
+            ))
+            if len(row) == 5:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.answer(text, reply_markup=keyboard)
+    
+    async def handle_test_skill_rating(self, callback: CallbackQuery):
+        """Handle skill rating selection."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        if user_id not in self._test_state:
+            await callback.message.answer("❌ Тестирование не начато.")
+            return
+        
+        parts = callback.data.split(":")
+        skill_type = parts[2]  # "asking", "answering", "listening"
+        rating = int(parts[3])
+        
+        state = self._test_state[user_id]
+        state["results"][skill_type] = rating
+        
+        # Move to next skill or next step
+        if skill_type == "asking":
+            # Show next skill: answering
+            text = (
+                "📋 <b>ТЕСТИРОВАНИЕ</b>\n\n"
+                "<b>Этап 1 из 3: Оценка компетенций</b>\n\n"
+                "2️⃣ <b>Умение отвечать на вопросы</b>"
+            )
+            buttons = []
+            row = []
+            for i in range(1, 6):
+                row.append(InlineKeyboardButton(
+                    text=str(i),
+                    callback_data=f"test:skill:answering:{i}"
+                ))
+                if len(row) == 5:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        elif skill_type == "answering":
+            # Show next skill: listening
+            text = (
+                "📋 <b>ТЕСТИРОВАНИЕ</b>\n\n"
+                "<b>Этап 1 из 3: Оценка компетенций</b>\n\n"
+                "3️⃣ <b>Умение слушать и слышать собеседника</b>"
+            )
+            buttons = []
+            row = []
+            for i in range(1, 6):
+                row.append(InlineKeyboardButton(
+                    text=str(i),
+                    callback_data=f"test:skill:listening:{i}"
+                ))
+                if len(row) == 5:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        elif skill_type == "listening":
+            # Move to step 2: time selection
+            state["step"] = 2
+            await self._show_test_step_2(callback.message, user_id)
+    
+    async def _show_test_step_2(self, message: Message, user_id: int):
+        """Show step 2: Time selection."""
+        text = (
+            "📋 <b>ТЕСТИРОВАНИЕ</b>\n\n"
+            "<b>Этап 2 из 3: Настройка времени</b>\n\n"
+            "Выберите удобное время для получения новых заданий:"
+        )
+        buttons = []
+        popular_times = ["06:00", "07:00", "08:00", "08:30", "09:00", "10:00", "12:00", "18:00", "20:00"]
+        row = []
+        for time_str in popular_times:
+            row.append(InlineKeyboardButton(
+                text=time_str,
+                callback_data=f"test:time:lesson:{time_str}"
+            ))
+            if len(row) == 3:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        
+        buttons.append([InlineKeyboardButton(
+            text="✏️ Ввести своё время",
+            callback_data="test:time:lesson:custom"
+        )])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.answer(text, reply_markup=keyboard)
+    
+    async def handle_test_time_selection(self, callback: CallbackQuery):
+        """Handle time selection in test."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        if user_id not in self._test_state:
+            await callback.message.answer("❌ Тестирование не начато.")
+            return
+        
+        parts = callback.data.split(":")
+        time_type = parts[2]  # "lesson" or "reminder_start" or "reminder_end"
+        
+        if time_type == "lesson":
+            if parts[3] == "custom":
+                self._test_state[user_id]["awaiting_time"] = "lesson"
+                await callback.message.answer(
+                    "⏰ Введите время получения заданий в формате ЧЧ:ММ (например, 09:30):"
+                )
+                return
+            else:
+                time_str = parts[3]
+                self._test_state[user_id]["results"]["lesson_time"] = time_str
+                # Show reminder time selection (always ask, will be used if persistence > 0)
+                await self._show_test_step_2_reminder_start(callback.message, user_id)
+        
+        elif time_type == "reminder_start":
+            if parts[3] == "custom":
+                self._test_state[user_id]["awaiting_time"] = "reminder_start"
+                await callback.message.answer(
+                    "🕐 Введите время начала уведомлений в формате ЧЧ:ММ (например, 09:30):"
+                )
+                return
+            else:
+                time_str = parts[3]
+                self._test_state[user_id]["results"]["reminder_start"] = time_str
+                # Show reminder end selection
+                await self._show_test_step_2_reminder_end(callback.message, user_id)
+        
+        elif time_type == "reminder_end":
+            if parts[3] == "custom":
+                self._test_state[user_id]["awaiting_time"] = "reminder_end"
+                await callback.message.answer(
+                    "🕐 Введите время конца уведомлений в формате ЧЧ:ММ (например, 22:00):"
+                )
+                return
+            else:
+                time_str = parts[3]
+                self._test_state[user_id]["results"]["reminder_end"] = time_str
+                # Move to step 3: mentor settings
+                self._test_state[user_id]["step"] = 3
+                await self._show_test_step_3(callback.message, user_id)
+    
+    async def _show_test_step_2_reminder_start(self, message: Message, user_id: int):
+        """Show reminder start time selection."""
+        text = (
+            "📋 <b>ТЕСТИРОВАНИЕ</b>\n\n"
+            "<b>Этап 2 из 3: Настройка времени</b>\n\n"
+            "Выберите время начала промежутка уведомлений:"
+        )
+        buttons = []
+        popular_times = ["09:00", "09:30", "10:00", "11:00", "12:00"]
+        row = []
+        for time_str in popular_times:
+            row.append(InlineKeyboardButton(
+                text=time_str,
+                callback_data=f"test:time:reminder_start:{time_str}"
+            ))
+            if len(row) == 3:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        
+        buttons.append([InlineKeyboardButton(
+            text="✏️ Ввести своё время",
+            callback_data="test:time:reminder_start:custom"
+        )])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.answer(text, reply_markup=keyboard)
+    
+    async def _show_test_step_2_reminder_end(self, message: Message, user_id: int):
+        """Show reminder end time selection."""
+        text = (
+            "📋 <b>ТЕСТИРОВАНИЕ</b>\n\n"
+            "<b>Этап 2 из 3: Настройка времени</b>\n\n"
+            "Выберите время конца промежутка уведомлений:"
+        )
+        buttons = []
+        popular_times = ["18:00", "19:00", "20:00", "21:00", "22:00", "23:00"]
+        row = []
+        for time_str in popular_times:
+            row.append(InlineKeyboardButton(
+                text=time_str,
+                callback_data=f"test:time:reminder_end:{time_str}"
+            ))
+            if len(row) == 3:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        
+        buttons.append([InlineKeyboardButton(
+            text="✏️ Ввести своё время",
+            callback_data="test:time:reminder_end:custom"
+        )])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.answer(text, reply_markup=keyboard)
+    
+    async def _show_test_step_3(self, message: Message, user_id: int):
+        """Show step 3: Mentor settings."""
+        text = (
+            "📋 <b>ТЕСТИРОВАНИЕ</b>\n\n"
+            "<b>Этап 3 из 3: Настройка наставника</b>\n\n"
+            "Выберите характеристики наставника:\n\n"
+            "1️⃣ <b>Настойчивость</b> (0-5):\n"
+            "Насколько настойчиво наставник должен напоминать о заданиях?"
+        )
+        buttons = []
+        row = []
+        for i in range(6):  # 0-5
+            row.append(InlineKeyboardButton(
+                text=str(i),
+                callback_data=f"test:mentor:persistence:{i}"
+            ))
+            if len(row) == 6:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await message.answer(text, reply_markup=keyboard)
+    
+    async def handle_test_mentor_setting(self, callback: CallbackQuery):
+        """Handle mentor setting selection."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        user_id = callback.from_user.id
+        if user_id not in self._test_state:
+            await callback.message.answer("❌ Тестирование не начато.")
+            return
+        
+        parts = callback.data.split(":")
+        setting_type = parts[2]  # "persistence", "temperature", "charisma"
+        value = int(parts[3])
+        
+        state = self._test_state[user_id]
+        state["results"][setting_type] = value
+        
+        # Move to next setting or complete test
+        if setting_type == "persistence":
+            # Show temperature
+            text = (
+                "📋 <b>ТЕСТИРОВАНИЕ</b>\n\n"
+                "<b>Этап 3 из 3: Настройка наставника</b>\n\n"
+                "2️⃣ <b>Температура (вежливость)</b> (0-5):\n"
+                "Насколько вежливым и мягким должен быть наставник?"
+            )
+            buttons = []
+            row = []
+            for i in range(6):  # 0-5
+                row.append(InlineKeyboardButton(
+                    text=str(i),
+                    callback_data=f"test:mentor:temperature:{i}"
+                ))
+                if len(row) == 6:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        elif setting_type == "temperature":
+            # Show charisma
+            text = (
+                "📋 <b>ТЕСТИРОВАНИЕ</b>\n\n"
+                "<b>Этап 3 из 3: Настройка наставника</b>\n\n"
+                "3️⃣ <b>Харизма</b> (0-5):\n"
+                "Насколько харизматичным должен быть наставник?"
+            )
+            buttons = []
+            row = []
+            for i in range(6):  # 0-5
+                row.append(InlineKeyboardButton(
+                    text=str(i),
+                    callback_data=f"test:mentor:charisma:{i}"
+                ))
+                if len(row) == 6:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await callback.message.edit_text(text, reply_markup=keyboard)
+        
+        elif setting_type == "charisma":
+            # Complete test and apply settings
+            await self._complete_test(callback.message, user_id)
+    
+    async def _complete_test(self, message: Message, user_id: int):
+        """Complete test and apply settings to user."""
+        state = self._test_state.get(user_id)
+        if not state:
+            await message.answer("❌ Тестирование не найдено.")
+            return
+        
+        results = state["results"]
+        user = await self.user_service.get_user(user_id)
+        if not user:
+            await message.answer("❌ Пользователь не найден.")
+            return
+        
+        # Apply test results to user
+        user.question_asking_skill = results.get("asking")
+        user.question_answering_skill = results.get("answering")
+        user.listening_skill = results.get("listening")
+        user.mentor_persistence = results.get("persistence")
+        user.mentor_temperature = results.get("temperature")
+        user.mentor_charisma = results.get("charisma")
+        
+        # Apply time settings
+        if results.get("lesson_time"):
+            user.lesson_delivery_time_local = results["lesson_time"]
+        if results.get("reminder_start"):
+            user.mentor_reminder_start_local = results["reminder_start"]
+        if results.get("reminder_end"):
+            user.mentor_reminder_end_local = results["reminder_end"]
+        
+        # Apply mentor persistence to reminder frequency
+        # Map persistence (0-5) to reminder frequency (0-5)
+        if user.mentor_persistence is not None:
+            user.mentor_reminders = user.mentor_persistence
+        
+        await self.db.update_user(user)
+        
+        # Clear test state
+        del self._test_state[user_id]
+        
+        # Show completion message and continue with onboarding
+        await message.answer(
+            "✅ <b>Тестирование завершено!</b>\n\n"
+            "Спасибо за ответы. Настройки применены.\n\n"
+            "Сейчас мы подготовим для вас курс..."
+        )
+        
+        # Continue with normal onboarding (without test)
+        await asyncio.sleep(1)
+        await self._complete_onboarding(message, user, is_upgrade=False)
+    
+    async def handle_test_time_input(self, message: Message):
+        """Handle time input in test."""
+        user_id = message.from_user.id
+        text = message.text.strip()
+        
+        # Check if user is in test and awaiting time input
+        if user_id not in self._test_state:
+            raise SkipHandler()
+        
+        state = self._test_state[user_id]
+        if "awaiting_time" not in state:
+            raise SkipHandler()
+        
+        # Check time format
+        import re
+        time_pattern = re.compile(r'^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$')
+        if not time_pattern.match(text):
+            await message.answer("❌ Неверный формат времени. Используйте формат ЧЧ:ММ (например, 09:30)")
+            return
+        
+        # Parse time
+        try:
+            hh, mm = text.split(":")
+            hour = int(hh)
+            minute = int(mm)
+            if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+                raise ValueError("Invalid time")
+        except (ValueError, IndexError):
+            await message.answer("❌ Неверный формат времени. Используйте формат ЧЧ:ММ (например, 09:30)")
+            return
+        
+        time_type = state["awaiting_time"]
+        del state["awaiting_time"]
+        
+        if time_type == "lesson":
+            state["results"]["lesson_time"] = text
+            # Show reminder start time selection
+            await self._show_test_step_2_reminder_start(message, user_id)
+        elif time_type == "reminder_start":
+            state["results"]["reminder_start"] = text
+            await self._show_test_step_2_reminder_end(message, user_id)
+        elif time_type == "reminder_end":
+            state["results"]["reminder_end"] = text
+            state["step"] = 3
+            await self._show_test_step_3(message, user_id)
+    
     async def _grant_access_and_notify(self, message: Message, user, is_upgrade: bool = False):
         """
         Grant access to course and send onboarding message.
         
         This is called after successful payment to:
-        1. Send onboarding message
-        2. Invite user to course bot
-        3. Invite user to appropriate groups
+        1. Start test (for new users)
+        2. Send onboarding message
+        3. Invite user to course bot
+        4. Invite user to appropriate groups
+        
+        Args:
+            message: Message object to reply to
+            user: User object
+            is_upgrade: True if this is a tariff upgrade, False if new access
+        """
+        # For new users (not upgrades), start test before granting full access
+        if not is_upgrade:
+            await self._start_test(message, user)
+            return
+        
+        # For upgrades, continue with normal onboarding
+        await self._complete_onboarding(message, user, is_upgrade=True)
+    
+    async def _complete_onboarding(self, message: Message, user, is_upgrade: bool = False):
+        """
+        Complete onboarding after test (or for upgrades).
         
         Args:
             message: Message object to reply to

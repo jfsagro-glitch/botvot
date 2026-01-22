@@ -148,6 +148,25 @@ class Database:
             # Поле уже существует, игнорируем ошибку
             pass
         
+        # Миграция: добавляем поля результатов тестирования
+        test_fields = [
+            ("question_asking_skill", "INTEGER"),
+            ("question_answering_skill", "INTEGER"),
+            ("listening_skill", "INTEGER"),
+            ("mentor_persistence", "INTEGER"),
+            ("mentor_temperature", "INTEGER"),
+            ("mentor_charisma", "INTEGER"),
+        ]
+        for field_name, field_type in test_fields:
+            try:
+                await self.conn.execute(f"""
+                    ALTER TABLE users ADD COLUMN {field_name} {field_type}
+                """)
+                await self.conn.commit()
+            except Exception:
+                # Поле уже существует, игнорируем ошибку
+                pass
+        
         # Lessons table
         await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS lessons (
@@ -796,6 +815,8 @@ class Database:
                 start_date = ?, current_day = ?, mentor_reminders = ?, last_mentor_reminder = ?,
                 legal_accepted_at = ?,
                 lesson_delivery_time_local = ?, mentor_reminder_start_local = ?, mentor_reminder_end_local = ?,
+                question_asking_skill = ?, question_answering_skill = ?, listening_skill = ?,
+                mentor_persistence = ?, mentor_temperature = ?, mentor_charisma = ?,
                 updated_at = ?
             WHERE user_id = ?
         """, (
@@ -809,6 +830,12 @@ class Database:
             getattr(user, "lesson_delivery_time_local", None),
             getattr(user, "mentor_reminder_start_local", None),
             getattr(user, "mentor_reminder_end_local", None),
+            getattr(user, "question_asking_skill", None),
+            getattr(user, "question_answering_skill", None),
+            getattr(user, "listening_skill", None),
+            getattr(user, "mentor_persistence", None),
+            getattr(user, "mentor_temperature", None),
+            getattr(user, "mentor_charisma", None),
             datetime.utcnow().isoformat(),
             user.user_id
         ))
@@ -1187,7 +1214,13 @@ class Database:
             legal_accepted_at=datetime.fromisoformat(row["legal_accepted_at"]) if ("legal_accepted_at" in row.keys() and row["legal_accepted_at"]) else None,
             lesson_delivery_time_local=row["lesson_delivery_time_local"] if ("lesson_delivery_time_local" in row.keys() and row["lesson_delivery_time_local"]) else None,
             mentor_reminder_start_local=row["mentor_reminder_start_local"] if ("mentor_reminder_start_local" in row.keys() and row["mentor_reminder_start_local"]) else None,
-            mentor_reminder_end_local=row["mentor_reminder_end_local"] if ("mentor_reminder_end_local" in row.keys() and row["mentor_reminder_end_local"]) else None
+            mentor_reminder_end_local=row["mentor_reminder_end_local"] if ("mentor_reminder_end_local" in row.keys() and row["mentor_reminder_end_local"]) else None,
+            question_asking_skill=row["question_asking_skill"] if ("question_asking_skill" in row.keys() and row["question_asking_skill"] is not None) else None,
+            question_answering_skill=row["question_answering_skill"] if ("question_answering_skill" in row.keys() and row["question_answering_skill"] is not None) else None,
+            listening_skill=row["listening_skill"] if ("listening_skill" in row.keys() and row["listening_skill"] is not None) else None,
+            mentor_persistence=row["mentor_persistence"] if ("mentor_persistence" in row.keys() and row["mentor_persistence"] is not None) else None,
+            mentor_temperature=row["mentor_temperature"] if ("mentor_temperature" in row.keys() and row["mentor_temperature"] is not None) else None,
+            mentor_charisma=row["mentor_charisma"] if ("mentor_charisma" in row.keys() and row["mentor_charisma"] is not None) else None
         )
     
     def _row_to_lesson(self, row) -> Lesson:

@@ -44,6 +44,13 @@ class User:
     lesson_delivery_time_local: Optional[str] = None  # Time when user receives new lessons (HH:MM format, e.g. "08:30")
     mentor_reminder_start_local: Optional[str] = None  # Start time for mentor reminder window (HH:MM format, e.g. "09:30")
     mentor_reminder_end_local: Optional[str] = None  # End time for mentor reminder window (HH:MM format, e.g. "22:00")
+    # Test results (filled after payment)
+    question_asking_skill: Optional[int] = None  # 1-5: Умение задавать вопросы
+    question_answering_skill: Optional[int] = None  # 1-5: Умение отвечать на вопросы
+    listening_skill: Optional[int] = None  # 1-5: Умение слушать и слышать собеседника
+    mentor_persistence: Optional[int] = None  # 0-5: Настойчивость наставника
+    mentor_temperature: Optional[int] = None  # 0-5: Температура (вежливость) наставника
+    mentor_charisma: Optional[int] = None  # 0-5: Харизма наставника
     
     def has_access(self) -> bool:
         """Check if user has active course access."""
