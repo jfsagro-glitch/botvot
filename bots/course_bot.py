@@ -2202,18 +2202,45 @@ class CourseBot:
                 media_path = media_info.get("path")
                 
                 try:
-                    if media_type == "photo":
+                    # Сначала проверяем, есть ли сохраненный file_id в базе
+                    cached_file_id = await self.db.get_media_file_id(part, day)
+                    
+                    if cached_file_id:
+                        # Используем сохраненный file_id (файл уже в контексте Telegram)
+                        try:
+                            if media_type == "photo":
+                                await self.bot.send_photo(user_id, cached_file_id)
+                                logger.info(f"   ✅ Sent inline photo from cache (file_id) for marker {part}, lesson {day}")
+                            elif media_type == "video":
+                                await self.bot.send_video(user_id, cached_file_id)
+                                logger.info(f"   ✅ Sent inline video from cache (file_id) for marker {part}, lesson {day}")
+                        except Exception as cache_error:
+                            # Если file_id недействителен, загружаем файл заново
+                            logger.warning(f"   ⚠️ Cached file_id invalid for {part}, re-uploading: {cache_error}")
+                            cached_file_id = None
+                    
+                    if not cached_file_id:
+                        # Загружаем файл с диска и сохраняем file_id
                         from pathlib import Path
                         from aiogram.types import FSInputFile
-                        photo_file = FSInputFile(Path(media_path))
-                        await self.bot.send_photo(user_id, photo_file)
-                        logger.info(f"   ✅ Sent inline photo from marker {part} for lesson {day}")
-                    elif media_type == "video":
-                        from pathlib import Path
-                        from aiogram.types import FSInputFile
-                        video_file = FSInputFile(Path(media_path))
-                        await self.bot.send_video(user_id, video_file)
-                        logger.info(f"   ✅ Sent inline video from marker {part} for lesson {day}")
+                        
+                        if media_type == "photo":
+                            photo_file = FSInputFile(Path(media_path))
+                            sent_message = await self.bot.send_photo(user_id, photo_file)
+                            # Сохраняем file_id для фото (может быть список, берем самое большое)
+                            if sent_message.photo:
+                                file_id = sent_message.photo[-1].file_id
+                                await self.db.save_media_file_id(part, day, media_type, file_id)
+                                logger.info(f"   ✅ Sent inline photo and cached file_id for marker {part}, lesson {day}")
+                        elif media_type == "video":
+                            video_file = FSInputFile(Path(media_path))
+                            sent_message = await self.bot.send_video(user_id, video_file)
+                            # Сохраняем file_id для видео
+                            if sent_message.video:
+                                file_id = sent_message.video.file_id
+                                await self.db.save_media_file_id(part, day, media_type, file_id)
+                                logger.info(f"   ✅ Sent inline video and cached file_id for marker {part}, lesson {day}")
+                    
                     await asyncio.sleep(0.3)
                 except Exception as e:
                     logger.warning(f"   ⚠️ Failed to send inline media from marker {part}: {e}")

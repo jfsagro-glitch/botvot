@@ -305,6 +305,23 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_payment_events_created_at
             ON payment_events(created_at)
         """)
+        # Media file IDs cache (stores Telegram file_id for media files)
+        # This allows reusing uploaded files without re-uploading
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS media_file_ids (
+                marker_id TEXT NOT NULL,
+                day_number INTEGER NOT NULL,
+                media_type TEXT NOT NULL,
+                telegram_file_id TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (marker_id, day_number)
+            )
+        """)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_media_file_ids_day
+            ON media_file_ids(day_number)
+        """)
+        
         await self.conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_payment_events_tariff
             ON payment_events(course_program, tariff)
@@ -623,6 +640,34 @@ class Database:
             ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
             """,
             (key, value, now),
+        )
+        await self.conn.commit()
+    
+    # Media file IDs cache methods
+    async def get_media_file_id(self, marker_id: str, day_number: int) -> Optional[str]:
+        """Get cached Telegram file_id for a media marker."""
+        await self._ensure_connection()
+        async with self.conn.execute(
+            "SELECT telegram_file_id FROM media_file_ids WHERE marker_id = ? AND day_number = ?",
+            (marker_id, day_number),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row["telegram_file_id"] if row else None
+    
+    async def save_media_file_id(self, marker_id: str, day_number: int, media_type: str, telegram_file_id: str):
+        """Save Telegram file_id for a media marker."""
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        await self.conn.execute(
+            """
+            INSERT INTO media_file_ids (marker_id, day_number, media_type, telegram_file_id, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(marker_id, day_number) DO UPDATE SET 
+                telegram_file_id=excluded.telegram_file_id,
+                media_type=excluded.media_type,
+                updated_at=excluded.updated_at
+            """,
+            (marker_id, day_number, media_type, telegram_file_id, now),
         )
         await self.conn.commit()
 
