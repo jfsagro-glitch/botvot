@@ -191,26 +191,73 @@ class DriveContentSync:
                     title = mm.group(1).strip()
                     break
 
-            # split task
+            # split task, intro_text, and about_me_text
             # Support both formats:
             #   "Задание:" (on its own line)
             #   "Задание: текст задания" (text on same line)
+            #   "Intro:" or "Введение:" for intro_text
+            #   "Обо мне:" or "About me:" for about_me_text
             task_re = re.compile(r"^\s*(?:Задание|Task)\s*:\s*(.*)$", re.IGNORECASE)
+            intro_re = re.compile(r"^\s*(?:Intro|Введение|Вводный текст)\s*:\s*(.*)$", re.IGNORECASE)
+            about_me_re = re.compile(r"^\s*(?:Обо мне|About me|About_me)\s*:\s*(.*)$", re.IGNORECASE)
+            
             parts_lesson: List[str] = []
             parts_task: List[str] = []
+            parts_intro: List[str] = []
+            parts_about_me: List[str] = []
+            
             in_task = False
+            in_intro = False
+            in_about_me = False
+            
             for ln in bl:
-                m = task_re.match(ln)
-                if m:
+                # Check for task marker
+                m_task = task_re.match(ln)
+                if m_task:
                     in_task = True
-                    # If there's text on the same line after "Задание:", add it to task
-                    task_text_on_line = (m.group(1) or "").strip()
+                    in_intro = False
+                    in_about_me = False
+                    task_text_on_line = (m_task.group(1) or "").strip()
                     if task_text_on_line:
                         parts_task.append(task_text_on_line)
                     continue
-                (parts_task if in_task else parts_lesson).append(ln)
+                
+                # Check for intro marker
+                m_intro = intro_re.match(ln)
+                if m_intro:
+                    in_intro = True
+                    in_task = False
+                    in_about_me = False
+                    intro_text_on_line = (m_intro.group(1) or "").strip()
+                    if intro_text_on_line:
+                        parts_intro.append(intro_text_on_line)
+                    continue
+                
+                # Check for about_me marker
+                m_about_me = about_me_re.match(ln)
+                if m_about_me:
+                    in_about_me = True
+                    in_task = False
+                    in_intro = False
+                    about_me_text_on_line = (m_about_me.group(1) or "").strip()
+                    if about_me_text_on_line:
+                        parts_about_me.append(about_me_text_on_line)
+                    continue
+                
+                # Add line to appropriate section
+                if in_task:
+                    parts_task.append(ln)
+                elif in_intro:
+                    parts_intro.append(ln)
+                elif in_about_me:
+                    parts_about_me.append(ln)
+                else:
+                    parts_lesson.append(ln)
+            
             lesson = "\n".join(parts_lesson).strip()
             task = "\n".join(parts_task).strip()
+            intro_text = "\n".join(parts_intro).strip()
+            about_me_text = "\n".join(parts_about_me).strip()
 
             # Split lesson into posts:
             # 1. By manual markers: ---POST--- or [POST] or ---
@@ -218,10 +265,15 @@ class DriveContentSync:
             lesson_posts = DriveContentSync._split_lesson_into_posts(lesson)
             
             # If lesson was split into multiple posts, store as list; otherwise as string (backward compatible)
-            if len(lesson_posts) > 1:
-                out[day] = {"title": title, "lesson": lesson_posts, "task": task}
-            else:
-                out[day] = {"title": title, "lesson": lesson_posts[0] if lesson_posts else "", "task": task}
+            lesson_data = {"title": title, "lesson": lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else ""), "task": task}
+            
+            # Store intro_text and about_me_text if they were extracted
+            if intro_text:
+                lesson_data["intro_text"] = intro_text
+            if about_me_text:
+                lesson_data["about_me_text"] = about_me_text
+            
+            out[day] = lesson_data
 
         return out
     
@@ -256,10 +308,13 @@ class DriveContentSync:
             # Match: ---POST---, [POST], [любые квадратные кавычки на отдельной строке], ---
             # Также проверяем, если квадратные скобки в начале или конце строки с текстом
             line_stripped = line.strip()
+            # ВАЖНО: Не считаем медиа-маркеры [MEDIA_...] разделителями постов
+            # Они должны оставаться в тексте для встроенной вставки медиа
+            is_media_marker = re.match(r'^\s*\[MEDIA_[a-zA-Z0-9_-]+\]\s*$', line)
             is_marker = (
                 re.match(r'^\s*(?:---POST---|---)\s*$', line, re.IGNORECASE) or
-                re.match(r'^\s*\[.*?\]\s*$', line) or  # Любые квадратные кавычки на отдельной строке
-                (line_stripped.startswith('[') and line_stripped.endswith(']') and len(line_stripped) < 50)  # Короткие маркеры вроде [POST]
+                (re.match(r'^\s*\[.*?\]\s*$', line) and not is_media_marker) or  # Любые квадратные кавычки на отдельной строке, кроме медиа-маркеров
+                (line_stripped.startswith('[') and line_stripped.endswith(']') and len(line_stripped) < 50 and not is_media_marker)  # Короткие маркеры вроде [POST], но не медиа-маркеры
             )
             
             if is_marker:
@@ -273,8 +328,9 @@ class DriveContentSync:
             else:
                 # Проверяем, есть ли квадратные скобки внутри строки (не только маркеры)
                 # Если строка содержит [POST] или подобные маркеры, разделяем по ним
+                # ВАЖНО: Медиа-маркеры [MEDIA_...] НЕ являются разделителями постов
                 if '[' in line and ']' in line:
-                    # Ищем маркеры внутри строки
+                    # Ищем маркеры разделения постов внутри строки (но не медиа-маркеры)
                     marker_pattern = r'\[(POST|ДОПОЛНЕНИЕ|BLOCK|БЛОК|POST\d*)\]'
                     matches = list(re.finditer(marker_pattern, line, re.IGNORECASE))
                     if matches:
@@ -299,7 +355,7 @@ class DriveContentSync:
                             if text_after:
                                 current_post.append(text_after)
                     else:
-                        # Нет маркеров внутри, просто добавляем строку
+                        # Нет маркеров разделения внутри, просто добавляем строку (включая медиа-маркеры)
                         current_post.append(line)
                 else:
                     current_post.append(line)
@@ -400,21 +456,22 @@ class DriveContentSync:
             else:
                 lesson_text = str(lesson_raw).strip()
             task_text = (data.get("task") or "").strip()
+            intro_text = (data.get("intro_text") or "").strip()
+            about_me_text = (data.get("about_me_text") or "").strip()
 
             # Process Drive-linked media referenced in the text/task
             # Replace links with markers and download files
             media_items: List[Dict[str, Any]] = []
             media_markers: Dict[str, Dict[str, Any]] = {}  # marker_id -> media_info
             
-            # Find all Drive links in lesson and task text
+            # Find all Drive links in lesson, task, intro_text, and about_me_text
             # ВАЖНО: В режиме master doc intro_text и about_me_text извлекаются из самого текста урока
-            # Они не хранятся отдельно в метаданных, поэтому обрабатываем только lesson_text и task_text
+            # Они уже извлечены в _split_master_doc, поэтому используем их здесь
             combined_text = lesson_text + "\n" + task_text
-            
-            # В режиме master doc intro_text и about_me_text могут быть в тексте урока,
-            # но они будут обработаны вместе с lesson_text при обработке ссылок
-            intro_text = ""
-            about_me_text = ""
+            if intro_text:
+                combined_text += "\n" + intro_text
+            if about_me_text:
+                combined_text += "\n" + about_me_text
             
             # Special logging for day 0 to debug missing links
             if day == 0:
@@ -718,8 +775,11 @@ class DriveContentSync:
                 "task": task_text,
             }
             
-            # В режиме master doc intro_text и about_me_text не извлекаются отдельно
-            # Они могут быть частью lesson_text, но обрабатываются вместе с ним
+            # Store intro_text and about_me_text if they were extracted from master doc
+            if intro_text:
+                entry["intro_text"] = intro_text
+            if about_me_text:
+                entry["about_me_text"] = about_me_text
             
             if media_items:
                 entry["media"] = media_items
