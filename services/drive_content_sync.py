@@ -90,10 +90,11 @@ class DriveContentSync:
         return list(ids)
     
     @staticmethod
+    @staticmethod
     def _find_drive_links_with_positions(text: str) -> List[Dict[str, str]]:
         """
-        Find all Drive links in text with their positions and file IDs.
-        Returns list of dicts with 'url' (original from text), 'file_id', 'start', 'end'.
+        Find all Drive links in text with their positions and file/folder IDs.
+        Returns list of dicts with 'url' (original from text), 'file_id' (or 'folder_id'), 'start', 'end', 'is_folder'.
         """
         if not text:
             return []
@@ -102,34 +103,39 @@ class DriveContentSync:
         # Patterns to match various Google Drive URL formats
         # Important: we capture the FULL original URL from text for replacement
         patterns = [
+            # Folder link: https://drive.google.com/drive/folders/FOLDER_ID?usp=drive_link
+            (r"https?://drive\.google\.com/drive/folders/([a-zA-Z0-9_-]{10,})(?:/[^?\s]*)?(?:\?[^\s]*)?", lambda m: m.group(0), True),
             # Standard file link: https://drive.google.com/file/d/FILE_ID/view?usp=drive_link
-            (r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]{10,})(?:/[^?\s]*)?(?:\?[^\s]*)?", lambda m: m.group(0)),
+            (r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]{10,})(?:/[^?\s]*)?(?:\?[^\s]*)?", lambda m: m.group(0), False),
             # Open link: https://drive.google.com/open?id=FILE_ID
-            (r"https?://drive\.google\.com/open\?id=([a-zA-Z0-9_-]{10,})(?:&[^\s]*)?", lambda m: m.group(0)),
+            (r"https?://drive\.google\.com/open\?id=([a-zA-Z0-9_-]{10,})(?:&[^\s]*)?", lambda m: m.group(0), False),
             # UC link: https://drive.google.com/uc?id=FILE_ID
-            (r"https?://drive\.google\.com/uc\?id=([a-zA-Z0-9_-]{10,})(?:&[^\s]*)?", lambda m: m.group(0)),
+            (r"https?://drive\.google\.com/uc\?id=([a-zA-Z0-9_-]{10,})(?:&[^\s]*)?", lambda m: m.group(0), False),
             # Document link: https://docs.google.com/document/d/FILE_ID/...
-            (r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]{10,})(?:/[^\s]*)?", lambda m: m.group(0)),
+            (r"https?://docs\.google\.com/document/d/([a-zA-Z0-9_-]{10,})(?:/[^\s]*)?", lambda m: m.group(0), False),
         ]
         
-        for pattern, url_extractor in patterns:
+        for pattern, url_extractor, is_folder in patterns:
             for match in re.finditer(pattern, text):
-                file_id = match.group(1)
+                item_id = match.group(1)
                 # Use the FULL original URL from text (including /view?usp=drive_link etc.)
                 original_url = url_extractor(match)
                 links.append({
                     "url": original_url,  # Original URL from text for exact replacement
-                    "file_id": file_id,
+                    "file_id": item_id,  # For folders, this is actually folder_id
+                    "folder_id": item_id if is_folder else None,  # Explicit folder_id field
+                    "is_folder": is_folder,
                     "start": match.start(),
                     "end": match.end()
                 })
         
-        # Remove duplicates (same file_id, keep first occurrence)
+        # Remove duplicates (same file_id/folder_id, keep first occurrence)
         seen_ids = set()
         unique_links = []
         for link in links:
-            if link["file_id"] not in seen_ids:
-                seen_ids.add(link["file_id"])
+            link_key = (link["file_id"], link.get("is_folder", False))
+            if link_key not in seen_ids:
+                seen_ids.add(link_key)
                 unique_links.append(link)
         
         return unique_links
@@ -456,80 +462,179 @@ class DriveContentSync:
             for link_info in drive_links:
                 fid = link_info["file_id"]
                 link_url = link_info["url"]
+                is_folder = link_info.get("is_folder", False)
+                
                 try:
-                    logger.info(f"   📎 Processing Drive link: {link_url[:60]}... (file_id: {fid})")
-                    meta = drive.files().get(fileId=fid, fields="id,name,mimeType,modifiedTime,size").execute()
-                    mt = (meta.get("mimeType") or "").lower()
-                    name = (meta.get("name") or f"file_{fid}").strip()
-                    
-                    logger.info(f"   📎   File name: {name}, MIME type: {mt}")
-                    
-                    if mt.startswith("image/"):
-                        media_type = "photo"
-                    elif mt.startswith("video/"):
-                        media_type = "video"
-                    else:
-                        logger.info(f"   📎   Skipping non-media file: {name} (MIME: {mt})")
-                        skipped_links += 1
-                        continue  # Skip non-media files
-                    
-                    safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
-                    dest = media_root / f"day_{day:02d}" / safe_name
-                    
-                    # Ensure destination directory exists
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    
-                    should_skip = self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime"))
-                    file_exists = dest.exists()
-                    logger.info(f"   📎   Destination: {dest}, File exists: {file_exists}, Should skip: {should_skip}")
-                    
-                    if not should_skip or not file_exists:
-                        if not file_exists:
-                            logger.info(f"   📎   File doesn't exist, downloading: {name} -> {dest}")
+                    if is_folder:
+                        # Handle folder: get all files in folder and process each as media
+                        folder_id = link_info.get("folder_id") or fid
+                        logger.info(f"   📁 Processing Drive folder: {link_url[:60]}... (folder_id: {folder_id})")
+                        
+                        # Get all files in the folder
+                        folder_files = self._list_children(drive, folder_id)
+                        logger.info(f"   📁   Found {len(folder_files)} items in folder")
+                        
+                        if not folder_files:
+                            logger.warning(f"   ⚠️ Folder {folder_id} is empty or inaccessible")
+                            skipped_links += 1
+                            continue
+                        
+                        # Collect all markers for files in this folder
+                        folder_markers = []
+                        folder_media_count = 0
+                        
+                        for folder_file in folder_files:
+                            file_id = folder_file.get("id")
+                            file_name = folder_file.get("name", f"file_{file_id}").strip()
+                            file_mime = (folder_file.get("mimeType") or "").lower()
+                            
+                            logger.info(f"   📁   Processing folder item: {file_name} (MIME: {file_mime})")
+                            
+                            # Only process media files (images/videos)
+                            if file_mime.startswith("image/"):
+                                media_type = "photo"
+                            elif file_mime.startswith("video/"):
+                                media_type = "video"
+                            else:
+                                logger.info(f"   📁   Skipping non-media file in folder: {file_name} (MIME: {file_mime})")
+                                continue
+                            
+                            safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", file_name)
+                            dest = media_root / f"day_{day:02d}" / safe_name
+                            
+                            # Ensure destination directory exists
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            should_skip = self._should_skip_download(dest, folder_file.get("size"), folder_file.get("modifiedTime"))
+                            file_exists = dest.exists()
+                            logger.info(f"   📁     Destination: {dest}, File exists: {file_exists}, Should skip: {should_skip}")
+                            
+                            if not should_skip or not file_exists:
+                                if not file_exists:
+                                    logger.info(f"   📁     File doesn't exist, downloading: {file_name} -> {dest}")
+                                else:
+                                    logger.info(f"   📁     File outdated or size mismatch, re-downloading: {file_name} -> {dest}")
+                                self._download_binary_file(drive, file_id, dest)
+                                media_downloaded += 1
+                                logger.info(f"   ✅ Downloaded media file from folder: {file_name} (total downloaded: {media_downloaded})")
+                            else:
+                                logger.info(f"   📁     File already exists and up-to-date, skipping download: {dest}")
+                                skipped_links += 1
+                            
+                            processed_links += 1
+                            rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
+                            
+                            # Create marker for this file
+                            marker_id = f"MEDIA_{file_id}_{len(media_markers)}"
+                            media_markers[marker_id] = {
+                                "type": media_type,
+                                "path": rel_path,
+                                "file_id": file_id,
+                                "name": file_name
+                            }
+                            folder_markers.append(marker_id)
+                            folder_media_count += 1
+                            logger.info(f"   ✅ Created media marker: [{marker_id}] for file {file_name} (path: {rel_path})")
+                            
+                            media_items.append({"type": media_type, "path": rel_path, "marker_id": marker_id})
+                        
+                        # Replace folder link with all markers (one per line or comma-separated)
+                        if folder_markers:
+                            # Replace folder URL with all markers, one per line
+                            markers_text = "\n".join([f"[{m}]" for m in folder_markers])
+                            replaced_in_lesson = False
+                            replaced_in_task = False
+                            if link_url in lesson_text:
+                                lesson_text = lesson_text.replace(link_url, markers_text)
+                                replaced_in_lesson = True
+                                logger.info(f"   ✅ Replaced Drive folder link in lesson_text with {len(folder_markers)} markers")
+                            if link_url in task_text:
+                                task_text = task_text.replace(link_url, markers_text)
+                                replaced_in_task = True
+                                logger.info(f"   ✅ Replaced Drive folder link in task_text with {len(folder_markers)} markers")
+                            
+                            if not replaced_in_lesson and not replaced_in_task:
+                                logger.warning(f"   ⚠️ Drive folder link not found in lesson_text or task_text: {link_url[:60]}...")
+                            
+                            logger.info(f"   📁 Folder processed: {folder_media_count} media files, {len(folder_markers)} markers created")
                         else:
-                            logger.info(f"   📎   File outdated or size mismatch, re-downloading: {name} -> {dest}")
-                        self._download_binary_file(drive, fid, dest)
-                        media_downloaded += 1
-                        logger.info(f"   ✅ Downloaded media file: {name} (total downloaded: {media_downloaded})")
+                            logger.warning(f"   ⚠️ No media files found in folder {folder_id}")
+                            skipped_links += 1
                     else:
-                        logger.info(f"   📎   File already exists and up-to-date, skipping download: {dest}")
-                        # Count existing files as "processed" for reporting
-                        skipped_links += 1
-                    
-                    processed_links += 1
-                    rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
-                    
-                    # CRITICAL: Create marker ALWAYS, even if file was skipped
-                    # The marker is needed for inline insertion regardless of download status
-                    marker_id = f"MEDIA_{fid}_{len(media_markers)}"
-                    media_markers[marker_id] = {
-                        "type": media_type,
-                        "path": rel_path,
-                        "file_id": fid,
-                        "name": name
-                    }
-                    logger.info(f"   ✅ Created media marker: [{marker_id}] for file {name} (path: {rel_path})")
-                    
-                    # Replace link in text with marker
-                    # Use the original URL from text (link_url) for exact replacement
-                    marker_placeholder = f"[{marker_id}]"
-                    # Replace all occurrences of the link URL in both texts
-                    replaced_in_lesson = False
-                    replaced_in_task = False
-                    if link_url in lesson_text:
-                        lesson_text = lesson_text.replace(link_url, marker_placeholder)
-                        replaced_in_lesson = True
-                        logger.info(f"   ✅ Replaced Drive link in lesson_text: {link_url[:60]}... -> [{marker_id}]")
-                    if link_url in task_text:
-                        task_text = task_text.replace(link_url, marker_placeholder)
-                        replaced_in_task = True
-                        logger.info(f"   ✅ Replaced Drive link in task_text: {link_url[:60]}... -> [{marker_id}]")
-                    
-                    if not replaced_in_lesson and not replaced_in_task:
-                        logger.warning(f"   ⚠️ Drive link not found in lesson_text or task_text: {link_url[:60]}...")
-                        logger.warning(f"   ⚠️ This may indicate the link format changed or was already replaced")
-                    
-                    media_items.append({"type": media_type, "path": rel_path, "marker_id": marker_id})
+                        # Handle single file (existing logic)
+                        logger.info(f"   📎 Processing Drive link: {link_url[:60]}... (file_id: {fid})")
+                        meta = drive.files().get(fileId=fid, fields="id,name,mimeType,modifiedTime,size").execute()
+                        mt = (meta.get("mimeType") or "").lower()
+                        name = (meta.get("name") or f"file_{fid}").strip()
+                        
+                        logger.info(f"   📎   File name: {name}, MIME type: {mt}")
+                        
+                        if mt.startswith("image/"):
+                            media_type = "photo"
+                        elif mt.startswith("video/"):
+                            media_type = "video"
+                        else:
+                            logger.info(f"   📎   Skipping non-media file: {name} (MIME: {mt})")
+                            skipped_links += 1
+                            continue  # Skip non-media files
+                        
+                        safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
+                        dest = media_root / f"day_{day:02d}" / safe_name
+                        
+                        # Ensure destination directory exists
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        should_skip = self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime"))
+                        file_exists = dest.exists()
+                        logger.info(f"   📎   Destination: {dest}, File exists: {file_exists}, Should skip: {should_skip}")
+                        
+                        if not should_skip or not file_exists:
+                            if not file_exists:
+                                logger.info(f"   📎   File doesn't exist, downloading: {name} -> {dest}")
+                            else:
+                                logger.info(f"   📎   File outdated or size mismatch, re-downloading: {name} -> {dest}")
+                            self._download_binary_file(drive, fid, dest)
+                            media_downloaded += 1
+                            logger.info(f"   ✅ Downloaded media file: {name} (total downloaded: {media_downloaded})")
+                        else:
+                            logger.info(f"   📎   File already exists and up-to-date, skipping download: {dest}")
+                            # Count existing files as "processed" for reporting
+                            skipped_links += 1
+                        
+                        processed_links += 1
+                        rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
+                        
+                        # CRITICAL: Create marker ALWAYS, even if file was skipped
+                        # The marker is needed for inline insertion regardless of download status
+                        marker_id = f"MEDIA_{fid}_{len(media_markers)}"
+                        media_markers[marker_id] = {
+                            "type": media_type,
+                            "path": rel_path,
+                            "file_id": fid,
+                            "name": name
+                        }
+                        logger.info(f"   ✅ Created media marker: [{marker_id}] for file {name} (path: {rel_path})")
+                        
+                        # Replace link in text with marker
+                        # Use the original URL from text (link_url) for exact replacement
+                        marker_placeholder = f"[{marker_id}]"
+                        # Replace all occurrences of the link URL in both texts
+                        replaced_in_lesson = False
+                        replaced_in_task = False
+                        if link_url in lesson_text:
+                            lesson_text = lesson_text.replace(link_url, marker_placeholder)
+                            replaced_in_lesson = True
+                            logger.info(f"   ✅ Replaced Drive link in lesson_text: {link_url[:60]}... -> [{marker_id}]")
+                        if link_url in task_text:
+                            task_text = task_text.replace(link_url, marker_placeholder)
+                            replaced_in_task = True
+                            logger.info(f"   ✅ Replaced Drive link in task_text: {link_url[:60]}... -> [{marker_id}]")
+                        
+                        if not replaced_in_lesson and not replaced_in_task:
+                            logger.warning(f"   ⚠️ Drive link not found in lesson_text or task_text: {link_url[:60]}...")
+                            logger.warning(f"   ⚠️ This may indicate the link format changed or was already replaced")
+                        
+                        media_items.append({"type": media_type, "path": rel_path, "marker_id": marker_id})
                 except Exception as e:
                     error_links += 1
                     error_msg = f"day {day}: failed to download linked media ({fid}): {e}"
