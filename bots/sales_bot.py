@@ -584,8 +584,8 @@ class SalesBot:
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
         if not is_admin_bot_configured():
                 await message.answer(
-                    "❌ Сейчас поддержка недоступна: не настроен ПУП.\n\n"
-                    "Откройте ПУП и нажмите /start, либо проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID."
+                    "❌ Сейчас поддержка недоступна: канал кураторов не настроен.\n\n"
+                    "Проверьте переменные окружения: ADMIN_BOT_TOKEN и ADMIN_CHAT_ID."
                 )
                 return
 
@@ -604,7 +604,7 @@ class SalesBot:
         except Exception as e:
             logger.error(f"❌ Cannot send to admin bot (PUP): {e}", exc_info=True)
             await message.answer(
-                "❌ Не могу отправить сообщение в ПУП.\n\n"
+                "❌ Не могу отправить сообщение кураторам.\n\n"
                 "Проверьте настройки ADMIN_BOT_TOKEN и ADMIN_CHAT_ID."
             )
             return
@@ -613,7 +613,7 @@ class SalesBot:
 
         await message.answer(
             "💬 <b>Поговорить с человеком</b>\n\n"
-            "Напишите сообщение или отправьте голосовое — я перешлю в ПУП (Пункт управления полетами).\n\n"
+            "Напишите сообщение или отправьте голосовое — я перешлю кураторам.\n\n"
             "Чтобы завершить — нажмите «⏺️ Завершить».",
             reply_markup=self._talk_mode_keyboard()
         )
@@ -696,12 +696,12 @@ class SalesBot:
             if not sent:
                 raise RuntimeError("send_to_admin_bot returned False")
 
-            await message.answer("✅ Голосовое отправлено в ПУП.", reply_markup=self._talk_mode_keyboard())
+            await message.answer("✅ Голосовое отправлено кураторам.", reply_markup=self._talk_mode_keyboard())
             logger.info(f"✅ Voice question from sales bot sent to admin bot (PUP) from user {user_id}")
         except Exception as e:
             logger.error(f"Error sending voice to admin bot: {e}", exc_info=True)
             await message.answer(
-                "❌ Не удалось отправить голосовое в ПУП.\n\n"
+                "❌ Не удалось отправить голосовое кураторам.\n\n"
                 "Проверьте настройки ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
                 reply_markup=self._talk_mode_keyboard()
             )
@@ -3003,7 +3003,7 @@ class SalesBot:
         except Exception as e:
             logger.error(f"Error sending to admin bot: {e}", exc_info=True)
             await message.answer(
-                "❌ Не удалось отправить сообщение в ПУП.\n\n"
+                "❌ Не удалось отправить сообщение кураторам.\n\n"
                 "Проверьте настройки ADMIN_BOT_TOKEN и ADMIN_CHAT_ID.",
                 reply_markup=self._talk_mode_keyboard()
             )
@@ -3011,7 +3011,7 @@ class SalesBot:
         
         await message.answer(
             "✅ <b>Сообщение отправлено!</b>\n\n"
-            "📤 Я переслал сообщение в ПУП 👥.\n"
+            "📤 Я переслал сообщение кураторам 👥.\n"
             "⏳ Мы ответим вам как можно скорее.\n\n"
             "Чтобы завершить диалог — нажмите «✅ Завершить».",
             reply_markup=self._talk_mode_keyboard()

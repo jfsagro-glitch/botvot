@@ -1743,7 +1743,7 @@ class CourseBot:
         await callback.message.answer(
             f"<b>Задать вопрос</b>\n\n"
             f"Отправьте вопрос по <b>Дню {day_from_callback}</b> <b>одним сообщением</b> (можно голосовым).\n\n"
-            f"Сообщение уйдёт в ПУП, администратор ответит вам прямо сюда.\n\n"
+            f"Сообщение уйдёт кураторам, они ответят вам прямо сюда.\n\n"
             f"<i>Совет: чем конкретнее вопрос, тем быстрее вы получите ответ.</i>"
         )
     
@@ -3713,7 +3713,7 @@ class CourseBot:
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
         if not is_admin_bot_configured():
             logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward assignment.")
-            await message.answer("❌ Не удалось отправить задание на проверку: ПУП не настроен.")
+            await message.answer("❌ Не удалось отправить задание на проверку: канал кураторов не настроен.")
             return
 
         try:
@@ -3729,17 +3729,17 @@ class CourseBot:
                 ])
             )
             if not ok:
-                await message.answer("❌ Не удалось отправить задание в ПУП. Откройте ПУП и нажмите /start.")
+                await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
                 return
         except Exception as e:
             logger.error(f"Error sending to admin bot: {e}", exc_info=True)
-            await message.answer("❌ Не удалось отправить задание в ПУП. Попробуйте позже.")
+            await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
             return
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
             "✅ <b>Задание отправлено!</b>\n\n"
-            "📤 Ваше задание отправлено в ПУП 👥.\n"
+            "📤 Ваше задание направлено кураторам 👥.\n"
             "⏳ Вы получите обратную связь в ближайшее время 💬.",
             reply_markup=persistent_keyboard
         )
@@ -3844,7 +3844,7 @@ class CourseBot:
         from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
         if not is_admin_bot_configured():
             logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward assignment media.")
-            await message.answer("❌ Не удалось отправить задание на проверку: ПУП не настроен.")
+            await message.answer("❌ Не удалось отправить задание на проверку: канал кураторов не настроен.")
             return
 
         reply_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -3867,17 +3867,17 @@ class CourseBot:
             else:
                 ok = False
             if not ok:
-                await message.answer("❌ Не удалось отправить задание в ПУП. Откройте ПУП и нажмите /start.")
+                await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
                 return
         except Exception as e:
             logger.error(f"Error sending assignment media to admin bot: {e}", exc_info=True)
-            await message.answer("❌ Не удалось отправить задание в ПУП. Попробуйте позже.")
+            await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
             return
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
             "✅ <b>Задание отправлено!</b>\n\n"
-            "📤 Ваше задание отправлено в ПУП 👥.\n"
+            "📤 Ваше задание направлено кураторам 👥.\n"
             "⏳ Вы получите обратную связь в ближайшее время 💬.",
             reply_markup=persistent_keyboard
         )
@@ -3937,7 +3937,7 @@ class CourseBot:
         # Отправляем в ПУП (премиум-группу) вместо личного чата админа
         if not Config.PREMIUM_GROUP_ID:
             logger.error("PREMIUM_GROUP_ID not configured. Cannot forward question to PUP.")
-            await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
+            await message.answer("❌ Не удалось отправить вопрос: канал кураторов не настроен.")
             return
 
         try:
@@ -3956,7 +3956,7 @@ class CourseBot:
             pup_chat_id = parse_chat_id(Config.PREMIUM_GROUP_ID)
             if pup_chat_id == 0:
                 logger.error(f"Invalid PREMIUM_GROUP_ID: {Config.PREMIUM_GROUP_ID}")
-                await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
+                await message.answer("❌ Не удалось отправить вопрос: канал кураторов не настроен.")
                 return
             
             # Отправляем в ПУП через курс-бота
@@ -3977,7 +3977,7 @@ class CourseBot:
             logger.info(f"✅ Question sent to PUP (premium group) from user {user_id}")
         except Exception as e:
             logger.error(f"Error sending question to PUP: {e}", exc_info=True)
-            await message.answer("❌ Не удалось отправить вопрос в ПУП. Попробуйте позже.")
+            await message.answer("❌ Не удалось отправить вопрос кураторам. Попробуйте позже.")
             return
         
         persistent_keyboard = self._create_persistent_keyboard()
@@ -4024,7 +4024,7 @@ class CourseBot:
 
         # Отправляем в ПУП (премиум-группу) вместо личного чата админа
         if not Config.PREMIUM_GROUP_ID:
-            await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
+            await message.answer("❌ Не удалось отправить вопрос: канал кураторов не настроен.")
             return
 
         try:
@@ -4043,7 +4043,7 @@ class CourseBot:
             pup_chat_id = parse_chat_id(Config.PREMIUM_GROUP_ID)
             if pup_chat_id == 0:
                 logger.error(f"Invalid PREMIUM_GROUP_ID: {Config.PREMIUM_GROUP_ID}")
-                await message.answer("❌ Не удалось отправить вопрос: ПУП не настроен.")
+                await message.answer("❌ Не удалось отправить вопрос: канал кураторов не настроен.")
                 return
             
             # Загружаем голосовое сообщение
@@ -4071,7 +4071,7 @@ class CourseBot:
             logger.info(f"✅ Voice question sent to PUP (premium group) from user {user_id}")
         except Exception as e:
             logger.error(f"Error sending voice question to PUP: {e}", exc_info=True)
-            await message.answer("❌ Не удалось отправить вопрос в ПУП. Попробуйте позже.")
+            await message.answer("❌ Не удалось отправить вопрос кураторам. Попробуйте позже.")
             return
 
         persistent_keyboard = self._create_persistent_keyboard()
@@ -4614,7 +4614,7 @@ class CourseBot:
         await message.answer(
             f"<b>Задать вопрос</b>\n\n"
             f"Отправьте вопрос по <b>Дню {user.current_day}</b> <b>одним сообщением</b> (можно голосовым).\n\n"
-            f"Сообщение уйдёт в ПУП, администратор ответит вам прямо сюда.\n\n"
+            f"Сообщение уйдёт кураторам, они ответят вам прямо сюда.\n\n"
             f"💡 <i>Чтобы задать ещё вопрос — просто нажмите ❓ снова.</i>",
             reply_markup=persistent_keyboard
         )
@@ -4652,7 +4652,7 @@ class CourseBot:
         await message.answer(
             f"<b>Отправить задание для {safe_lesson_title}</b>\n\n"
             "Отправьте ответ <b>одним сообщением</b>: текстом, фото, видео, документом или голосовым.\n\n"
-            "<i>После отправки задание уйдёт в ПУП.</i>",
+            "<i>После отправки задание уйдёт кураторам.</i>",
             reply_markup=persistent_keyboard,
         )
     
