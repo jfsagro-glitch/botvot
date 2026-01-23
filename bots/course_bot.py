@@ -4320,8 +4320,14 @@ class CourseBot:
                     return
             
             # Отправляем ответ пользователю анонимно
-            answer_text = message.text or message.caption or ""
-            if answer_text:
+            answer_text = (message.text or message.caption or "").strip()
+            
+            # Проверяем, что текст не пустой (включая проверку на только эмодзи/пробелы)
+            import re
+            text_without_emoji = re.sub(r'[\U0001F300-\U0001F9FF\U0001FA00-\U0001FAFF\U00002600-\U000027BF\U0001F1E0-\U0001F1FF\U0001F680-\U0001F6FF\U0001F900-\U0001F9FF]', '', answer_text)
+            text_without_emoji = re.sub(r'[^\w\s]', '', text_without_emoji).strip()
+            
+            if answer_text and (text_without_emoji or len(answer_text.strip()) >= 3):
                 # Если есть question_id, используем его
                 if question_id:
                     question = await self.question_service.get_question(question_id)
@@ -4355,6 +4361,11 @@ class CourseBot:
                     if lesson_day:
                         answer_message += f"Урок: День {lesson_day}\n\n"
                     answer_message += f"{answer_text}"
+                    
+                    # Проверяем, что сообщение не пустое перед отправкой
+                    if not answer_message.strip() or len(answer_message.strip()) < 10:
+                        await message.answer("❌ Ошибка: сообщение ответа пустое. Пожалуйста, отправьте текст.")
+                        return
                     
                     # Отправляем ответ пользователю
                     try:
