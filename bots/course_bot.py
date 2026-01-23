@@ -167,9 +167,20 @@ class CourseBot:
 
         # Reload in-memory cache so new lessons take effect immediately
         try:
+            logger.info("🔄 Reloading lesson_loader after sync...")
             self.lesson_loader.reload()
-        except Exception:
-            pass
+            # Verify that media_markers are loaded for day 0
+            day0_data = self.lesson_loader.get_lesson(0)
+            if day0_data:
+                if "media_markers" in day0_data:
+                    logger.info(f"✅ Day 0 media_markers after reload: {len(day0_data.get('media_markers', {}))} markers")
+                    logger.info(f"   📎 Marker keys: {list(day0_data.get('media_markers', {}).keys())}")
+                else:
+                    logger.warning(f"⚠️ Day 0 media_markers NOT FOUND after reload! Available keys: {list(day0_data.keys())}")
+            else:
+                logger.warning(f"⚠️ Day 0 lesson_data is None after reload!")
+        except Exception as e:
+            logger.error(f"❌ Failed to reload lesson_loader: {e}", exc_info=True)
 
         warn_text = ""
         if result.warnings:
