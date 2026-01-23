@@ -361,12 +361,29 @@ class DriveContentSync:
             
             # Find all Drive links in lesson and task text
             combined_text = lesson_text + "\n" + task_text
+            
+            # Special logging for day 0 to debug missing links
+            if day == 0:
+                logger.info(f"   🔍 DEBUG Day 0: lesson_text length: {len(lesson_text)}, task_text length: {len(task_text)}")
+                logger.info(f"   🔍 DEBUG Day 0: lesson_text preview (first 500 chars): {lesson_text[:500]}")
+                logger.info(f"   🔍 DEBUG Day 0: task_text preview (first 500 chars): {task_text[:500]}")
+                # Check if link is in text but not found by pattern
+                if "drive.google.com" in combined_text.lower() or "1XpI71z0vSm6uK1C8krBsBFrUwMSPNzXL" in combined_text:
+                    logger.warning(f"   ⚠️ DEBUG Day 0: Found 'drive.google.com' or file_id in text, but pattern didn't match!")
+                    # Try to find the exact string
+                    import re as re_module
+                    all_drive_mentions = re_module.findall(r'[^\s]*drive\.google\.com[^\s]*', combined_text, re_module.IGNORECASE)
+                    if all_drive_mentions:
+                        logger.warning(f"   ⚠️ DEBUG Day 0: Found drive.google.com mentions: {all_drive_mentions[:5]}")
+            
             drive_links = self._find_drive_links_with_positions(combined_text)
             
             logger.info(f"   📎 Day {day}: Found {len(drive_links)} Drive links in text")
             if drive_links:
                 for link in drive_links:
                     logger.info(f"   📎   - Link: {link['url'][:60]}... (file_id: {link['file_id']})")
+            elif day == 0:
+                logger.warning(f"   ⚠️ Day 0: No Drive links found! This may indicate the link format is different or link is in a different field")
             
             # Process links in reverse order to preserve positions when replacing
             drive_links.sort(key=lambda x: x["start"], reverse=True)
