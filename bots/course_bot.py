@@ -3695,54 +3695,72 @@ class CourseBot:
         except Exception:
             pass
         
-        # Forward to admin
-        safe_first_name = html.escape(user.first_name or "")
-        safe_username = html.escape(user.username) if user.username else "\u041d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d\u043e"
-        safe_lesson_title = html.escape(lesson_title)
-        safe_message_text = html.escape(message.text or "")
-        admin_text = (
-            f"<b>Новое задание</b>\n\n"
-            f"👤 Пользователь: {safe_first_name} (@{safe_username})\n"
-            f"🆔 ID пользователя: {user.user_id}\n"
-            f"Урок: {safe_lesson_title}\n"
-            f"🔢 ID задания: {assignment.assignment_id}\n\n"
-            f"✍️ <b>Ответ:</b>\n{safe_message_text}"
-        )
+        # Импортируем функцию для получения уведомления
+        from bots.assignment_notifications import get_assignment_notification
         
-        # Send ONLY to PUP (admin bot)
-        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-        if not is_admin_bot_configured():
-            logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward assignment.")
-            await message.answer("❌ Не удалось отправить задание на проверку: канал кураторов не настроен.")
-            return
-
-        try:
-            ok = await send_to_admin_bot(
-                admin_text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=f"💬 Ответить пользователю",
-                            callback_data=f"admin_reply:{assignment.assignment_id}"
-                        )
-                    ]
-                ])
+        # Проверяем тариф: для FEEDBACK и PRACTIC отправляем кураторам, для BASIC - только уведомление
+        needs_feedback = user.tariff in [Tariff.FEEDBACK, Tariff.PRACTIC]
+        
+        if needs_feedback:
+            # Forward to admin (только для тарифов с обратной связью)
+            safe_first_name = html.escape(user.first_name or "")
+            safe_username = html.escape(user.username) if user.username else "\u041d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d\u043e"
+            safe_lesson_title = html.escape(lesson_title)
+            safe_message_text = html.escape(message.text or "")
+            admin_text = (
+                f"<b>Новое задание</b>\n\n"
+                f"👤 Пользователь: {safe_first_name} (@{safe_username})\n"
+                f"🆔 ID пользователя: {user.user_id}\n"
+                f"Урок: {safe_lesson_title}\n"
+                f"🔢 ID задания: {assignment.assignment_id}\n\n"
+                f"✍️ <b>Ответ:</b>\n{safe_message_text}"
             )
-            if not ok:
+            
+            # Send ONLY to PUP (admin bot)
+            from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+            if not is_admin_bot_configured():
+                logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward assignment.")
+                await message.answer("❌ Не удалось отправить задание на проверку: канал кураторов не настроен.")
+                return
+
+            try:
+                ok = await send_to_admin_bot(
+                    admin_text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text=f"💬 Ответить пользователю",
+                                callback_data=f"admin_reply:{assignment.assignment_id}"
+                            )
+                        ]
+                    ])
+                )
+                if not ok:
+                    await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
+                    return
+            except Exception as e:
+                logger.error(f"Error sending to admin bot: {e}", exc_info=True)
                 await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
                 return
-        except Exception as e:
-            logger.error(f"Error sending to admin bot: {e}", exc_info=True)
-            await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
-            return
         
+        # Отправляем уведомление пользователю (для всех тарифов)
         persistent_keyboard = self._create_persistent_keyboard()
-        await message.answer(
-            "✅ <b>Задание отправлено!</b>\n\n"
-            "📤 Ваше задание направлено кураторам 👥.\n"
-            "⏳ Вы получите обратную связь в ближайшее время 💬.",
-            reply_markup=persistent_keyboard
-        )
+        notification_text = get_assignment_notification(lesson_day)
+        
+        if needs_feedback:
+            # Для тарифов с обратной связью - уведомление + информация о кураторах
+            await message.answer(
+                f"✅ {notification_text}\n\n"
+                "📤 Ваше задание направлено кураторам 👥.\n"
+                "⏳ Вы получите обратную связь в ближайшее время 💬.",
+                reply_markup=persistent_keyboard
+            )
+        else:
+            # Для BASIC тарифа - только уведомление
+            await message.answer(
+                f"✅ {notification_text}",
+                reply_markup=persistent_keyboard
+            )
         
         # Отправляем follow_up_text для урока 0 после отправки задания
         if user.current_day == 0:
@@ -3823,64 +3841,82 @@ class CourseBot:
         except Exception:
             pass
         
-        # Forward to admin
-        safe_first_name = html.escape(user.first_name or "")
-        safe_username = html.escape(user.username) if user.username else "\u041d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d\u043e"
-        safe_lesson_title = html.escape(lesson_title)
-        safe_caption = html.escape(message.caption or "")
-
-        admin_text = (
-            f"<b>Новое задание (Медиа)</b>\n\n"
-            f"👤 Пользователь: {safe_first_name} (@{safe_username})\n"
-            f"🆔 ID пользователя: {user.user_id}\n"
-            f"Урок: {safe_lesson_title}\n"
-            f"🔢 ID задания: {assignment.assignment_id}"
-        )
+        # Импортируем функцию для получения уведомления
+        from bots.assignment_notifications import get_assignment_notification
         
-        if message.caption:
-            admin_text += f"\n\n✍️ <b>Подпись:</b>\n{safe_caption}"
+        # Проверяем тариф: для FEEDBACK и PRACTIC отправляем кураторам, для BASIC - только уведомление
+        needs_feedback = user.tariff in [Tariff.FEEDBACK, Tariff.PRACTIC]
         
-        # Forward media to admin
-        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
-        if not is_admin_bot_configured():
-            logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward assignment media.")
-            await message.answer("❌ Не удалось отправить задание на проверку: канал кураторов не настроен.")
-            return
+        if needs_feedback:
+            # Forward to admin (только для тарифов с обратной связью)
+            safe_first_name = html.escape(user.first_name or "")
+            safe_username = html.escape(user.username) if user.username else "\u041d\u0435 \u0443\u043a\u0430\u0437\u0430\u043d\u043e"
+            safe_lesson_title = html.escape(lesson_title)
+            safe_caption = html.escape(message.caption or "")
 
-        reply_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Ответить пользователю", callback_data=f"admin_reply:{assignment.assignment_id}")]
-        ])
+            admin_text = (
+                f"<b>Новое задание (Медиа)</b>\n\n"
+                f"👤 Пользователь: {safe_first_name} (@{safe_username})\n"
+                f"🆔 ID пользователя: {user.user_id}\n"
+                f"Урок: {safe_lesson_title}\n"
+                f"🔢 ID задания: {assignment.assignment_id}"
+            )
+            
+            if message.caption:
+                admin_text += f"\n\n✍️ <b>Подпись:</b>\n{safe_caption}"
+            
+            # Forward media to admin
+            from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+            if not is_admin_bot_configured():
+                logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward assignment media.")
+                await message.answer("❌ Не удалось отправить задание на проверку: канал кураторов не настроен.")
+                return
 
-        try:
-            if message.photo:
-                ok = await send_to_admin_bot(admin_text, photo_file_id=message.photo[-1].file_id, reply_markup=reply_kb)
-            elif message.video:
-                ok = await send_to_admin_bot(admin_text, video_file_id=message.video.file_id, reply_markup=reply_kb)
-            elif message.document:
-                ok = await send_to_admin_bot(admin_text, document_file_id=message.document.file_id, reply_markup=reply_kb)
-            elif message.voice:
-                # Re-upload voice to PUP: file_id from course bot is not valid for admin bot token.
-                import io
-                buf = io.BytesIO()
-                await self.bot.download(message.voice, destination=buf)
-                ok = await send_to_admin_bot(admin_text, voice_bytes=buf.getvalue(), voice_filename="voice.ogg", reply_markup=reply_kb)
-            else:
-                ok = False
-            if not ok:
+            reply_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💬 Ответить пользователю", callback_data=f"admin_reply:{assignment.assignment_id}")]
+            ])
+
+            try:
+                if message.photo:
+                    ok = await send_to_admin_bot(admin_text, photo_file_id=message.photo[-1].file_id, reply_markup=reply_kb)
+                elif message.video:
+                    ok = await send_to_admin_bot(admin_text, video_file_id=message.video.file_id, reply_markup=reply_kb)
+                elif message.document:
+                    ok = await send_to_admin_bot(admin_text, document_file_id=message.document.file_id, reply_markup=reply_kb)
+                elif message.voice:
+                    # Re-upload voice to PUP: file_id from course bot is not valid for admin bot token.
+                    import io
+                    buf = io.BytesIO()
+                    await self.bot.download(message.voice, destination=buf)
+                    ok = await send_to_admin_bot(admin_text, voice_bytes=buf.getvalue(), voice_filename="voice.ogg", reply_markup=reply_kb)
+                else:
+                    ok = False
+                if not ok:
+                    await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
+                    return
+            except Exception as e:
+                logger.error(f"Error sending assignment media to admin bot: {e}", exc_info=True)
                 await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
                 return
-        except Exception as e:
-            logger.error(f"Error sending assignment media to admin bot: {e}", exc_info=True)
-            await message.answer("❌ Не удалось отправить задание кураторам. Попробуйте позже.")
-            return
         
+        # Отправляем уведомление пользователю (для всех тарифов)
         persistent_keyboard = self._create_persistent_keyboard()
-        await message.answer(
-            "✅ <b>Задание отправлено!</b>\n\n"
-            "📤 Ваше задание направлено кураторам 👥.\n"
-            "⏳ Вы получите обратную связь в ближайшее время 💬.",
-            reply_markup=persistent_keyboard
-        )
+        notification_text = get_assignment_notification(lesson_day)
+        
+        if needs_feedback:
+            # Для тарифов с обратной связью - уведомление + информация о кураторах
+            await message.answer(
+                f"✅ {notification_text}\n\n"
+                "📤 Ваше задание направлено кураторам 👥.\n"
+                "⏳ Вы получите обратную связь в ближайшее время 💬.",
+                reply_markup=persistent_keyboard
+            )
+        else:
+            # Для BASIC тарифа - только уведомление
+            await message.answer(
+                f"✅ {notification_text}",
+                reply_markup=persistent_keyboard
+            )
         
         # Отправляем follow_up_text для урока 0 после отправки задания (медиа)
         if lesson_day == 0:
