@@ -2498,6 +2498,23 @@ class CourseBot:
                 lesson_posts = []
             
             # Получаем маркеры медиа для встроенной вставки
+            # DEBUG: Log all keys in lesson_data to see what's available
+            logger.info(f"   🔍 DEBUG: lesson_data keys for day {day}: {list(lesson_data.keys())}")
+            if "media_markers" in lesson_data:
+                media_markers_raw = lesson_data.get("media_markers")
+                logger.info(f"   🔍 DEBUG: media_markers type: {type(media_markers_raw)}, value: {media_markers_raw}")
+            else:
+                logger.warning(f"   🔍 DEBUG: 'media_markers' key NOT FOUND in lesson_data!")
+                # Try to check if it's in the raw JSON by reloading
+                logger.warning(f"   🔍 DEBUG: Attempting to reload lesson_loader and check again...")
+                self.lesson_loader.reload()
+                lesson_data_reloaded = self.lesson_loader.get_lesson(day)
+                if lesson_data_reloaded and "media_markers" in lesson_data_reloaded:
+                    logger.warning(f"   🔍 DEBUG: After reload, media_markers found! Updating lesson_data...")
+                    lesson_data = lesson_data_reloaded
+                else:
+                    logger.warning(f"   🔍 DEBUG: After reload, media_markers still NOT found in lesson_data!")
+            
             media_markers = lesson_data.get("media_markers", {})
             logger.info(f"   📎 Media markers in lesson_data for day {day}: {len(media_markers) if media_markers else 0} markers")
             if media_markers:
