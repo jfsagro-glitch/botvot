@@ -2749,7 +2749,18 @@ class CourseBot:
             
             # Отправляем вводный текст отдельным сообщением, если есть (пропускаем для навигатора)
             # Для урока 0 intro_text уже отправлен с видео, поэтому пропускаем
-            if intro_text and not skip_intro and not lesson0_intro_sent_with_video:
+            # ВАЖНО: Проверяем, не содержится ли intro_text уже в основном тексте (lesson_posts)
+            intro_text_in_main_text = False
+            if intro_text and lesson_posts:
+                # Проверяем, содержится ли intro_text в любом из постов
+                intro_text_short = intro_text[:100] if len(intro_text) > 100 else intro_text
+                for post in lesson_posts:
+                    if intro_text_short in post or (len(intro_text) < 200 and intro_text.strip() in post):
+                        intro_text_in_main_text = True
+                        logger.warning(f"   ⚠️ intro_text found in main text for day {day}, skipping separate intro_text send")
+                        break
+            
+            if intro_text and not skip_intro and not lesson0_intro_sent_with_video and not intro_text_in_main_text:
                 # Анимация перед отправкой текста
                 await send_typing_action(self.bot, user.user_id, 0.5)
                 # Текст берется как есть из Google Doc, без разделителей
@@ -2769,12 +2780,26 @@ class CourseBot:
                 logger.info(f"   Skipped intro_text for lesson {day} (already sent with video)")
             
             # Отправляем "ОБО МНЕ" отдельным сообщением с фото (для урока 1) - сразу после intro_text (пропускаем для навигатора)
+            # ВАЖНО: Если картинка "ОБО МНЕ" встроена через media_markers в текст, не отправляем её отдельно
             about_me_photo_file_id = lesson_data.get("about_me_photo_file_id", "")
             about_me_photo_path = lesson_data.get("about_me_photo_path", "")
             
-            logger.info(f"   Checking 'ОБО МНЕ' for lesson {day}: text={bool(about_me_text)}, file_id={bool(about_me_photo_file_id)}, path={bool(about_me_photo_path)}, skip={skip_about_me}")
+            # Проверяем, есть ли маркер для картинки "ОБО МНЕ" в тексте
+            about_me_photo_in_text = False
+            if about_me_photo_file_id and media_markers:
+                # Ищем маркер, который соответствует этой картинке
+                for marker_id, marker_info in media_markers.items():
+                    if marker_info.get("file_id") == about_me_photo_file_id or marker_info.get("path") == about_me_photo_path:
+                        # Проверяем, есть ли этот маркер в тексте
+                        if any(f"[{marker_id}]" in post for post in lesson_posts) or f"[{marker_id}]" in text:
+                            about_me_photo_in_text = True
+                            logger.info(f"   ✅ 'ОБО МНЕ' photo found in text via marker {marker_id}, will be embedded inline")
+                            break
             
-            if about_me_text and not skip_about_me:
+            logger.info(f"   Checking 'ОБО МНЕ' for lesson {day}: text={bool(about_me_text)}, file_id={bool(about_me_photo_file_id)}, path={bool(about_me_photo_path)}, skip={skip_about_me}, in_text={about_me_photo_in_text}")
+            
+            # Отправляем "ОБО МНЕ" отдельно только если картинка НЕ встроена в текст через маркеры
+            if about_me_text and not skip_about_me and not about_me_photo_in_text:
                 await asyncio.sleep(0.5)  # Небольшая пауза
                 
                 # Флаг для отслеживания успешной отправки

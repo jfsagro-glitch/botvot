@@ -1128,6 +1128,131 @@ class DriveContentSync:
                 task_text, w2 = self._sanitize_telegram_html(task_text or "")
                 if w2:
                     warnings.extend([f"day {day}: {w}" for w in w2])
+            
+            # Process Drive-linked media referenced in the text/task (same as in _sync_from_master_doc)
+            # Replace links with markers and download files
+            media_markers: Dict[str, Dict[str, Any]] = {}  # marker_id -> media_info
+            
+            # Find all Drive links in lesson and task text
+            combined_text = (lesson_text or "") + "\n" + (task_text or "")
+            drive_links = self._find_drive_links_with_positions(combined_text)
+            
+            logger.info(f"   📎 Day {day}: Found {len(drive_links)} Drive links in text")
+            
+            # Process links in reverse order to preserve positions when replacing
+            drive_links.sort(key=lambda x: x["start"], reverse=True)
+            
+            processed_links = 0
+            skipped_links = 0
+            error_links = 0
+            
+            for link_info in drive_links:
+                fid = link_info["file_id"]
+                link_url = link_info["url"]
+                is_folder = link_info.get("is_folder", False)
+                
+                try:
+                    if is_folder:
+                        # Handle folder: get all files in folder and process each as media
+                        folder_id = link_info.get("folder_id") or fid
+                        logger.info(f"   📁 Processing Drive folder: {link_url[:60]}... (folder_id: {folder_id})")
+                        
+                        folder_files = self._list_children(drive, folder_id)
+                        logger.info(f"   📁   Found {len(folder_files)} items in folder")
+                        
+                        if not folder_files:
+                            logger.warning(f"   ⚠️ Folder {folder_id} is empty or inaccessible")
+                            skipped_links += 1
+                            continue
+                        
+                        folder_markers = []
+                        for folder_file in folder_files:
+                            file_id = folder_file.get("id")
+                            file_name = folder_file.get("name", f"file_{file_id}").strip()
+                            file_mime = (folder_file.get("mimeType") or "").lower()
+                            
+                            if file_mime.startswith("image/"):
+                                media_type = "photo"
+                            elif file_mime.startswith("video/"):
+                                media_type = "video"
+                            else:
+                                continue
+                            
+                            safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", file_name)
+                            dest = media_root / f"day_{day:02d}" / safe_name
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            should_skip = self._should_skip_download(dest, folder_file.get("size"), folder_file.get("modifiedTime"))
+                            if not should_skip or not dest.exists():
+                                self._download_binary_file(drive, file_id, dest)
+                                media_downloaded += 1
+                            
+                            processed_links += 1
+                            rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
+                            
+                            marker_id = f"MEDIA_{file_id}_{len(media_markers)}"
+                            media_markers[marker_id] = {
+                                "type": media_type,
+                                "path": rel_path,
+                                "file_id": file_id,
+                                "name": file_name
+                            }
+                            folder_markers.append(marker_id)
+                        
+                        if folder_markers:
+                            markers_text = "\n".join([f"[{m}]" for m in folder_markers])
+                            if link_url in lesson_text:
+                                lesson_text = lesson_text.replace(link_url, markers_text)
+                            if link_url in task_text:
+                                task_text = task_text.replace(link_url, markers_text)
+                    else:
+                        # Handle single file
+                        logger.info(f"   📎 Processing Drive link: {link_url[:60]}... (file_id: {fid})")
+                        meta = drive.files().get(fileId=fid, fields="id,name,mimeType,modifiedTime,size").execute()
+                        mt = (meta.get("mimeType") or "").lower()
+                        name = (meta.get("name") or f"file_{fid}").strip()
+                        
+                        if mt.startswith("image/"):
+                            media_type = "photo"
+                        elif mt.startswith("video/"):
+                            media_type = "video"
+                        else:
+                            skipped_links += 1
+                            continue
+                        
+                        safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
+                        dest = media_root / f"day_{day:02d}" / safe_name
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        should_skip = self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime"))
+                        if not should_skip or not dest.exists():
+                            self._download_binary_file(drive, fid, dest)
+                            media_downloaded += 1
+                        
+                        processed_links += 1
+                        rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
+                        
+                        marker_id = f"MEDIA_{fid}_{len(media_markers)}"
+                        media_markers[marker_id] = {
+                            "type": media_type,
+                            "path": rel_path,
+                            "file_id": fid,
+                            "name": name
+                        }
+                        
+                        marker_placeholder = f"[{marker_id}]"
+                        if link_url in lesson_text:
+                            lesson_text = lesson_text.replace(link_url, marker_placeholder)
+                        if link_url in task_text:
+                            task_text = task_text.replace(link_url, marker_placeholder)
+                except Exception as e:
+                    error_links += 1
+                    error_msg = f"day {day}: failed to download linked media ({fid}): {e}"
+                    logger.error(f"   ❌ {error_msg}")
+                    warnings.append(error_msg)
+            
+            if drive_links:
+                logger.info(f"   📎 Day {day} summary: {processed_links} processed, {skipped_links} skipped, {error_links} errors, {media_downloaded} downloaded")
 
             meta: Dict[str, Any] = {}
             if meta_file and (meta_file.get("name") or "").lower().endswith(".json"):
@@ -1169,14 +1294,21 @@ class DriveContentSync:
             if not title:
                 title = f"День {day}"
 
+            # Split lesson into posts by square brackets
+            lesson_posts = DriveContentSync._split_lesson_into_posts((lesson_text or "").strip())
+            
             entry: Dict[str, Any] = {
                 "day_number": day,
                 "title": title,
-                "text": (lesson_text or "").strip(),
+                "text": lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else ""),
                 "task": (task_text or "").strip(),
             }
             if media_items:
                 entry["media"] = media_items
+            # CRITICAL: Store media markers for inline insertion
+            if media_markers:
+                entry["media_markers"] = media_markers
+                logger.info(f"   ✅ Stored {len(media_markers)} media_markers in entry for day {day}")
             if isinstance(meta, dict) and "silent" in meta:
                 entry["silent"] = bool(meta.get("silent"))
 
