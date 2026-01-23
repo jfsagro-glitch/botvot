@@ -245,7 +245,7 @@ class DriveContentSync:
             return [""]
         
         # Step 1: Split by manual markers
-        # Support: ---POST---, [POST], --- (on its own line)
+        # Support: ---POST---, [POST], [любые квадратные кавычки], --- (on its own line)
         # Split by lines first to find markers
         lines = lesson_text.split('\n')
         posts = []
@@ -253,13 +253,20 @@ class DriveContentSync:
         
         for line in lines:
             # Check if line is a post marker
-            if re.match(r'^\s*(?:---POST---|\[POST\]|---)\s*$', line, re.IGNORECASE):
+            # Match: ---POST---, [POST], [любые квадратные кавычки на отдельной строке], ---
+            is_marker = (
+                re.match(r'^\s*(?:---POST---|---)\s*$', line, re.IGNORECASE) or
+                re.match(r'^\s*\[.*?\]\s*$', line)  # Любые квадратные кавычки на отдельной строке
+            )
+            
+            if is_marker:
                 # Save current post if it has content
                 if current_post:
                     post_text = '\n'.join(current_post).strip()
                     if post_text:
                         posts.append(post_text)
                     current_post = []
+                # Marker line itself is NOT included in any post
             else:
                 current_post.append(line)
         
