@@ -3054,29 +3054,29 @@ class CourseBot:
                             paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
                             
                             if len(paragraphs) > 0:
-                            # Распределяем медиа равномерно по абзацам
-                            # Вычисляем интервалы между медиа
-                            if len(paragraphs) >= remaining_media:
-                                # Если абзацев больше или равно медиа, распределяем равномерно
-                                step = len(paragraphs) // (remaining_media + 1)
-                                media_positions = [step * (i + 1) for i in range(remaining_media)]
-                            else:
-                                # Если абзацев меньше медиа, размещаем медиа после каждого абзаца
-                                media_positions = list(range(1, len(paragraphs) + 1))[:remaining_media]
-                            
-                            # Отправляем абзацы с медиа между ними
-                            for i, paragraph in enumerate(paragraphs):
-                                # Отправляем абзац
-                                if paragraph:
-                                    await self._safe_send_message(user.user_id, paragraph)
-                                    await asyncio.sleep(0.2)
+                                # Распределяем медиа равномерно по абзацам
+                                # Вычисляем интервалы между медиа
+                                if len(paragraphs) >= remaining_media:
+                                    # Если абзацев больше или равно медиа, распределяем равномерно
+                                    step = len(paragraphs) // (remaining_media + 1)
+                                    media_positions = [step * (i + 1) for i in range(remaining_media)]
+                                else:
+                                    # Если абзацев меньше медиа, размещаем медиа после каждого абзаца
+                                    media_positions = list(range(1, len(paragraphs) + 1))[:remaining_media]
                                 
-                                # Если наступила позиция для медиа, отправляем его
-                                if (i + 1) in media_positions and media_index < media_count:
-                                    await self._send_media_item(user.user_id, media_list[media_index], day)
-                                    logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} in text for lesson {day}")
-                                    media_index += 1
-                                    await asyncio.sleep(0.3)
+                                # Отправляем абзацы с медиа между ними
+                                for i, paragraph in enumerate(paragraphs):
+                                    # Отправляем абзац
+                                    if paragraph:
+                                        await self._safe_send_message(user.user_id, paragraph)
+                                        await asyncio.sleep(0.2)
+                                    
+                                    # Если наступила позиция для медиа, отправляем его
+                                    if (i + 1) in media_positions and media_index < media_count:
+                                        await self._send_media_item(user.user_id, media_list[media_index], day)
+                                        logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} in text for lesson {day}")
+                                        media_index += 1
+                                        await asyncio.sleep(0.3)
                             
                             # Отправляем оставшиеся медиа после последнего абзаца (если есть)
                             # ВАЖНО: Проверяем, не были ли медиа уже отправлены через маркеры
