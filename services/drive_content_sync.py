@@ -407,25 +407,14 @@ class DriveContentSync:
             media_markers: Dict[str, Dict[str, Any]] = {}  # marker_id -> media_info
             
             # Find all Drive links in lesson and task text
-            # ВАЖНО: Также проверяем intro_text и about_me_text, если они есть в метаданных
-            # Но для начала обрабатываем только lesson_text и task_text
+            # ВАЖНО: В режиме master doc intro_text и about_me_text извлекаются из самого текста урока
+            # Они не хранятся отдельно в метаданных, поэтому обрабатываем только lesson_text и task_text
             combined_text = lesson_text + "\n" + task_text
             
-            # Также проверяем intro_text и about_me_text из метаданных, если они есть
-            # Эти поля могут содержать ссылки на медиа, которые нужно обработать
+            # В режиме master doc intro_text и about_me_text могут быть в тексте урока,
+            # но они будут обработаны вместе с lesson_text при обработке ссылок
             intro_text = ""
             about_me_text = ""
-            if isinstance(meta, dict):
-                intro_text = (meta.get("intro_text") or "").strip()
-                about_me_text = (meta.get("about_me_text") or "").strip()
-            
-            # Если intro_text или about_me_text содержат ссылки на Drive, добавляем их в combined_text для обработки
-            if intro_text and ("drive.google.com" in intro_text.lower() or "docs.google.com" in intro_text.lower()):
-                combined_text += "\n" + intro_text
-                logger.info(f"   📎 Day {day}: Found Drive links in intro_text, will process them")
-            if about_me_text and ("drive.google.com" in about_me_text.lower() or "docs.google.com" in about_me_text.lower()):
-                combined_text += "\n" + about_me_text
-                logger.info(f"   📎 Day {day}: Found Drive links in about_me_text, will process them")
             
             # Special logging for day 0 to debug missing links
             if day == 0:
@@ -729,11 +718,8 @@ class DriveContentSync:
                 "task": task_text,
             }
             
-            # Store intro_text and about_me_text if they were processed
-            if intro_text:
-                entry["intro_text"] = intro_text
-            if about_me_text:
-                entry["about_me_text"] = about_me_text
+            # В режиме master doc intro_text и about_me_text не извлекаются отдельно
+            # Они могут быть частью lesson_text, но обрабатываются вместе с ним
             
             if media_items:
                 entry["media"] = media_items
