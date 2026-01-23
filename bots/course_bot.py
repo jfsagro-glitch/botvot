@@ -2751,54 +2751,63 @@ class CourseBot:
             # Для урока 0 intro_text уже отправлен с видео, поэтому пропускаем
             # ВАЖНО: Проверяем, не содержится ли intro_text уже в основном тексте (lesson_posts)
             # Если содержится, удаляем его из текста, чтобы не дублировать
+            # Также удаляем intro_text из всех постов, если он там есть
+            intro_text_sent_separately = False
             intro_text_in_main_text = False
+            
             if intro_text and lesson_posts:
-                # Проверяем, содержится ли intro_text в первом посте (который станет text)
+                # Проверяем, содержится ли intro_text в любом из постов
                 intro_text_short = intro_text[:100] if len(intro_text) > 100 else intro_text
                 intro_text_stripped = intro_text.strip()
                 
-                # Проверяем первый пост (который станет text)
-                if lesson_posts and len(lesson_posts) > 0:
-                    first_post = lesson_posts[0]
-                    if intro_text_short in first_post or (len(intro_text) < 200 and intro_text_stripped in first_post):
+                # Проверяем все посты на наличие intro_text
+                for i, post in enumerate(lesson_posts):
+                    if not isinstance(post, str) or not post.strip():
+                        continue
+                    
+                    # Проверяем, содержится ли intro_text в этом посте
+                    if intro_text_short in post or (len(intro_text) < 200 and intro_text_stripped in post):
                         intro_text_in_main_text = True
-                        logger.warning(f"   ⚠️ intro_text found in first post for day {day}, will remove from text to prevent duplication")
+                        logger.warning(f"   ⚠️ intro_text found in post {i} for day {day}, will remove from text to prevent duplication")
                         
-                        # Удаляем intro_text из первого поста
-                        # Пытаемся найти точное совпадение и удалить его
-                        if intro_text_stripped in first_post:
+                        # Удаляем intro_text из поста
+                        if intro_text_stripped in post:
                             # Удаляем intro_text из начала поста, если он там есть
-                            first_post_cleaned = first_post.replace(intro_text_stripped, "", 1).strip()
-                            # Также удаляем, если intro_text в начале с пробелами/переносами
-                            if first_post.startswith(intro_text_stripped):
-                                first_post_cleaned = first_post[len(intro_text_stripped):].strip()
+                            if post.startswith(intro_text_stripped):
+                                post_cleaned = post[len(intro_text_stripped):].strip()
                             else:
                                 # Пробуем найти и удалить intro_text из любого места
-                                first_post_cleaned = first_post.replace(intro_text_stripped, "", 1).strip()
+                                post_cleaned = post.replace(intro_text_stripped, "", 1).strip()
                             
                             # Удаляем лишние переносы строк в начале
-                            first_post_cleaned = re.sub(r'^\n+', '', first_post_cleaned)
-                            first_post_cleaned = re.sub(r'^\s*\n\s*\n', '\n\n', first_post_cleaned)
+                            post_cleaned = re.sub(r'^\n+', '', post_cleaned)
+                            post_cleaned = re.sub(r'^\s*\n\s*\n', '\n\n', post_cleaned)
                             
-                            if first_post_cleaned:
-                                lesson_posts[0] = first_post_cleaned
-                                text = lesson_posts[0]  # Обновляем text
-                                logger.info(f"   ✅ Removed intro_text from first post for day {day}")
+                            if post_cleaned:
+                                lesson_posts[i] = post_cleaned
+                                logger.info(f"   ✅ Removed intro_text from post {i} for day {day}")
                             else:
-                                # Если после удаления пост стал пустым, удаляем его из списка
-                                lesson_posts.pop(0)
-                                if lesson_posts:
-                                    text = lesson_posts[0]
-                                else:
-                                    text = ""
-                                logger.info(f"   ✅ Removed first post (was only intro_text) for day {day}")
+                                # Если после удаления пост стал пустым, помечаем его для удаления
+                                lesson_posts[i] = ""
+                                logger.info(f"   ✅ Post {i} became empty after removing intro_text for day {day}")
+                
+                # Удаляем пустые посты
+                lesson_posts = [p for p in lesson_posts if p and p.strip()]
+                
+                # Обновляем text
+                if lesson_posts:
+                    text = lesson_posts[0]
+                else:
+                    text = ""
             
+            # Отправляем intro_text отдельно только если он НЕ содержится в основном тексте
             if intro_text and not skip_intro and not lesson0_intro_sent_with_video and not intro_text_in_main_text:
                 # Анимация перед отправкой текста
                 await send_typing_action(self.bot, user.user_id, 0.5)
                 # Текст берется как есть из Google Doc, без разделителей
                 intro_message = intro_text
                 await self._safe_send_message(user.user_id, intro_message)
+                intro_text_sent_separately = True
                 logger.info(f"   Sent intro_text for lesson {day}")
                 await asyncio.sleep(0.5)  # Пауза для плавности
                 
@@ -3132,12 +3141,27 @@ class CourseBot:
                                     await asyncio.sleep(0.3)
                             elif text.strip():
                                 # Один пост - отправляем весь текст
-                                # Проверяем маркеры в тексте
-                                if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
-                                    await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                                # ВАЖНО: Проверяем, не является ли этот текст дубликатом intro_text
+                                # Если intro_text уже отправлен отдельно, пропускаем текст, который содержит intro_text
+                                if intro_text_sent_separately and intro_text:
+                                    intro_text_short = intro_text[:100] if len(intro_text) > 100 else intro_text
+                                    intro_text_stripped = intro_text.strip()
+                                    if intro_text_short in text or (len(intro_text) < 200 and intro_text_stripped in text):
+                                        logger.warning(f"   ⚠️ Skipping text for day {day} - it contains intro_text which was already sent separately")
+                                    else:
+                                        # Проверяем маркеры в тексте
+                                        if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
+                                            await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                                        else:
+                                            await self._safe_send_message(user.user_id, text)
+                                        await asyncio.sleep(0.3)
                                 else:
-                                    await self._safe_send_message(user.user_id, text)
-                                await asyncio.sleep(0.3)
+                                    # Проверяем маркеры в тексте
+                                    if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
+                                        await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                                    else:
+                                        await self._safe_send_message(user.user_id, text)
+                                    await asyncio.sleep(0.3)
                                 
                                 # Отправляем все оставшиеся медиа
                                 while media_index < media_count:
@@ -3158,6 +3182,15 @@ class CourseBot:
                     
                     for i, post_text in enumerate(lesson_posts):
                         if post_text and post_text.strip():
+                            # ВАЖНО: Проверяем, не является ли этот пост дубликатом intro_text
+                            # Если intro_text уже отправлен отдельно, пропускаем пост, который содержит intro_text
+                            if intro_text_sent_separately and intro_text:
+                                intro_text_short = intro_text[:100] if len(intro_text) > 100 else intro_text
+                                intro_text_stripped = intro_text.strip()
+                                if intro_text_short in post_text or (len(intro_text) < 200 and intro_text_stripped in post_text):
+                                    logger.warning(f"   ⚠️ Skipping post {i} for day {day} - it contains intro_text which was already sent separately")
+                                    continue
+                            
                             # Анимация перед отправкой поста (только для первого)
                             if i == 0:
                                 await send_typing_action(self.bot, user.user_id, 0.5)
