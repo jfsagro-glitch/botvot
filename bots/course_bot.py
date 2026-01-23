@@ -16,6 +16,8 @@ import logging
 import re
 import sys
 import aiohttp
+import subprocess
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 from urllib.parse import parse_qs, urlparse
@@ -202,6 +204,7 @@ class CourseBot:
                                      supports_streaming: bool = True, max_retries: int = 3):
         """
         Отправляет видео с повторными попытками и оптимизированными параметрами.
+        Автоматически сжимает видео, если оно превышает лимит 50 МБ.
         
         Args:
             user_id: ID пользователя
@@ -212,6 +215,26 @@ class CourseBot:
             supports_streaming: Поддержка стриминга
             max_retries: Максимальное количество попыток
         """
+        # Если это FSInputFile, проверяем размер и сжимаем при необходимости
+        video_to_send = video
+        from aiogram.types import FSInputFile
+        if isinstance(video, FSInputFile):
+            # Получаем путь к файлу из FSInputFile
+            # FSInputFile может иметь атрибут path или filename
+            video_path = None
+            if hasattr(video, 'path'):
+                video_path = Path(video.path)
+            elif hasattr(video, 'filename'):
+                video_path = Path(video.filename)
+            elif hasattr(video, '_path'):
+                video_path = Path(video._path)
+            
+            if video_path and video_path.exists():
+                compressed_path = await self._compress_video_if_needed(video_path)
+                if compressed_path:
+                    video_to_send = FSInputFile(compressed_path)
+                    logger.info(f"   📹 Using compressed video: {compressed_path.name}")
+        
         for attempt in range(max_retries):
             try:
                 # Увеличиваем таймаут для больших файлов
@@ -219,7 +242,7 @@ class CourseBot:
                 
                 await self.bot.send_video(
                     user_id,
-                    video,
+                    video_to_send,
                     caption=caption,
                     width=width,
                     height=height,
@@ -230,7 +253,24 @@ class CourseBot:
                 return
             except Exception as e:
                 error_msg = str(e).lower()
-                if attempt < max_retries - 1:
+                if "entity too large" in error_msg or "file too large" in error_msg:
+                    # Если даже после сжатия файл слишком большой, пытаемся отправить ссылку на Google Drive
+                    logger.error(f"   ❌ Video still too large after compression: {e}")
+                    # Пытаемся найти file_id из исходного видео или media_markers
+                    drive_file_id = None
+                    if original_video_path:
+                        # Пытаемся найти file_id из имени файла или пути
+                        # Имя файла может содержать file_id (например, из media_markers)
+                        file_name = original_video_path.name
+                        # Ищем паттерн file_id в пути или имени файла
+                        # Обычно file_id находится в пути как часть структуры папок
+                        import re
+                        # Пытаемся извлечь file_id из пути (например, data/content_media/day_01/001_.mp4)
+                        # или из media_markers, если они доступны
+                        logger.warning(f"   ⚠️ Cannot send large video: {original_video_path}")
+                        logger.warning(f"   ⚠️ No Drive link available for this video")
+                    raise
+                elif attempt < max_retries - 1:
                     # Увеличиваем задержку между попытками
                     delay = (attempt + 1) * 5  # 5, 10, 15 секунд
                     logger.warning(f"   ⚠️ Ошибка при отправке видео (попытка {attempt + 1}/{max_retries}): {e}")
@@ -1747,6 +1787,138 @@ class CourseBot:
             f"<i>Совет: чем конкретнее вопрос, тем быстрее вы получите ответ.</i>"
         )
     
+    async def _compress_video_if_needed(self, video_path: Path, max_size_mb: float = 45.0) -> Optional[Path]:
+        """
+        Сжимает видео, если оно превышает максимальный размер.
+        
+        Args:
+            video_path: Путь к исходному видео
+            max_size_mb: Максимальный размер в МБ (по умолчанию 45 МБ, чтобы быть ниже лимита 50 МБ)
+        
+        Returns:
+            Path к сжатому видео, или None если сжатие не требуется или не удалось
+        """
+        if not video_path.exists():
+            logger.warning(f"   ⚠️ Video file not found: {video_path}")
+            return None
+        
+        # Проверяем размер файла
+        file_size_mb = video_path.stat().st_size / (1024 * 1024)
+        
+        if file_size_mb <= max_size_mb:
+            logger.info(f"   ✅ Video size OK: {file_size_mb:.2f} MB (limit: {max_size_mb} MB)")
+            return None
+        
+        logger.info(f"   📹 Video too large: {file_size_mb:.2f} MB, compressing to {max_size_mb} MB...")
+        
+        # Создаем путь для сжатого видео
+        compressed_dir = video_path.parent / "compressed"
+        compressed_dir.mkdir(exist_ok=True)
+        compressed_path = compressed_dir / f"compressed_{video_path.name}"
+        
+        # Если сжатое видео уже существует и актуально, используем его
+        if compressed_path.exists():
+            compressed_size_mb = compressed_path.stat().st_size / (1024 * 1024)
+            if compressed_size_mb <= max_size_mb:
+                logger.info(f"   ✅ Using existing compressed video: {compressed_size_mb:.2f} MB")
+                return compressed_path
+        
+        # Проверяем наличие FFmpeg
+        try:
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True, timeout=5)
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            logger.error(f"   ❌ FFmpeg not found or not working. Cannot compress video.")
+            return None
+        
+        try:
+            # Вычисляем битрейт для достижения целевого размера
+            # Примерная формула: bitrate = (target_size_mb * 8) / duration_seconds
+            # Для безопасности используем консервативный битрейт
+            target_bitrate = "2000k"  # 2 Мбит/с - хорошее качество для большинства видео
+            
+            # Команда FFmpeg для сжатия
+            # Используем H.264 кодек с оптимизацией для веб-потоков
+            cmd = [
+                "ffmpeg",
+                "-i", str(video_path),
+                "-c:v", "libx264",
+                "-preset", "medium",  # Баланс между скоростью и качеством
+                "-crf", "28",  # Качество (18-28, чем больше, тем меньше размер)
+                "-maxrate", target_bitrate,
+                "-bufsize", f"{int(target_bitrate[:-1]) * 2}k",
+                "-c:a", "aac",
+                "-b:a", "128k",  # Аудио битрейт
+                "-movflags", "+faststart",  # Оптимизация для стриминга
+                "-y",  # Перезаписать существующий файл
+                str(compressed_path)
+            ]
+            
+            logger.info(f"   🔄 Compressing video: {video_path.name} -> {compressed_path.name}")
+            logger.info(f"   📹 Command: {' '.join(cmd)}")
+            
+            # Запускаем сжатие
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                logger.error(f"   ❌ FFmpeg compression failed: {stderr.decode()}")
+                return None
+            
+            # Проверяем размер сжатого файла
+            if compressed_path.exists():
+                compressed_size_mb = compressed_path.stat().st_size / (1024 * 1024)
+                logger.info(f"   ✅ Video compressed: {file_size_mb:.2f} MB -> {compressed_size_mb:.2f} MB")
+                
+                # Если все еще слишком большое, пробуем более агрессивное сжатие
+                if compressed_size_mb > max_size_mb:
+                    logger.warning(f"   ⚠️ Compressed video still too large: {compressed_size_mb:.2f} MB")
+                    # Пробуем более агрессивное сжатие
+                    cmd_aggressive = [
+                        "ffmpeg",
+                        "-i", str(video_path),
+                        "-c:v", "libx264",
+                        "-preset", "fast",
+                        "-crf", "32",  # Более высокое значение = меньше размер
+                        "-maxrate", "1500k",
+                        "-bufsize", "3000k",
+                        "-vf", "scale='min(1280,iw)':'min(720,ih)':force_original_aspect_ratio=decrease",  # Ограничиваем разрешение
+                        "-c:a", "aac",
+                        "-b:a", "96k",
+                        "-movflags", "+faststart",
+                        "-y",
+                        str(compressed_path)
+                    ]
+                    
+                    logger.info(f"   🔄 Trying aggressive compression...")
+                    process2 = await asyncio.create_subprocess_exec(
+                        *cmd_aggressive,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    
+                    stdout2, stderr2 = await process2.communicate()
+                    
+                    if process2.returncode == 0 and compressed_path.exists():
+                        compressed_size_mb = compressed_path.stat().st_size / (1024 * 1024)
+                        logger.info(f"   ✅ Aggressive compression result: {compressed_size_mb:.2f} MB")
+                
+                if compressed_size_mb <= max_size_mb:
+                    return compressed_path
+                else:
+                    logger.warning(f"   ⚠️ Video still too large after compression: {compressed_size_mb:.2f} MB")
+                    return None
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error compressing video: {e}", exc_info=True)
+            return None
+    
     async def _send_media_item(self, user_id: int, media_item: dict, day: int) -> bool:
         """
         Отправляет один медиа-файл (фото или видео) с анимацией и центрированием.
@@ -1812,9 +1984,17 @@ class CourseBot:
                 ]
                 
                 media_file = None
+                video_path_to_use = None
+                
                 for test_path in possible_paths:
                     if test_path.exists() and test_path.is_file():
-                        media_file = FSInputFile(test_path)
+                        if media_type == "video":
+                            # Для видео проверяем размер и сжимаем при необходимости
+                            compressed_path = await self._compress_video_if_needed(test_path)
+                            video_path_to_use = compressed_path if compressed_path else test_path
+                            media_file = FSInputFile(video_path_to_use)
+                        else:
+                            media_file = FSInputFile(test_path)
                         break
                 
                 if media_file:
@@ -1826,7 +2006,28 @@ class CourseBot:
                         # Для видео не указываем width/height, чтобы сохранить родные пропорции
                         # Урок 1 имеет специальную обработку в _send_lesson_from_json (не доходит до сюда)
                         # Для всех остальных видео (включая уроки 11 и 30) сохраняем пропорции
-                        await self.bot.send_video(user_id, media_file, caption=caption, supports_streaming=True)
+                        try:
+                            await self.bot.send_video(user_id, media_file, caption=caption, supports_streaming=True)
+                        except Exception as video_error:
+                            error_msg = str(video_error).lower()
+                            if "entity too large" in error_msg or "file too large" in error_msg:
+                                # Если даже после сжатия файл слишком большой, отправляем ссылку на Google Drive
+                                original_file_id = media_item.get("file_id")
+                                if original_file_id:
+                                    drive_link = f"https://drive.google.com/file/d/{original_file_id}/view"
+                                    await self._safe_send_message(
+                                        user_id,
+                                        f"📹 <b>Видео слишком большое для прямой отправки</b>\n\n"
+                                        f"Ссылка на видео:\n"
+                                        f"<a href=\"{drive_link}\">Открыть видео в Google Drive</a>"
+                                    )
+                                    logger.info(f"   ✅ Sent Google Drive link for large video after compression attempt")
+                                    return True
+                                else:
+                                    logger.error(f"   ❌ Video still too large after compression and no Drive link available")
+                                    raise
+                            else:
+                                raise
                     await asyncio.sleep(0.2)  # Минимальная пауза для стабильности
                     return True
         except Exception as e:
@@ -2305,7 +2506,11 @@ class CourseBot:
                                     await self.db.save_media_file_id(part, day, media_type, file_id)
                                     logger.info(f"   ✅ Sent inline photo and cached file_id for marker {part}, lesson {day}")
                             elif media_type == "video":
-                                video_file = FSInputFile(file_path)
+                                # Проверяем размер и сжимаем видео при необходимости
+                                compressed_path = await self._compress_video_if_needed(file_path)
+                                video_path_to_use = compressed_path if compressed_path else file_path
+                                
+                                video_file = FSInputFile(video_path_to_use)
                                 sent_message = await self.bot.send_video(user_id, video_file)
                                 # Сохраняем file_id для видео
                                 if sent_message.video:
@@ -2313,8 +2518,29 @@ class CourseBot:
                                     await self.db.save_media_file_id(part, day, media_type, file_id)
                                     logger.info(f"   ✅ Sent inline video and cached file_id for marker {part}, lesson {day}")
                         except Exception as send_error:
-                            logger.error(f"   ❌ Error sending media file {file_path}: {send_error}", exc_info=True)
-                            raise
+                            error_msg = str(send_error).lower()
+                            if "entity too large" in error_msg or "file too large" in error_msg:
+                                # Если даже после сжатия файл слишком большой, отправляем ссылку на Google Drive
+                                original_file_id = media_info.get("file_id")
+                                if original_file_id:
+                                    drive_link = f"https://drive.google.com/file/d/{original_file_id}/view"
+                                    await self._safe_send_message(
+                                        user_id,
+                                        f"📹 <b>Видео слишком большое для прямой отправки</b>\n\n"
+                                        f"Ссылка на видео:\n"
+                                        f"<a href=\"{drive_link}\">Открыть видео в Google Drive</a>"
+                                    )
+                                    logger.info(f"   ✅ Sent Google Drive link for large video after compression attempt")
+                                else:
+                                    logger.error(f"   ❌ Video still too large after compression and no Drive link available")
+                                    await self._safe_send_message(
+                                        user_id,
+                                        f"⚠️ Видео слишком большое для отправки. "
+                                        f"Максимальный размер: 50 МБ."
+                                    )
+                            else:
+                                logger.error(f"   ❌ Error sending media file {file_path}: {send_error}", exc_info=True)
+                                raise
                     
                     await asyncio.sleep(0.3)
                 except Exception as e:
@@ -3374,7 +3600,23 @@ class CourseBot:
                     logger.info(f"   ✅ Sent lesson 1 video with text before task")
                     await asyncio.sleep(0.5)
                 except Exception as video_error:
-                    logger.warning(f"   ⚠️ Не удалось отправить видео урока 1 перед заданием: {video_error}")
+                    error_msg = str(video_error).lower()
+                    if "entity too large" in error_msg or "file too large" in error_msg:
+                        # Если видео слишком большое, отправляем ссылку на Google Drive
+                        original_file_id = lesson1_video_media.get("file_id")
+                        if original_file_id:
+                            drive_link = f"https://drive.google.com/file/d/{original_file_id}/view"
+                            await self._safe_send_message(
+                                user.user_id,
+                                f"📹 <b>Видео слишком большое для прямой отправки</b>\n\n"
+                                f"Ссылка на видео:\n"
+                                f"<a href=\"{drive_link}\">Открыть видео в Google Drive</a>"
+                            )
+                            logger.info(f"   ✅ Sent Google Drive link for large lesson 1 video")
+                        else:
+                            logger.warning(f"   ⚠️ Не удалось отправить видео урока 1 перед заданием: {video_error}")
+                    else:
+                        logger.warning(f"   ⚠️ Не удалось отправить видео урока 1 перед заданием: {video_error}")
             
             # Для урока 30 отправляем первое видео ПЕРЕД заданием
             if first_video_before_task:
