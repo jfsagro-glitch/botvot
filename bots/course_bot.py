@@ -2537,20 +2537,29 @@ class CourseBot:
                 logger.warning(f"   ⚠️ Available keys in lesson_data: {list(lesson_data.keys())}")
 
             # Some sources put the assignment inside the main text. Extract it so it becomes a separate block.
+            # Also remove square bracket markers like [POST], [ДОПОЛНЕНИЕ] - they are only for block separation
             extracted_task_from_posts = ""
             if lesson_posts:
                 normalized_posts: list[str] = []
                 for post in lesson_posts:
                     if not isinstance(post, str) or not post.strip():
                         continue
+                    # Remove square bracket markers (block separators) from text
+                    # These markers should not be visible to users
+                    cleaned_post = re.sub(r'^\s*\[.*?\]\s*$', '', post, flags=re.MULTILINE)
+                    cleaned_post = re.sub(r'^\s*(?:---POST---|---)\s*$', '', cleaned_post, flags=re.MULTILINE | re.IGNORECASE)
+                    # Remove empty lines that might remain after marker removal
+                    cleaned_post = '\n'.join([line for line in cleaned_post.split('\n') if line.strip() or cleaned_post.count('\n') == 0])
+                    if not cleaned_post.strip():
+                        continue
                     if not extracted_task_from_posts:
-                        lesson_part, task_part = self._split_assignment_from_text(post)
+                        lesson_part, task_part = self._split_assignment_from_text(cleaned_post)
                         if task_part:
                             extracted_task_from_posts = task_part
                             if lesson_part:
                                 normalized_posts.append(lesson_part)
                             continue
-                    normalized_posts.append(post)
+                    normalized_posts.append(cleaned_post)
                 lesson_posts = normalized_posts
 
             # For backward compatibility, keep 'text' as first post for existing code
@@ -2924,10 +2933,23 @@ class CourseBot:
                         await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
                         logger.info(f"   ✅ Sent lesson text with inline media markers for day {day}")
                         
-                        # Отправляем оставшиеся медиа из списка (если есть)
+                        # НЕ отправляем медиа из списка, если они уже отправлены через маркеры
+                        # Собираем file_id медиа, которые были отправлены через маркеры
+                        sent_media_file_ids = set()
+                        for marker_id, marker_info in media_markers.items():
+                            if f"[{marker_id}]" in text:
+                                sent_media_file_ids.add(marker_info.get("file_id"))
+                        
+                        # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
                         while media_index < media_count:
-                            await self._send_media_item(user.user_id, media_list[media_index], day)
-                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after inline media for lesson {day}")
+                            media_item = media_list[media_index]
+                            media_file_id = media_item.get("file_id")
+                            # Проверяем, не было ли это медиа уже отправлено через маркер
+                            if media_file_id not in sent_media_file_ids:
+                                await self._send_media_item(user.user_id, media_item, day)
+                                logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after inline media for lesson {day}")
+                            else:
+                                logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
                             media_index += 1
                             await asyncio.sleep(0.3)
                     else:
@@ -2969,6 +2991,11 @@ class CourseBot:
                         
                         # Если урок разбит на несколько постов, отправляем остальные посты после медиа
                         if len(lesson_posts) > 1:
+                            sent_media_file_ids = set()
+                            for marker_id, marker_info in media_markers.items():
+                                if any(f"[{marker_id}]" in post for post in lesson_posts):
+                                    sent_media_file_ids.add(marker_info.get("file_id"))
+                            
                             for i in range(1, len(lesson_posts)):
                                 post_text = lesson_posts[i]
                                 if post_text and post_text.strip():
@@ -2980,6 +3007,18 @@ class CourseBot:
                                     if i < len(lesson_posts) - 1:
                                         await asyncio.sleep(0.5)
                             logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
+                            
+                            # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
+                            while media_index < media_count:
+                                media_item = media_list[media_index]
+                                media_file_id = media_item.get("file_id")
+                                if media_file_id not in sent_media_file_ids:
+                                    await self._send_media_item(user.user_id, media_item, day)
+                                    logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after posts for lesson {day}")
+                                else:
+                                    logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
+                                media_index += 1
+                                await asyncio.sleep(0.3)
                         else:
                             # Если нет абзацев, отправляем весь текст и медиа после него
                             # Если урок разбит на несколько постов, отправляем первый пост, затем медиа, затем остальные посты
@@ -3009,6 +3048,11 @@ class CourseBot:
                             
                             # Если урок разбит на несколько постов, отправляем остальные посты после медиа
                             if len(lesson_posts) > 1:
+                                sent_media_file_ids = set()
+                                for marker_id, marker_info in media_markers.items():
+                                    if any(f"[{marker_id}]" in post for post in lesson_posts):
+                                        sent_media_file_ids.add(marker_info.get("file_id"))
+                                
                                 for i in range(1, len(lesson_posts)):
                                     post_text = lesson_posts[i]
                                     if post_text and post_text.strip():
@@ -3020,11 +3064,29 @@ class CourseBot:
                                         if i < len(lesson_posts) - 1:
                                             await asyncio.sleep(0.5)
                                 logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
+                                
+                                # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
+                                while media_index < media_count:
+                                    media_item = media_list[media_index]
+                                    media_file_id = media_item.get("file_id")
+                                    if media_file_id not in sent_media_file_ids:
+                                        await self._send_media_item(user.user_id, media_item, day)
+                                        logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after posts for lesson {day}")
+                                    else:
+                                        logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
+                                    media_index += 1
+                                    await asyncio.sleep(0.3)
             else:
                 # Если медиа нет или уже все отправлены, отправляем текст как обычно
                 # Если урок разбит на несколько постов, отправляем их последовательно
                 if len(lesson_posts) > 1:
                     # Multiple posts: send each one separately
+                    sent_media_file_ids = set()
+                    if media_markers:
+                        for marker_id, marker_info in media_markers.items():
+                            if any(f"[{marker_id}]" in post for post in lesson_posts):
+                                sent_media_file_ids.add(marker_info.get("file_id"))
+                    
                     for i, post_text in enumerate(lesson_posts):
                         if post_text and post_text.strip():
                             # Анимация перед отправкой поста (только для первого)
@@ -3039,16 +3101,45 @@ class CourseBot:
                             if i < len(lesson_posts) - 1:
                                 await asyncio.sleep(0.5)
                     logger.info(f"   ✅ Sent {len(lesson_posts)} lesson posts for day {day}")
+                    
+                    # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
+                    while media_index < media_count:
+                        media_item = media_list[media_index]
+                        media_file_id = media_item.get("file_id")
+                        if media_file_id not in sent_media_file_ids:
+                            await self._send_media_item(user.user_id, media_item, day)
+                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after posts for lesson {day}")
+                        else:
+                            logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
+                        media_index += 1
+                        await asyncio.sleep(0.3)
                 elif text.strip():
                     # Single post: send as before (backward compatible)
                     # Анимация перед отправкой текста
                     await send_typing_action(self.bot, user.user_id, 0.5)
                     # Проверяем маркеры в тексте
+                    sent_media_file_ids = set()
                     if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
                         await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                        # Собираем file_id медиа, которые были отправлены через маркеры
+                        for marker_id, marker_info in media_markers.items():
+                            if f"[{marker_id}]" in text:
+                                sent_media_file_ids.add(marker_info.get("file_id"))
                     else:
                         await self._safe_send_message(user.user_id, text)
                     await asyncio.sleep(0.5)  # Пауза для плавности
+                    
+                    # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
+                    while media_index < media_count:
+                        media_item = media_list[media_index]
+                        media_file_id = media_item.get("file_id")
+                        if media_file_id not in sent_media_file_ids:
+                            await self._send_media_item(user.user_id, media_item, day)
+                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
+                        else:
+                            logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
+                        media_index += 1
+                        await asyncio.sleep(0.3)
             
             # Для урока 19 отправляем кнопку "Показать все уровни" ПЕРЕД заданием
             if (day == 19 or str(day) == "19"):
