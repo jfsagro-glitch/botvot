@@ -2731,17 +2731,21 @@ class CourseBot:
             # Если медиа одно - размещаем сразу после заголовка
             # Если медиа несколько - распределяем по структуре урока
             # Исключение: для урока 0 видео уже отправлено с intro_text
-            if media_count == 1 and not lesson0_video_with_intro:
-                # Одно медиа - сразу после заголовка
+            # Исключение: для урока 1 видео отправляется перед заданием, не после заголовка
+            if media_count == 1 and not lesson0_video_with_intro and day != 1:
+                # Одно медиа - сразу после заголовка (кроме дня 1, где видео отправляется перед заданием)
                 await self._send_media_item(user.user_id, media_list[0], day)
                 logger.info(f"   ✅ Sent single media item after title for lesson {day}")
                 media_index = 1  # Помечаем, что медиа отправлено
-            elif media_count > 1 and not lesson0_video_with_intro:
-                # Несколько медиа - распределяем по структуре урока
+            elif media_count > 1 and not lesson0_video_with_intro and day != 1:
+                # Несколько медиа - распределяем по структуре урока (кроме дня 1)
                 # Первое медиа - сразу после заголовка
                 await self._send_media_item(user.user_id, media_list[media_index], day)
                 logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} after title for lesson {day}")
                 media_index += 1
+            elif day == 1 and media_count > 0:
+                # Для дня 1: медиа не отправляем сразу после заголовка, оно будет отправлено перед заданием
+                logger.info(f"   ⏭️ Skipping media after title for lesson 1 (will be sent before assignment)")
             
             # Отправляем вводный текст отдельным сообщением, если есть (пропускаем для навигатора)
             # Для урока 0 intro_text уже отправлен с видео, поэтому пропускаем
