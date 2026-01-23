@@ -375,6 +375,17 @@ class DriveContentSync:
                     all_drive_mentions = re_module.findall(r'[^\s]*drive\.google\.com[^\s]*', combined_text, re_module.IGNORECASE)
                     if all_drive_mentions:
                         logger.warning(f"   ⚠️ DEBUG Day 0: Found drive.google.com mentions: {all_drive_mentions[:5]}")
+                # Check for file ID pattern in text (might be just the ID without full URL)
+                file_id_pattern = re_module.findall(r'[a-zA-Z0-9_-]{25,}', combined_text)
+                if file_id_pattern:
+                    logger.warning(f"   ⚠️ DEBUG Day 0: Found potential file IDs in text: {file_id_pattern[:3]}")
+                # Check if "000 Шерлок 3.mp4" is in text - this might be a link that was already processed
+                if "000 Шерлок 3.mp4" in combined_text or "Шерлок" in combined_text:
+                    logger.warning(f"   ⚠️ DEBUG Day 0: Found 'Шерлок' in text - checking if it's a link format")
+                    # Try to find any URL-like patterns near "Шерлок"
+                    url_patterns = re_module.findall(r'https?://[^\s]+', combined_text)
+                    if url_patterns:
+                        logger.warning(f"   ⚠️ DEBUG Day 0: Found URL patterns in text: {url_patterns[:3]}")
             
             drive_links = self._find_drive_links_with_positions(combined_text)
             
@@ -384,6 +395,57 @@ class DriveContentSync:
                     logger.info(f"   📎   - Link: {link['url'][:60]}... (file_id: {link['file_id']})")
             elif day == 0:
                 logger.warning(f"   ⚠️ Day 0: No Drive links found! This may indicate the link format is different or link is in a different field")
+                # Special handling for day 0: if we see "000 Шерлок 3.mp4" but no link, 
+                # try to find the file by name in Drive and create a marker manually
+                if "000 Шерлок 3.mp4" in combined_text or "Шерлок" in combined_text.lower():
+                    logger.warning(f"   ⚠️ Day 0: Found 'Шерлок' in text but no Drive link. Attempting to find file by name...")
+                    # Known file ID for day 0 video (from user's previous message)
+                    known_file_id = "1XpI71z0vSm6uK1C8krBsBFrUwMSPNzXL"
+                    try:
+                        meta = drive.files().get(fileId=known_file_id, fields="id,name,mimeType,modifiedTime,size").execute()
+                        mt = (meta.get("mimeType") or "").lower()
+                        name = (meta.get("name") or "").strip()
+                        if mt.startswith("video/"):
+                            logger.info(f"   ✅ Day 0: Found video file by known ID: {name} (MIME: {mt})")
+                            safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
+                            dest = media_root / f"day_00" / safe_name
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            should_skip = self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime"))
+                            if not should_skip or not dest.exists():
+                                logger.info(f"   📎   Downloading day 0 video: {name} -> {dest}")
+                                self._download_binary_file(drive, known_file_id, dest)
+                                media_downloaded += 1
+                            else:
+                                logger.info(f"   📎   Day 0 video already exists: {dest}")
+                            
+                            rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
+                            marker_id = f"MEDIA_{known_file_id}_0"
+                            media_markers[marker_id] = {
+                                "type": "video",
+                                "path": rel_path,
+                                "file_id": known_file_id,
+                                "name": name
+                            }
+                            logger.info(f"   ✅ Created media marker for day 0: [{marker_id}]")
+                            
+                            # Replace "000 Шерлок 3.mp4" with marker in text
+                            if "000 Шерлок 3.mp4" in lesson_text:
+                                lesson_text = lesson_text.replace("000 Шерлок 3.mp4", f"[{marker_id}]")
+                                logger.info(f"   ✅ Replaced '000 Шерлок 3.mp4' with marker in lesson_text")
+                            elif "Шерлок" in lesson_text.lower():
+                                # Try to find and replace the line containing "Шерлок"
+                                lines = lesson_text.split("\n")
+                                for i, line in enumerate(lines):
+                                    if "Шерлок" in line.lower() and ".mp4" in line.lower():
+                                        lines[i] = f"[{marker_id}]"
+                                        lesson_text = "\n".join(lines)
+                                        logger.info(f"   ✅ Replaced line containing 'Шерлок' with marker in lesson_text")
+                                        break
+                        else:
+                            logger.warning(f"   ⚠️ Day 0: File {known_file_id} is not a video (MIME: {mt})")
+                    except Exception as e:
+                        logger.error(f"   ❌ Day 0: Failed to process known file ID {known_file_id}: {e}")
             
             # Process links in reverse order to preserve positions when replacing
             drive_links.sort(key=lambda x: x["start"], reverse=True)
