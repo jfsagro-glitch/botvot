@@ -4496,8 +4496,13 @@ class CourseBot:
         # Add feedback
         feedback_text = (message.text or message.caption or "").strip()
         
-        # Проверяем, что текст не пустой
-        if not feedback_text:
+        # Проверяем, что текст не пустой (включая проверку на только эмодзи/пробелы)
+        # Удаляем все эмодзи и проверяем, остался ли текст
+        import re
+        text_without_emoji = re.sub(r'[\U0001F300-\U0001F9FF\U0001FA00-\U0001FAFF\U00002600-\U000027BF\U0001F1E0-\U0001F1FF\U0001F680-\U0001F6FF\U0001F900-\U0001F9FF]', '', feedback_text)
+        text_without_emoji = re.sub(r'[^\w\s]', '', text_without_emoji).strip()
+        
+        if not feedback_text or (not text_without_emoji and len(feedback_text.strip()) < 3):
             await message.answer("❌ Обратная связь не может быть пустой. Пожалуйста, отправьте текст или голосовое сообщение.")
             return
         
@@ -4511,6 +4516,11 @@ class CourseBot:
                 f"День {assignment.day_number}\n\n"
                 f"{feedback_text}"
             )
+            
+            # Проверяем, что сообщение не пустое перед отправкой
+            if not feedback_message.strip() or len(feedback_message.strip()) < 10:
+                await message.answer("❌ Ошибка: сообщение обратной связи пустое. Пожалуйста, отправьте текст.")
+                return
             
             try:
                 await self.bot.send_message(user.user_id, feedback_message)
