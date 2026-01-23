@@ -3906,7 +3906,7 @@ class CourseBot:
         if needs_feedback:
             # Для тарифов с обратной связью - уведомление + информация о кураторах
             await message.answer(
-                f"✅ {notification_text}\n\n"
+                f"{notification_text}\n\n"
                 "📤 Ваше задание направлено кураторам 👥.\n"
                 "⏳ Вы получите обратную связь в ближайшее время 💬.",
                 reply_markup=persistent_keyboard
@@ -3914,7 +3914,7 @@ class CourseBot:
         else:
             # Для BASIC тарифа - только уведомление
             await message.answer(
-                f"✅ {notification_text}",
+                notification_text,
                 reply_markup=persistent_keyboard
             )
         
