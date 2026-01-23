@@ -407,7 +407,25 @@ class DriveContentSync:
             media_markers: Dict[str, Dict[str, Any]] = {}  # marker_id -> media_info
             
             # Find all Drive links in lesson and task text
+            # ВАЖНО: Также проверяем intro_text и about_me_text, если они есть в метаданных
+            # Но для начала обрабатываем только lesson_text и task_text
             combined_text = lesson_text + "\n" + task_text
+            
+            # Также проверяем intro_text и about_me_text из метаданных, если они есть
+            # Эти поля могут содержать ссылки на медиа, которые нужно обработать
+            intro_text = ""
+            about_me_text = ""
+            if isinstance(meta, dict):
+                intro_text = (meta.get("intro_text") or "").strip()
+                about_me_text = (meta.get("about_me_text") or "").strip()
+            
+            # Если intro_text или about_me_text содержат ссылки на Drive, добавляем их в combined_text для обработки
+            if intro_text and ("drive.google.com" in intro_text.lower() or "docs.google.com" in intro_text.lower()):
+                combined_text += "\n" + intro_text
+                logger.info(f"   📎 Day {day}: Found Drive links in intro_text, will process them")
+            if about_me_text and ("drive.google.com" in about_me_text.lower() or "docs.google.com" in about_me_text.lower()):
+                combined_text += "\n" + about_me_text
+                logger.info(f"   📎 Day {day}: Found Drive links in about_me_text, will process them")
             
             # Special logging for day 0 to debug missing links
             if day == 0:
@@ -664,9 +682,12 @@ class DriveContentSync:
                         # Replace link in text with marker
                         # Use the original URL from text (link_url) for exact replacement
                         marker_placeholder = f"[{marker_id}]"
-                        # Replace all occurrences of the link URL in both texts
+                        # Replace all occurrences of the link URL in both texts, intro_text, and about_me_text
                         replaced_in_lesson = False
                         replaced_in_task = False
+                        replaced_in_intro = False
+                        replaced_in_about_me = False
+                        
                         if link_url in lesson_text:
                             lesson_text = lesson_text.replace(link_url, marker_placeholder)
                             replaced_in_lesson = True
@@ -675,9 +696,17 @@ class DriveContentSync:
                             task_text = task_text.replace(link_url, marker_placeholder)
                             replaced_in_task = True
                             logger.info(f"   ✅ Replaced Drive link in task_text: {link_url[:60]}... -> [{marker_id}]")
+                        if intro_text and link_url in intro_text:
+                            intro_text = intro_text.replace(link_url, marker_placeholder)
+                            replaced_in_intro = True
+                            logger.info(f"   ✅ Replaced Drive link in intro_text: {link_url[:60]}... -> [{marker_id}]")
+                        if about_me_text and link_url in about_me_text:
+                            about_me_text = about_me_text.replace(link_url, marker_placeholder)
+                            replaced_in_about_me = True
+                            logger.info(f"   ✅ Replaced Drive link in about_me_text: {link_url[:60]}... -> [{marker_id}]")
                         
-                        if not replaced_in_lesson and not replaced_in_task:
-                            logger.warning(f"   ⚠️ Drive link not found in lesson_text or task_text: {link_url[:60]}...")
+                        if not replaced_in_lesson and not replaced_in_task and not replaced_in_intro and not replaced_in_about_me:
+                            logger.warning(f"   ⚠️ Drive link not found in any text field: {link_url[:60]}...")
                             logger.warning(f"   ⚠️ This may indicate the link format changed or was already replaced")
                         
                         media_items.append({"type": media_type, "path": rel_path, "marker_id": marker_id})
@@ -690,12 +719,22 @@ class DriveContentSync:
             if drive_links:
                 logger.info(f"   📎 Day {day} summary: {processed_links} processed, {skipped_links} skipped, {error_links} errors, {media_downloaded} downloaded")
 
+            # Split lesson into posts by square brackets (if not already split)
+            lesson_posts = DriveContentSync._split_lesson_into_posts(lesson_text)
+            
             entry: Dict[str, Any] = {
                 "day_number": day,
                 "title": title,
-                "text": lesson_text,
+                "text": lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else ""),
                 "task": task_text,
             }
+            
+            # Store intro_text and about_me_text if they were processed
+            if intro_text:
+                entry["intro_text"] = intro_text
+            if about_me_text:
+                entry["about_me_text"] = about_me_text
+            
             if media_items:
                 entry["media"] = media_items
             # CRITICAL: Store media markers for inline insertion

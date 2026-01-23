@@ -2750,15 +2750,48 @@ class CourseBot:
             # Отправляем вводный текст отдельным сообщением, если есть (пропускаем для навигатора)
             # Для урока 0 intro_text уже отправлен с видео, поэтому пропускаем
             # ВАЖНО: Проверяем, не содержится ли intro_text уже в основном тексте (lesson_posts)
+            # Если содержится, удаляем его из текста, чтобы не дублировать
             intro_text_in_main_text = False
             if intro_text and lesson_posts:
-                # Проверяем, содержится ли intro_text в любом из постов
+                # Проверяем, содержится ли intro_text в первом посте (который станет text)
                 intro_text_short = intro_text[:100] if len(intro_text) > 100 else intro_text
-                for post in lesson_posts:
-                    if intro_text_short in post or (len(intro_text) < 200 and intro_text.strip() in post):
+                intro_text_stripped = intro_text.strip()
+                
+                # Проверяем первый пост (который станет text)
+                if lesson_posts and len(lesson_posts) > 0:
+                    first_post = lesson_posts[0]
+                    if intro_text_short in first_post or (len(intro_text) < 200 and intro_text_stripped in first_post):
                         intro_text_in_main_text = True
-                        logger.warning(f"   ⚠️ intro_text found in main text for day {day}, skipping separate intro_text send")
-                        break
+                        logger.warning(f"   ⚠️ intro_text found in first post for day {day}, will remove from text to prevent duplication")
+                        
+                        # Удаляем intro_text из первого поста
+                        # Пытаемся найти точное совпадение и удалить его
+                        if intro_text_stripped in first_post:
+                            # Удаляем intro_text из начала поста, если он там есть
+                            first_post_cleaned = first_post.replace(intro_text_stripped, "", 1).strip()
+                            # Также удаляем, если intro_text в начале с пробелами/переносами
+                            if first_post.startswith(intro_text_stripped):
+                                first_post_cleaned = first_post[len(intro_text_stripped):].strip()
+                            else:
+                                # Пробуем найти и удалить intro_text из любого места
+                                first_post_cleaned = first_post.replace(intro_text_stripped, "", 1).strip()
+                            
+                            # Удаляем лишние переносы строк в начале
+                            first_post_cleaned = re.sub(r'^\n+', '', first_post_cleaned)
+                            first_post_cleaned = re.sub(r'^\s*\n\s*\n', '\n\n', first_post_cleaned)
+                            
+                            if first_post_cleaned:
+                                lesson_posts[0] = first_post_cleaned
+                                text = lesson_posts[0]  # Обновляем text
+                                logger.info(f"   ✅ Removed intro_text from first post for day {day}")
+                            else:
+                                # Если после удаления пост стал пустым, удаляем его из списка
+                                lesson_posts.pop(0)
+                                if lesson_posts:
+                                    text = lesson_posts[0]
+                                else:
+                                    text = ""
+                                logger.info(f"   ✅ Removed first post (was only intro_text) for day {day}")
             
             if intro_text and not skip_intro and not lesson0_intro_sent_with_video and not intro_text_in_main_text:
                 # Анимация перед отправкой текста
