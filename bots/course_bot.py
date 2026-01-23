@@ -4465,7 +4465,14 @@ class CourseBot:
         should_send_final = (assignment.day_number == 30 and assignment.status != "feedback_sent")
         
         # Add feedback
-        feedback_text = (message.text or message.caption or "").strip()
+        # Извлекаем текст из сообщения (поддерживаем текст, подпись к медиа)
+        feedback_text_raw = message.text or message.caption or ""
+        feedback_text = feedback_text_raw.strip() if feedback_text_raw else ""
+        
+        # Логируем для отладки
+        logger.info(f"   🔍 DEBUG handle_curator_feedback assignment: assignment_id={assignment_id}, "
+                   f"message.text={bool(message.text)}, message.caption={bool(message.caption)}, "
+                   f"feedback_text_raw length={len(feedback_text_raw)}, feedback_text length={len(feedback_text)}")
         
         # Проверяем, что текст не пустой (включая проверку на только эмодзи/пробелы)
         # Удаляем все эмодзи и проверяем, остался ли текст
@@ -4474,6 +4481,8 @@ class CourseBot:
         text_without_emoji = re.sub(r'[^\w\s]', '', text_without_emoji).strip()
         
         if not feedback_text or (not text_without_emoji and len(feedback_text.strip()) < 3):
+            logger.warning(f"   ⚠️ Empty feedback text detected: feedback_text='{feedback_text}', "
+                          f"text_without_emoji='{text_without_emoji}', length={len(feedback_text)}")
             await message.answer("❌ Обратная связь не может быть пустой. Пожалуйста, отправьте текст или голосовое сообщение.")
             return
         
