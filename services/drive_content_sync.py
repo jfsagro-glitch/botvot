@@ -371,19 +371,18 @@ class DriveContentSync:
                 if "drive.google.com" in combined_text.lower() or "1XpI71z0vSm6uK1C8krBsBFrUwMSPNzXL" in combined_text:
                     logger.warning(f"   ⚠️ DEBUG Day 0: Found 'drive.google.com' or file_id in text, but pattern didn't match!")
                     # Try to find the exact string
-                    import re as re_module
-                    all_drive_mentions = re_module.findall(r'[^\s]*drive\.google\.com[^\s]*', combined_text, re_module.IGNORECASE)
+                    all_drive_mentions = re.findall(r'[^\s]*drive\.google\.com[^\s]*', combined_text, re.IGNORECASE)
                     if all_drive_mentions:
                         logger.warning(f"   ⚠️ DEBUG Day 0: Found drive.google.com mentions: {all_drive_mentions[:5]}")
                 # Check for file ID pattern in text (might be just the ID without full URL)
-                file_id_pattern = re_module.findall(r'[a-zA-Z0-9_-]{25,}', combined_text)
+                file_id_pattern = re.findall(r'[a-zA-Z0-9_-]{25,}', combined_text)
                 if file_id_pattern:
                     logger.warning(f"   ⚠️ DEBUG Day 0: Found potential file IDs in text: {file_id_pattern[:3]}")
                 # Check if "000 Шерлок 3.mp4" is in text - this might be a link that was already processed
                 if "000 Шерлок 3.mp4" in combined_text or "Шерлок" in combined_text:
                     logger.warning(f"   ⚠️ DEBUG Day 0: Found 'Шерлок' in text - checking if it's a link format")
                     # Try to find any URL-like patterns near "Шерлок"
-                    url_patterns = re_module.findall(r'https?://[^\s]+', combined_text)
+                    url_patterns = re.findall(r'https?://[^\s]+', combined_text)
                     if url_patterns:
                         logger.warning(f"   ⚠️ DEBUG Day 0: Found URL patterns in text: {url_patterns[:3]}")
             
