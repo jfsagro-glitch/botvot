@@ -254,9 +254,12 @@ class DriveContentSync:
         for line in lines:
             # Check if line is a post marker
             # Match: ---POST---, [POST], [любые квадратные кавычки на отдельной строке], ---
+            # Также проверяем, если квадратные скобки в начале или конце строки с текстом
+            line_stripped = line.strip()
             is_marker = (
                 re.match(r'^\s*(?:---POST---|---)\s*$', line, re.IGNORECASE) or
-                re.match(r'^\s*\[.*?\]\s*$', line)  # Любые квадратные кавычки на отдельной строке
+                re.match(r'^\s*\[.*?\]\s*$', line) or  # Любые квадратные кавычки на отдельной строке
+                (line_stripped.startswith('[') and line_stripped.endswith(']') and len(line_stripped) < 50)  # Короткие маркеры вроде [POST]
             )
             
             if is_marker:
@@ -268,7 +271,38 @@ class DriveContentSync:
                     current_post = []
                 # Marker line itself is NOT included in any post
             else:
-                current_post.append(line)
+                # Проверяем, есть ли квадратные скобки внутри строки (не только маркеры)
+                # Если строка содержит [POST] или подобные маркеры, разделяем по ним
+                if '[' in line and ']' in line:
+                    # Ищем маркеры внутри строки
+                    marker_pattern = r'\[(POST|ДОПОЛНЕНИЕ|BLOCK|БЛОК|POST\d*)\]'
+                    matches = list(re.finditer(marker_pattern, line, re.IGNORECASE))
+                    if matches:
+                        # Разделяем строку по маркерам
+                        last_pos = 0
+                        for match in matches:
+                            # Добавляем текст до маркера
+                            if match.start() > last_pos:
+                                text_before = line[last_pos:match.start()].strip()
+                                if text_before:
+                                    current_post.append(text_before)
+                            # Сохраняем текущий пост и начинаем новый
+                            if current_post:
+                                post_text = '\n'.join(current_post).strip()
+                                if post_text:
+                                    posts.append(post_text)
+                                current_post = []
+                            last_pos = match.end()
+                        # Добавляем текст после последнего маркера
+                        if last_pos < len(line):
+                            text_after = line[last_pos:].strip()
+                            if text_after:
+                                current_post.append(text_after)
+                    else:
+                        # Нет маркеров внутри, просто добавляем строку
+                        current_post.append(line)
+                else:
+                    current_post.append(line)
         
         # Add last post if any
         if current_post:
@@ -570,6 +604,11 @@ class DriveContentSync:
                     else:
                         # Handle single file (existing logic)
                         logger.info(f"   📎 Processing Drive link: {link_url[:60]}... (file_id: {fid})")
+                        
+                        # Special handling for day 1 video: 1TQMTaSEhWgvJmrE9MJkh9BGsNCyRNtYO
+                        if day == 1 and fid == "1TQMTaSEhWgvJmrE9MJkh9BGsNCyRNtYO":
+                            logger.info(f"   📎   Special handling for day 1 video: {fid}")
+                        
                         meta = drive.files().get(fileId=fid, fields="id,name,mimeType,modifiedTime,size").execute()
                         mt = (meta.get("mimeType") or "").lower()
                         name = (meta.get("name") or f"file_{fid}").strip()
