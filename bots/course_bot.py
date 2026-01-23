@@ -3020,7 +3020,7 @@ class CourseBot:
                                 media_index += 1
                                 await asyncio.sleep(0.3)
                         else:
-                            # Если нет абзацев, отправляем весь текст и медиа после него
+                            # Если нет абзацев (текст пустой или не разбивается на абзацы), отправляем весь текст и медиа после него
                             # Если урок разбит на несколько постов, отправляем первый пост, затем медиа, затем остальные посты
                             if len(lesson_posts) > 1:
                                 # Отправляем первый пост
@@ -3031,23 +3031,15 @@ class CourseBot:
                                     else:
                                         await self._safe_send_message(user.user_id, lesson_posts[0].strip())
                                     await asyncio.sleep(0.3)
-                            elif text.strip():
-                                # Проверяем маркеры в тексте
-                                if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
-                                    await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
-                                else:
-                                    await self._safe_send_message(user.user_id, text)
-                                await asyncio.sleep(0.3)
-                            
-                            # Отправляем все оставшиеся медиа
-                            while media_index < media_count:
-                                await self._send_media_item(user.user_id, media_list[media_index], day)
-                                logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
-                                media_index += 1
-                                await asyncio.sleep(0.3)
-                            
-                            # Если урок разбит на несколько постов, отправляем остальные посты после медиа
-                            if len(lesson_posts) > 1:
+                                
+                                # Отправляем все оставшиеся медиа
+                                while media_index < media_count:
+                                    await self._send_media_item(user.user_id, media_list[media_index], day)
+                                    logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after first post for lesson {day}")
+                                    media_index += 1
+                                    await asyncio.sleep(0.3)
+                                
+                                # Отправляем остальные посты после медиа
                                 sent_media_file_ids = set()
                                 for marker_id, marker_info in media_markers.items():
                                     if any(f"[{marker_id}]" in post for post in lesson_posts):
@@ -3074,6 +3066,21 @@ class CourseBot:
                                         logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after posts for lesson {day}")
                                     else:
                                         logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
+                                    media_index += 1
+                                    await asyncio.sleep(0.3)
+                            elif text.strip():
+                                # Один пост - отправляем весь текст
+                                # Проверяем маркеры в тексте
+                                if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
+                                    await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                                else:
+                                    await self._safe_send_message(user.user_id, text)
+                                await asyncio.sleep(0.3)
+                                
+                                # Отправляем все оставшиеся медиа
+                                while media_index < media_count:
+                                    await self._send_media_item(user.user_id, media_list[media_index], day)
+                                    logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
                                     media_index += 1
                                     await asyncio.sleep(0.3)
             else:
