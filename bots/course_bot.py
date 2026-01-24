@@ -211,7 +211,7 @@ class CourseBot:
         await message.answer(
             f"✅ Синхронизация завершена.{clean_info}\n\n"
             f"📚 Обновлено уроков: <b>{result.days_synced}</b>\n"
-            f"📦 Блоков загружено: <b>{result.total_blocks}</b>\n"
+            f"📦 Блоков всего: <b>{result.total_blocks}</b>\n"
             f"📎 Медиафайлов всего: <b>{result.total_media_files}</b>\n"
             f"⬇️ Медиафайлов загружено: <b>{result.media_files_downloaded}</b>\n"
             f"📁 Путь к урокам: <code>{result.lessons_path}</code>"
