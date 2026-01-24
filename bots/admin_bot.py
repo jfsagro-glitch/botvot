@@ -1622,6 +1622,13 @@ class AdminBot:
     ):
         """Send answer to user via appropriate bot."""
         from aiogram import Bot
+        from aiogram.exceptions import TelegramBadRequest
+
+        # Проверяем, что пользователь существует в БД
+        if bot_type == "course":
+            user = await self.user_service.get_user(user_id)
+            if not user:
+                raise ValueError(f"Пользователь с ID {user_id} не найден в базе данных. Убедитесь, что пользователь зарегистрирован в обучающем боте.")
 
         # Determine which bot to use
         if bot_type == "sales":
@@ -1637,24 +1644,33 @@ class AdminBot:
         # В обучающем боте кнопки уже закреплены (reply keyboard),
         # но некоторые клиенты прячут их после inline-ответов.
         reply_markup = None
-        if voice_file_id:
-            voice_input = await self._reupload_voice(voice_file_id)
-            try:
-                await target_bot.send_voice(
-                    chat_id=user_id,
-                    voice=voice_input,
-                    caption=answer_message,
-                    reply_markup=reply_markup,
+        try:
+            if voice_file_id:
+                voice_input = await self._reupload_voice(voice_file_id)
+                try:
+                    await target_bot.send_voice(
+                        chat_id=user_id,
+                        voice=voice_input,
+                        caption=answer_message,
+                        reply_markup=reply_markup,
+                    )
+                except Exception:
+                    await target_bot.send_document(
+                        chat_id=user_id,
+                        document=voice_input,
+                        caption=answer_message,
+                        reply_markup=reply_markup,
+                    )
+            else:
+                await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
+        except TelegramBadRequest as e:
+            if "chat not found" in str(e).lower():
+                raise ValueError(
+                    f"Не удалось отправить сообщение пользователю {user_id}. "
+                    f"Пользователь не начинал диалог с {'обучающим' if bot_type == 'course' else 'продающим'} ботом. "
+                    f"Попросите пользователя отправить /start в соответствующем боте."
                 )
-            except Exception:
-                await target_bot.send_document(
-                    chat_id=user_id,
-                    document=voice_input,
-                    caption=answer_message,
-                    reply_markup=reply_markup,
-                )
-        else:
-            await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
+            raise
 
         # Restore persistent reply keyboard after admin responses.
         try:
