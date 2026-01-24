@@ -97,10 +97,17 @@ class MentorReminderScheduler:
         for user in users:
             try:
                 # Пропускаем пользователей с отключенными напоминаниями
-                if user.mentor_reminders == 0:
+                if not user.mentor_reminders or user.mentor_reminders == 0:
                     skipped_disabled += 1
                     continue
                 enabled += 1
+                
+                # Логируем для отладки
+                logger.debug(
+                    f"   👤 mentor_reminder check: user={user.user_id} "
+                    f"reminders={user.mentor_reminders} current_day={user.current_day} "
+                    f"last_reminder={user.last_mentor_reminder}"
+                )
                 
                 # Пропускаем пользователей, которые завершили курс
                 # NOTE: do NOT re-import Config here; it causes UnboundLocalError earlier in the function.
@@ -126,26 +133,57 @@ class MentorReminderScheduler:
 
                 if user_now < user_window_start_dt or user_now > user_window_end_dt:
                     skipped_window += 1
+                    logger.debug(
+                        f"   ⏰ mentor_reminder: user={user.user_id} skip=window "
+                        f"(now={user_now.strftime('%H:%M')}, "
+                        f"window={window_start_t.strftime('%H:%M')}-{window_end_t.strftime('%H:%M')})"
+                    )
                     continue
 
                 # Distribute reminders evenly within the window.
                 window_duration = user_window_end_dt - user_window_start_dt
+                # Для N напоминаний создаем N интервалов, чтобы равномерно распределить
+                # Например, для 4 напоминаний: [0, 1/4, 2/4, 3/4] от начала окна
                 interval = window_duration / max(user.mentor_reminders, 1)
                 
                 # Проверяем, прошло ли достаточно времени с момента последнего напоминания
+                should_send = False
                 if user.last_mentor_reminder:
                     last_local = user.last_mentor_reminder.replace(tzinfo=timezone.utc).astimezone(tz)
-                    # If last reminder was before today's window, treat it as "not sent today"
-                    if last_local < user_window_start_dt:
-                        pass
+                    # If last reminder was before today's window start, treat it as "not sent today" - send immediately
+                    # Compare dates to check if it's a different day
+                    if last_local.date() < user_now.date():
+                        # Last reminder was yesterday or earlier - send first reminder of today
+                        logger.debug(f"   📅 mentor_reminder: user={user.user_id} last was yesterday, sending first today")
+                        should_send = True
+                    elif last_local < user_window_start_dt:
+                        # Last reminder was earlier today but before window start - send first reminder in window
+                        logger.debug(f"   ⏰ mentor_reminder: user={user.user_id} last was before window, sending first in window")
+                        should_send = True
                     else:
+                        # Last reminder was within today's window - check interval
                         time_since_last = user_now - last_local
-                        if time_since_last < interval:
+                        if time_since_last >= interval:
+                            should_send = True
+                            logger.debug(
+                                f"   ✅ mentor_reminder: user={user.user_id} interval passed "
+                                f"(since_last={time_since_last.total_seconds()/60:.1f}min, "
+                                f"interval={interval.total_seconds()/60:.1f}min)"
+                            )
+                        else:
                             skipped_interval += 1
-                            continue
+                            logger.debug(
+                                f"   ⏱️ mentor_reminder: user={user.user_id} skip=interval "
+                                f"(since_last={time_since_last.total_seconds()/60:.1f}min, "
+                                f"interval={interval.total_seconds()/60:.1f}min)"
+                            )
                 else:
-                    # First reminder of the day: only after window start (already ensured)
-                    pass
+                    # First reminder ever: only after window start (already ensured)
+                    logger.debug(f"   🆕 mentor_reminder: user={user.user_id} first reminder ever")
+                    should_send = True
+                
+                if not should_send:
+                    continue
                 
                 # ВАЖНО: Проверяем, не отправлено ли уже задание для текущего дня
                 # Если задание уже отправлено, не отправляем напоминания
@@ -157,6 +195,7 @@ class MentorReminderScheduler:
                     continue
                 
                 # Отправляем напоминание
+                logger.info(f"   📤 Sending mentor reminder to user {user.user_id} (day {user.current_day}, reminder #{sent + 1}/{user.mentor_reminders})")
                 await self.reminder_callback(user)
                 sent += 1
                 
