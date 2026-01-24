@@ -2867,6 +2867,26 @@ class CourseBot:
             # Получаем список медиа для урока
             media_list = lesson_data.get("media", [])
 
+            # De-duplicate media entries coming from content sources (can contain repeats).
+            # Keep stable order; prefer file_id identity when available, otherwise path.
+            if media_list:
+                seen_media_keys: set[tuple[str, str, str]] = set()
+                unique_media: list[dict] = []
+                for m in media_list:
+                    if not isinstance(m, dict):
+                        continue
+                    m_type = str(m.get("type") or "")
+                    m_fid = str(m.get("file_id") or "")
+                    m_path = str(m.get("path") or "")
+                    key = (m_type, m_fid, m_path)
+                    if key in seen_media_keys:
+                        continue
+                    seen_media_keys.add(key)
+                    unique_media.append(m)
+                if len(unique_media) != len(media_list):
+                    logger.info(f"   🧹 De-duplicated media_list for day {day}: {len(media_list)} -> {len(unique_media)}")
+                media_list = unique_media
+
             # If a media file is referenced via an inline marker in any text block, do not send it again
             # from the generic media_list flow (prevents duplicate photos/videos).
             try:
@@ -3134,6 +3154,12 @@ class CourseBot:
                 removed = before - len(media_list)
                 if removed:
                     logger.info(f"   🧹 Removed {removed} media items matching about_me_photo_file_id for day {day}")
+            if about_me_photo_path and media_list:
+                before = len(media_list)
+                media_list = [m for m in media_list if str(m.get("path") or "") != str(about_me_photo_path)]
+                removed = before - len(media_list)
+                if removed:
+                    logger.info(f"   🧹 Removed {removed} media items matching about_me_photo_path for day {day}")
             
             # Проверяем, есть ли маркер для картинки "ОБО МНЕ" в тексте
             about_me_photo_in_text = False
