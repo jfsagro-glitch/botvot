@@ -1588,12 +1588,19 @@ class CourseBot:
         persistent_keyboard = self._create_persistent_keyboard()
         if isinstance(message_or_callback, CallbackQuery):
             await message_or_callback.message.answer(navigator_text, reply_markup=keyboard)
-            # Устанавливаем постоянную клавиатуру отдельным сообщением (используем невидимый символ)
-            await message_or_callback.message.answer("\u200B", reply_markup=persistent_keyboard)
+            # Устанавливаем постоянную клавиатуру отдельным сообщением (используем пробел)
+            try:
+                await message_or_callback.message.answer(" ", reply_markup=persistent_keyboard)
+            except Exception as e:
+                logger.warning(f"   ⚠️ Failed to send persistent keyboard: {e}")
         else:
+            # Для Message используем message.answer()
             await message_or_callback.answer(navigator_text, reply_markup=keyboard)
-            # Устанавливаем постоянную клавиатуру отдельным сообщением (используем невидимый символ)
-            await message_or_callback.answer("\u200B", reply_markup=persistent_keyboard)
+            # Устанавливаем постоянную клавиатуру отдельным сообщением (используем пробел)
+            try:
+                await message_or_callback.answer(" ", reply_markup=persistent_keyboard)
+            except Exception as e:
+                logger.warning(f"   ⚠️ Failed to send persistent keyboard: {e}")
         
         logger.info(f"🧭 Navigator opened by user {user_id}")
     
@@ -2986,6 +2993,27 @@ class CourseBot:
                 intro_text_short = intro_text[:100] if len(intro_text) > 100 else intro_text
                 intro_text_stripped = intro_text.strip()
                 
+                # Для урока 1: также проверяем и удаляем текст, который будет отправлен с видео
+                if (day == 1 or str(day) == "1") and lesson1_video_media:
+                    # Удаляем посты, содержащие текст, который будет отправлен с видео
+                    intro_keywords = [
+                        "Добро пожаловать на корвет",
+                        "Привет вам, отважные исследователи",
+                        "Наш корабль берёт курс",
+                        "я задам вам первый вопрос"
+                    ]
+                    
+                    for i, post in enumerate(lesson_posts):
+                        if not isinstance(post, str) or not post.strip():
+                            continue
+                        
+                        # Проверяем, содержит ли пост ключевые слова из intro текста
+                        if any(keyword in post for keyword in intro_keywords):
+                            intro_text_in_main_text = True
+                            logger.warning(f"   ⚠️ Intro text found in post {i} for day {day}, will remove to prevent duplication")
+                            lesson_posts[i] = ""  # Помечаем для удаления
+                            logger.info(f"   ✅ Marked post {i} for removal (contains intro text for day {day})")
+                
                 # Проверяем все посты на наличие intro_text
                 for i, post in enumerate(lesson_posts):
                     if not isinstance(post, str) or not post.strip():
@@ -3027,7 +3055,8 @@ class CourseBot:
                     text = ""
             
             # Отправляем intro_text отдельно только если он НЕ содержится в основном тексте
-            if intro_text and not skip_intro and not lesson0_intro_sent_with_video and not intro_text_in_main_text:
+            # Для урока 1: пропускаем intro_text, так как он будет отправлен с видео
+            if intro_text and not skip_intro and not lesson0_intro_sent_with_video and not intro_text_in_main_text and not ((day == 1 or str(day) == "1") and lesson1_video_media):
                 # Анимация перед отправкой текста
                 await send_typing_action(self.bot, user.user_id, 0.5)
                 # Текст берется как есть из Google Doc, без разделителей
@@ -3198,29 +3227,81 @@ class CourseBot:
                 
                 # Для урока 1: удаляем текст "Добро пожаловать на корвет" из основного текста, 
                 # так как он будет отправлен с видео перед заданием
+                # ВАЖНО: Сохраняем маркеры медиа в тексте, даже если удаляем intro текст
                 if (day == 1 or str(day) == "1") and lesson1_video_media:
                     # Удаляем абзац с текстом "Добро пожаловать на корвет" из текста
+                    # Но сохраняем маркеры медиа, если они есть
                     paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
                     text_paragraphs = []
                     
                     for i, paragraph in enumerate(paragraphs):
-                        if "Добро пожаловать на корвет" in paragraph:
+                        # Проверяем, содержит ли абзац текст, который будет отправлен с видео
+                        # НО: если в абзаце есть маркеры медиа, сохраняем его (маркеры важнее)
+                        has_media_marker = media_markers and any(f"[{marker}]" in paragraph for marker in media_markers.keys())
+                        
+                        if not has_media_marker and ("Добро пожаловать на корвет" in paragraph or 
+                            "Привет вам, отважные исследователи" in paragraph or
+                            "Наш корабль берёт курс" in paragraph):
                             # Текст будет отправлен с видео перед заданием, пропускаем его здесь
                             lesson1_video_placed = True
-                            logger.info(f"   ✅ Removed 'Добро пожаловать' text from main text for lesson 1")
+                            logger.info(f"   ✅ Removed intro text from main text for lesson 1 (paragraph {i}, no media markers)")
                         else:
+                            if has_media_marker:
+                                logger.info(f"   ✅ Kept paragraph {i} for lesson 1 (contains media markers)")
                             text_paragraphs.append(paragraph)
                     
                     # Обновляем текст без абзаца "Добро пожаловать"
                     if text_paragraphs:
                         text = '\n\n'.join(text_paragraphs)
+                        logger.info(f"   ✅ Updated text for lesson 1, kept {len(text_paragraphs)} paragraphs")
+                    else:
+                        # Если весь текст был удален, делаем его пустым
+                        text = ""
+                        logger.info(f"   ✅ All intro text removed from main text for lesson 1")
                 
-                # Если медиа урока 1 или 2 уже размещено, выходим из этой логики
+                # Если медиа урока 1 или 2 уже размещено, отправляем текст с медиа-маркерами (если есть)
                 if lesson1_video_placed or lesson2_photo_placed:
-                    # Отправляем оставшиеся медиа после последнего абзаца (если есть)
+                    # Для урока 1 или 2: отправляем текст с медиа-маркерами, если они есть
+                    # ВАЖНО: Проверяем, что текст не пустой и не содержит только пробелы
+                    if text and text.strip() and text.strip() != "":
+                        # Удаляем маркеры медиа из текста перед проверкой, так как они не должны быть видны пользователю
+                        text_for_check = text
+                        if media_markers:
+                            for marker_id in media_markers.keys():
+                                text_for_check = text_for_check.replace(f"[{marker_id}]", "")
+                        
+                        # Если после удаления маркеров текст не пустой, отправляем его
+                        if text_for_check.strip():
+                            # Проверяем, есть ли маркеры медиа в тексте для встроенной вставки
+                            if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
+                                # Используем встроенную вставку медиа по маркерам
+                                await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                                logger.info(f"   ✅ Sent lesson text with inline media markers for day {day} (after video/photo placement)")
+                            else:
+                                # Отправляем текст без медиа-маркеров
+                                await self._safe_send_message(user.user_id, text)
+                                logger.info(f"   ✅ Sent lesson text for day {day} (after video/photo placement)")
+                        else:
+                            logger.info(f"   ⏭️ Skipped sending text for day {day} (empty after marker removal)")
+                    else:
+                        logger.info(f"   ⏭️ Skipped sending text for day {day} (text is empty)")
+                    
+                    # Отправляем оставшиеся медиа из списка, которые не были отправлены через маркеры
+                    sent_media_file_ids = set()
+                    if media_markers:
+                        for marker_id, marker_info in media_markers.items():
+                            if f"[{marker_id}]" in text:
+                                sent_media_file_ids.add(marker_info.get("file_id"))
+                    
                     while media_index < media_count:
-                        await self._send_media_item(user.user_id, media_list[media_index], day)
-                        logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
+                        media_item = media_list[media_index]
+                        media_file_id = media_item.get("file_id")
+                        # Проверяем, не было ли это медиа уже отправлено через маркер
+                        if media_file_id not in sent_media_file_ids:
+                            await self._send_media_item(user.user_id, media_item, day)
+                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
+                        else:
+                            logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
                         media_index += 1
                         await asyncio.sleep(0.3)
                 else:
