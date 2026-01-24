@@ -1599,8 +1599,21 @@ class CourseBot:
                 await message_or_callback.answer("❌ Уроки не загружены.", reply_markup=persistent_keyboard)
             return
         
-        # Создаем клавиатуру навигатора
-        keyboard = create_navigator_keyboard(all_lessons, user.current_day)
+        # Фильтруем уроки: показываем только те, которые уже были доставлены пользователю
+        # Показываем уроки от 0 до current_day включительно (т.е. уже пришедшие уроки)
+        available_lessons = {}
+        for day_str, lesson_data in all_lessons.items():
+            try:
+                day = int(day_str)
+                # Показываем только уроки, которые уже были доставлены (от 0 до current_day)
+                if day <= user.current_day:
+                    available_lessons[day_str] = lesson_data
+            except (ValueError, TypeError):
+                # Пропускаем нечисловые ключи
+                continue
+        
+        # Создаем клавиатуру навигатора только с доступными уроками
+        keyboard = create_navigator_keyboard(available_lessons, user.current_day)
         navigator_text = format_navigator_message()
         
         # Отправляем сообщение в зависимости от типа объекта
