@@ -2904,8 +2904,10 @@ class CourseBot:
             extracted_task_from_posts = ""
             if lesson_posts:
                 normalized_posts: list[str] = []
-                for post in lesson_posts:
+                original_count = len(lesson_posts)
+                for i, post in enumerate(lesson_posts):
                     if not isinstance(post, str) or not post.strip():
+                        logger.debug(f"   ⏭️ Skipping empty post {i} for day {day}")
                         continue
                     # Remove block-separator markers, but keep media markers for inline insertion.
                     block_marker_re = r'^\s*\[(?:POST\d*|POST|ДОПОЛНЕНИЕ|BLOCK|БЛОК)\]\s*$'
@@ -2913,6 +2915,7 @@ class CourseBot:
                     cleaned_post = re.sub(r'^\s*(?:---POST---|---)\s*$', '', cleaned_post, flags=re.MULTILINE | re.IGNORECASE)
                     # Keep original spacing between paragraphs; don't collapse empty lines.
                     if not cleaned_post.strip():
+                        logger.warning(f"   ⚠️ Post {i} for day {day} became empty after marker removal (original length: {len(post)} chars)")
                         continue
                     if not extracted_task_from_posts:
                         lesson_part, task_part = self._split_assignment_from_text(cleaned_post)
@@ -2920,9 +2923,15 @@ class CourseBot:
                             extracted_task_from_posts = task_part
                             if lesson_part:
                                 normalized_posts.append(lesson_part)
+                                logger.debug(f"   ✅ Split post {i} for day {day} into lesson part ({len(lesson_part)} chars) and task part ({len(task_part)} chars)")
+                            else:
+                                logger.debug(f"   ℹ️ Post {i} for day {day} was entirely task, extracted as task")
                             continue
                     normalized_posts.append(cleaned_post)
+                    logger.debug(f"   ✅ Added post {i} for day {day} to normalized_posts ({len(cleaned_post)} chars)")
                 lesson_posts = normalized_posts
+                if len(lesson_posts) != original_count:
+                    logger.info(f"   📊 Post normalization for day {day}: {original_count} -> {len(lesson_posts)} posts (removed {original_count - len(lesson_posts)} empty posts)")
 
             # For backward compatibility, keep 'text' as first post for existing code
             text = lesson_posts[0] if lesson_posts else ""
@@ -3237,7 +3246,20 @@ class CourseBot:
                             continue
                         
                         # Проверяем, содержит ли пост ключевые слова из intro текста
+                        # ВАЖНО: Удаляем пост ТОЛЬКО если он полностью состоит из intro текста
                         if any(keyword in post for keyword in intro_keywords):
+                            # Проверяем, что пост не содержит значительного дополнительного контента
+                            post_stripped = post.strip()
+                            intro_text_stripped = intro_text.strip() if intro_text else ""
+                            
+                            # Если пост содержит intro_text и дополнительный контент (более 100 символов), не удаляем
+                            if intro_text_stripped and intro_text_stripped in post_stripped:
+                                # Проверяем длину дополнительного контента
+                                additional_content = post_stripped.replace(intro_text_stripped, "").strip()
+                                if len(additional_content) > 100:
+                                    logger.info(f"   ℹ️ Post {i} for day {day} contains intro text but also {len(additional_content)} chars of additional content, keeping it")
+                                    continue
+                            
                             intro_text_in_main_text = True
                             logger.warning(f"   ⚠️ Intro text found in post {i} for day {day}, will remove to prevent duplication")
                             lesson_posts[i] = ""  # Помечаем для удаления
@@ -3274,8 +3296,12 @@ class CourseBot:
                                 lesson_posts[i] = ""
                                 logger.info(f"   ✅ Post {i} became empty after removing intro_text for day {day}")
                 
-                # Удаляем пустые посты
+                # Удаляем пустые посты, но логируем это для диагностики
+                before_count = len(lesson_posts)
                 lesson_posts = [p for p in lesson_posts if p and p.strip()]
+                after_count = len(lesson_posts)
+                if before_count != after_count:
+                    logger.warning(f"   ⚠️ Removed {before_count - after_count} empty posts after intro_text removal for day {day} (kept {after_count} posts)")
                 
                 # Обновляем text
                 if lesson_posts:
@@ -3895,14 +3921,19 @@ class CourseBot:
                     # Каждый пост отправляется как отдельный блок (после [POST])
                     for i, post_text in enumerate(lesson_posts):
                         if post_text and post_text.strip():
-                            # ВАЖНО: Проверяем, не является ли этот пост дубликатом intro_text
-                            # Если intro_text уже отправлен отдельно, пропускаем пост, который содержит intro_text
+                            # ВАЖНО: Проверяем, не является ли этот пост ТОЛЬКО intro_text (без дополнительного контента)
+                            # Если intro_text уже отправлен отдельно, пропускаем пост ТОЛЬКО если он полностью состоит из intro_text
                             if intro_text_sent_separately and intro_text:
-                                intro_text_short = intro_text[:100] if len(intro_text) > 100 else intro_text
                                 intro_text_stripped = intro_text.strip()
-                                if intro_text_short in post_text or (len(intro_text) < 200 and intro_text_stripped in post_text):
-                                    logger.warning(f"   ⚠️ Skipping post {i} for day {day} - it contains intro_text which was already sent separately")
-                                    continue
+                                post_text_stripped = post_text.strip()
+                                # Пропускаем только если пост полностью совпадает с intro_text (с небольшим допуском на форматирование)
+                                if len(post_text_stripped) <= len(intro_text_stripped) * 1.1 and intro_text_stripped in post_text_stripped:
+                                    # Проверяем, что пост не содержит дополнительного контента
+                                    if len(post_text_stripped) - len(intro_text_stripped) < 50:  # Допускаем небольшую разницу
+                                        logger.warning(f"   ⚠️ Skipping post {i} for day {day} - it is mostly intro_text which was already sent separately")
+                                        continue
+                                    else:
+                                        logger.info(f"   ℹ️ Post {i} for day {day} contains intro_text but also additional content, sending it")
                             
                             # Анимация перед отправкой поста (только для первого)
                             if i == 0:

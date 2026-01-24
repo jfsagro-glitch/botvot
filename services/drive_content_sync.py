@@ -502,9 +502,12 @@ class DriveContentSync:
             drive_links = self._find_drive_links_with_positions(combined_text)
             
             logger.info(f"   📎 Day {day}: Found {len(drive_links)} Drive links in text")
+            logger.info(f"   📎 Day {day}: Text lengths - lesson: {len(lesson_text)}, task: {len(task_text)}, intro: {len(intro_text)}, about_me: {len(about_me_text)}")
             if drive_links:
-                for link in drive_links:
-                    logger.info(f"   📎   - Link: {link['url'][:60]}... (file_id: {link['file_id']}, is_folder: {link.get('is_folder', False)})")
+                for idx, link in enumerate(drive_links, 1):
+                    logger.info(f"   📎   [{idx}/{len(drive_links)}] Link: {link['url'][:80]}... (file_id: {link['file_id']}, is_folder: {link.get('is_folder', False)}, position: {link.get('start', '?')}-{link.get('end', '?')})")
+            else:
+                logger.warning(f"   ⚠️ Day {day}: No Drive links found in text! This may indicate a problem with link detection.")
             
             # Обрабатываем ссылки в обратном порядке, чтобы сохранить позиции при замене
             drive_links.sort(key=lambda x: x["start"], reverse=True)
