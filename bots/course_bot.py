@@ -154,15 +154,28 @@ class CourseBot:
             logger.debug(f"Could not send persistent keyboard to {user_id}: {e}")
 
     async def handle_sync_content(self, message: Message):
-        """Admin command: sync lessons from Google Drive into /app/data/lessons.json and reload LessonLoader."""
+        """Admin command: sync lessons from Google Drive into /app/data/lessons.json and reload LessonLoader.
+        
+        Usage:
+            /sync_content - обычная синхронизация
+            /sync_content clean - очистить медиафайлы и пересинхронизировать
+        """
         # Check that ADMIN_CHAT_ID is set (can be negative for groups, so check != 0)
         if Config.ADMIN_CHAT_ID == 0 or message.from_user.id != Config.ADMIN_CHAT_ID:
             return
 
-        await message.answer("🔄 Синхронизирую контент из Google Drive…")
+        # Проверяем, есть ли параметр "clean"
+        command_args = message.text.split()[1:] if message.text else []
+        clean_media = len(command_args) > 0 and command_args[0].lower() in ["clean", "очистить", "clear"]
+        
+        if clean_media:
+            await message.answer("🧹 Очищаю медиафайлы и синхронизирую контент из Google Drive…")
+        else:
+            await message.answer("🔄 Синхронизирую контент из Google Drive…")
+        
         syncer = DriveContentSync()
         try:
-            result = await asyncio.to_thread(syncer.sync_now)
+            result = await asyncio.to_thread(syncer.sync_now, clean_media=clean_media)
         except Exception as e:
             await message.answer(f"❌ Sync failed: <code>{e}</code>")
             return
@@ -191,8 +204,12 @@ class CourseBot:
             if len(result.warnings) > 10:
                 warn_text += f"\n…и ещё {len(result.warnings) - 10}"
 
+        clean_info = ""
+        if clean_media:
+            clean_info = "\n🧹 Медиафайлы очищены и загружены заново.\n"
+
         await message.answer(
-            "✅ Sync completed.\n\n"
+            f"✅ Sync completed.{clean_info}\n\n"
             f"• days_synced: <b>{result.days_synced}</b>\n"
             f"• media_downloaded: <b>{result.media_files_downloaded}</b>\n"
             f"• lessons_path: <code>{result.lessons_path}</code>"

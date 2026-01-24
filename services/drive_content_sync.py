@@ -1124,10 +1124,70 @@ class DriveContentSync:
             logger.error(f"❌ Failed to restore from backup: {e}", exc_info=True)
             return False
 
-    def sync_now(self) -> SyncResult:
+    def clean_media_files(self) -> int:
+        """
+        Удаляет все медиафайлы из директории content_media.
+        Возвращает количество удаленных файлов.
+        """
+        project_root = Path.cwd()
+        media_root = (project_root / self.media_dir).resolve()
+        
+        if not media_root.exists():
+            logger.info(f"📁 Media directory does not exist: {media_root}")
+            return 0
+        
+        deleted_count = 0
+        try:
+            # Удаляем все файлы и поддиректории в media_root
+            for item in media_root.iterdir():
+                if item.is_file():
+                    item.unlink()
+                    deleted_count += 1
+                    logger.debug(f"   🗑️ Deleted file: {item.name}")
+                elif item.is_dir():
+                    # Рекурсивно удаляем содержимое директории (файлы)
+                    for subitem in item.rglob("*"):
+                        if subitem.is_file():
+                            subitem.unlink()
+                            deleted_count += 1
+                            logger.debug(f"   🗑️ Deleted file: {subitem}")
+                    # Удаляем саму директорию (используем shutil для надежности)
+                    try:
+                        shutil.rmtree(item)
+                        logger.debug(f"   🗑️ Deleted directory: {item.name}")
+                    except OSError as e:
+                        # Если директория не пуста, пробуем удалить оставшиеся файлы
+                        logger.warning(f"   ⚠️ Could not remove directory {item.name}: {e}")
+                        # Пробуем удалить оставшиеся файлы вручную
+                        for remaining in item.rglob("*"):
+                            if remaining.is_file():
+                                try:
+                                    remaining.unlink()
+                                    deleted_count += 1
+                                except Exception:
+                                    pass
+                        # Пробуем удалить директорию снова
+                        try:
+                            item.rmdir()
+                        except Exception:
+                            pass
+            
+            logger.info(f"✅ Cleaned {deleted_count} media files from {media_root}")
+            return deleted_count
+        except Exception as e:
+            logger.error(f"❌ Error cleaning media files: {e}", exc_info=True)
+            raise
+
+    def sync_now(self, clean_media: bool = False) -> SyncResult:
         ok, reason = self._admin_ready()
         if not ok:
             raise RuntimeError(f"Drive content sync not ready: {reason}")
+
+        # Очищаем медиафайлы перед синхронизацией, если запрошено
+        if clean_media:
+            logger.info("🧹 Cleaning media files before sync...")
+            deleted_count = self.clean_media_files()
+            logger.info(f"✅ Cleaned {deleted_count} media files")
 
         drive = self._build_drive_client()
         warnings: List[str] = []
