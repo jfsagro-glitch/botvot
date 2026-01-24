@@ -2383,7 +2383,7 @@ class CourseBot:
         re.IGNORECASE,
     )
 
-    async def _send_text_with_inline_media(self, user_id: int, text: str, media_markers: Dict[str, Dict[str, Any]], day: int, keyboard: Optional[InlineKeyboardMarkup] = None):
+    async def _send_text_with_inline_media(self, user_id: int, text: str, media_markers: Dict[str, Dict[str, Any]], day: int, keyboard: Optional[InlineKeyboardMarkup] = None) -> set:
         """
         Отправляет текст с встроенными медиа-файлами в местах маркеров.
         
@@ -2393,13 +2393,18 @@ class CourseBot:
             media_markers: Словарь маркеров -> информация о медиа
             day: Номер дня урока
             keyboard: Опциональная клавиатура, которая будет добавлена к последнему сообщению
+        
+        Returns:
+            set: Множество кортежей (file_id, normalized_path, filename) для отправленных медиа
         """
         logger.info(f"   📎 _send_text_with_inline_media called for user {user_id}, day {day}")
         logger.info(f"   📎 Text length: {len(text)}, media_markers count: {len(media_markers) if media_markers else 0}")
         
+        sent_media_keys = set()  # Отслеживаем отправленные медиа
+        
         if not text:
             logger.warning(f"   ⚠️ Empty text provided to _send_text_with_inline_media")
-            return
+            return sent_media_keys
         
         # Находим все маркеры в тексте
         import re
@@ -2418,7 +2423,7 @@ class CourseBot:
                 await self.bot.send_message(user_id, text, reply_markup=keyboard, disable_web_page_preview=True)
             else:
                 await self._safe_send_message(user_id, text)
-            return
+            return sent_media_keys
         
         # Разбиваем текст на части по маркерам
         # re.split с группой в паттерне возвращает список: [text_before, marker, text_after, marker, ...]
@@ -2428,6 +2433,7 @@ class CourseBot:
         
         # Отслеживаем последнюю отправленную часть (текст или медиа) для добавления клавиатуры
         last_sent_message_id = None
+        keyboard_attached = False  # Флаг, указывающий, была ли клавиатура уже прикреплена
         
         for i, part in enumerate(parts):
             if not part.strip():
@@ -2459,12 +2465,35 @@ class CourseBot:
                         # Используем сохраненный file_id (файл уже в контексте Telegram)
                         logger.info(f"   💾 Found cached file_id for marker {part}, using it")
                         try:
+                            # Проверяем, является ли это последней частью
+                            is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip() if i + 1 < len(parts) else True)
+                            
                             if media_type == "photo":
-                                await self.bot.send_photo(user_id, cached_file_id)
+                                sent_message = await self.bot.send_photo(
+                                    user_id, 
+                                    cached_file_id,
+                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
+                                )
+                                if is_last and keyboard and not keyboard_attached:
+                                    keyboard_attached = True
                                 logger.info(f"   ✅ Sent inline photo from cache (file_id) for marker {part}, lesson {day}")
                             elif media_type == "video":
-                                await self.bot.send_video(user_id, cached_file_id)
+                                sent_message = await self.bot.send_video(
+                                    user_id, 
+                                    cached_file_id,
+                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
+                                )
+                                if is_last and keyboard and not keyboard_attached:
+                                    keyboard_attached = True
                                 logger.info(f"   ✅ Sent inline video from cache (file_id) for marker {part}, lesson {day}")
+                            
+                            if sent_message:
+                                last_sent_message_id = sent_message.message_id
+                                # Отслеживаем отправленное медиа
+                                from pathlib import Path
+                                normalized_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                                filename = Path(media_path).name if media_path else ""
+                                sent_media_keys.add((str(cached_file_id), normalized_path, filename))
                         except Exception as cache_error:
                             # Если file_id недействителен, загружаем файл заново
                             logger.warning(f"   ⚠️ Cached file_id invalid for {part}, re-uploading: {cache_error}")
@@ -2515,17 +2544,23 @@ class CourseBot:
                             if media_type == "photo":
                                 photo_file = FSInputFile(file_path)
                                 # Если это последняя часть и есть клавиатура, добавляем её к фото
-                                is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip())
+                                is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip() if i + 1 < len(parts) else True)
                                 sent_message = await self.bot.send_photo(
                                     user_id, 
                                     photo_file,
-                                    reply_markup=keyboard if (is_last and keyboard) else None
+                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
                                 )
+                                if is_last and keyboard and not keyboard_attached:
+                                    keyboard_attached = True
                                 last_sent_message_id = sent_message.message_id
                                 # Сохраняем file_id для фото (может быть список, берем самое большое)
                                 if sent_message.photo:
                                     file_id = sent_message.photo[-1].file_id
                                     await self.db.save_media_file_id(part, day, media_type, file_id)
+                                    # Отслеживаем отправленное медиа
+                                    normalized_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                                    filename = Path(media_path).name if media_path else ""
+                                    sent_media_keys.add((str(file_id), normalized_path, filename))
                                     logger.info(f"   ✅ Sent inline photo and cached file_id for marker {part}, lesson {day}")
                             elif media_type == "video":
                                 # Проверяем размер и сжимаем видео при необходимости
@@ -2533,18 +2568,24 @@ class CourseBot:
                                 video_path_to_use = compressed_path if compressed_path else file_path
                                 
                                 # Если это последняя часть и есть клавиатура, добавляем её к видео
-                                is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip())
+                                is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip() if i + 1 < len(parts) else True)
                                 video_file = FSInputFile(video_path_to_use)
                                 sent_message = await self.bot.send_video(
                                     user_id, 
                                     video_file,
-                                    reply_markup=keyboard if (is_last and keyboard) else None
+                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
                                 )
+                                if is_last and keyboard and not keyboard_attached:
+                                    keyboard_attached = True
                                 last_sent_message_id = sent_message.message_id
                                 # Сохраняем file_id для видео
                                 if sent_message.video:
                                     file_id = sent_message.video.file_id
                                     await self.db.save_media_file_id(part, day, media_type, file_id)
+                                    # Отслеживаем отправленное медиа
+                                    normalized_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                                    filename = Path(media_path).name if media_path else ""
+                                    sent_media_keys.add((str(file_id), normalized_path, filename))
                                     logger.info(f"   ✅ Sent inline video and cached file_id for marker {part}, lesson {day}")
                         except Exception as send_error:
                             error_msg = str(send_error).lower()
@@ -2579,7 +2620,7 @@ class CourseBot:
                 if part.strip():
                     # Если это последняя часть и есть клавиатура, добавляем её к тексту
                     is_last = i == len(parts) - 1
-                    if is_last and keyboard:
+                    if is_last and keyboard and not keyboard_attached:
                         sent_message = await self.bot.send_message(
                             user_id, 
                             part.strip(), 
@@ -2587,39 +2628,46 @@ class CourseBot:
                             disable_web_page_preview=True
                         )
                         last_sent_message_id = sent_message.message_id
+                        keyboard_attached = True
                     else:
                         await self._safe_send_message(user_id, part.strip())
                     await asyncio.sleep(0.2)
         
-        # Если клавиатура не была добавлена к последнему сообщению (например, если последнее было медиа без caption),
-        # добавляем её отдельным сообщением
-        if keyboard and last_sent_message_id:
-            try:
-                # Пытаемся отредактировать последнее сообщение, чтобы добавить клавиатуру
-                await self.bot.edit_message_reply_markup(
-                    chat_id=user_id,
-                    message_id=last_sent_message_id,
-                    reply_markup=keyboard
-                )
-                logger.info(f"   ✅ Added keyboard to last message (message_id: {last_sent_message_id})")
-            except Exception as e:
-                # Если не удалось отредактировать (например, это медиа без caption), отправляем клавиатуру отдельно
-                logger.warning(f"   ⚠️ Could not edit last message to add keyboard: {e}, sending separately")
+        # Если клавиатура не была добавлена к последнему сообщению, добавляем её отдельным сообщением
+        # ТОЛЬКО если она не была уже прикреплена
+        if keyboard and not keyboard_attached:
+            if last_sent_message_id:
+                try:
+                    # Пытаемся отредактировать последнее сообщение, чтобы добавить клавиатуру
+                    await self.bot.edit_message_reply_markup(
+                        chat_id=user_id,
+                        message_id=last_sent_message_id,
+                        reply_markup=keyboard
+                    )
+                    logger.info(f"   ✅ Added keyboard to last message (message_id: {last_sent_message_id})")
+                    keyboard_attached = True
+                except Exception as e:
+                    # Если не удалось отредактировать (например, это медиа без caption), отправляем клавиатуру отдельно
+                    logger.warning(f"   ⚠️ Could not edit last message to add keyboard: {e}, sending separately")
+                    await self.bot.send_message(
+                        user_id,
+                        "📝 <b>Задание</b>",
+                        reply_markup=keyboard,
+                        disable_web_page_preview=True
+                    )
+                    keyboard_attached = True
+            else:
+                # Если не было отправлено ни одного сообщения, отправляем клавиатуру отдельно
+                logger.warning(f"   ⚠️ No messages sent, sending keyboard separately")
                 await self.bot.send_message(
                     user_id,
                     "📝 <b>Задание</b>",
                     reply_markup=keyboard,
                     disable_web_page_preview=True
                 )
-        elif keyboard:
-            # Если не было отправлено ни одного сообщения, отправляем клавиатуру отдельно
-            logger.warning(f"   ⚠️ No messages sent, sending keyboard separately")
-            await self.bot.send_message(
-                user_id,
-                "📝 <b>Задание</b>",
-                reply_markup=keyboard,
-                disable_web_page_preview=True
-            )
+                keyboard_attached = True
+        
+        return sent_media_keys
     
     def _split_assignment_from_text(self, text: str) -> tuple[str, str]:
         """
@@ -2954,6 +3002,7 @@ class CourseBot:
             # from the generic media_list flow (prevents duplicate photos/videos).
             try:
                 inline_marker_file_ids: set[str] = set()
+                inline_marker_paths: set[str] = set()
                 if media_markers:
                     haystacks = []
                     if intro_text:
@@ -2967,16 +3016,48 @@ class CourseBot:
                     for marker_id, marker_info in media_markers.items():
                         token = f"[{marker_id}]"
                         if any(token in h for h in haystacks):
+                            # Отслеживаем как по file_id, так и по path для надежности
                             fid = marker_info.get("file_id")
                             if fid:
                                 inline_marker_file_ids.add(str(fid))
+                            path = marker_info.get("path")
+                            if path:
+                                # Нормализуем путь для сравнения
+                                normalized_path = str(Path(path)).replace('\\', '/')
+                                inline_marker_paths.add(normalized_path)
+                                # Также добавляем имя файла для дополнительной проверки
+                                file_name = Path(path).name
+                                if file_name:
+                                    inline_marker_paths.add(file_name)
 
-                if inline_marker_file_ids and media_list:
+                if (inline_marker_file_ids or inline_marker_paths) and media_list:
                     before = len(media_list)
-                    media_list = [
-                        m for m in media_list
-                        if str(m.get("file_id") or "") not in inline_marker_file_ids
-                    ]
+                    filtered_media = []
+                    for m in media_list:
+                        m_fid = str(m.get("file_id") or "")
+                        m_path = str(m.get("path") or "")
+                        m_name = Path(m_path).name if m_path else ""
+                        
+                        # Проверяем по file_id
+                        if m_fid and m_fid in inline_marker_file_ids:
+                            logger.debug(f"   🧹 Skipping media (file_id match): {m_path or m_name}")
+                            continue
+                        
+                        # Проверяем по path
+                        if m_path:
+                            normalized_m_path = str(Path(m_path)).replace('\\', '/')
+                            if normalized_m_path in inline_marker_paths:
+                                logger.debug(f"   🧹 Skipping media (path match): {m_path}")
+                                continue
+                        
+                        # Проверяем по имени файла
+                        if m_name and m_name in inline_marker_paths:
+                            logger.debug(f"   🧹 Skipping media (filename match): {m_name}")
+                            continue
+                        
+                        filtered_media.append(m)
+                    
+                    media_list = filtered_media
                     removed = before - len(media_list)
                     if removed:
                         logger.info(f"   🧹 Removed {removed} media items already referenced via inline markers for day {day}")
@@ -3416,9 +3497,10 @@ class CourseBot:
                         # Если после удаления маркеров текст не пустой, отправляем его
                         if text_for_check.strip():
                             # Проверяем, есть ли маркеры медиа в тексте для встроенной вставки
+                            sent_media_from_markers = set()
                             if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
                                 # Используем встроенную вставку медиа по маркерам
-                                await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                                sent_media_from_markers = await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
                                 logger.info(f"   ✅ Sent lesson text with inline media markers for day {day} (after video/photo placement)")
                             else:
                                 # Отправляем текст без медиа-маркеров
@@ -3430,17 +3512,46 @@ class CourseBot:
                         logger.info(f"   ⏭️ Skipped sending text for day {day} (text is empty)")
                     
                     # Отправляем оставшиеся медиа из списка, которые не были отправлены через маркеры
+                    # Используем данные из _send_text_with_inline_media для точной фильтрации
                     sent_media_file_ids = set()
+                    sent_media_paths = set()
+                    sent_media_filenames = set()
+                    for (fid, path, filename) in sent_media_from_markers:
+                        if fid:
+                            sent_media_file_ids.add(fid)
+                        if path:
+                            sent_media_paths.add(path)
+                        if filename:
+                            sent_media_filenames.add(filename)
+                    
+                    # Также добавляем медиа из media_markers для обратной совместимости
                     if media_markers:
                         for marker_id, marker_info in media_markers.items():
                             if f"[{marker_id}]" in text:
-                                sent_media_file_ids.add(marker_info.get("file_id"))
+                                fid = marker_info.get("file_id")
+                                if fid:
+                                    sent_media_file_ids.add(str(fid))
+                                path = marker_info.get("path")
+                                if path:
+                                    normalized_path = str(Path(path)).replace('\\', '/')
+                                    sent_media_paths.add(normalized_path)
+                                    sent_media_filenames.add(Path(path).name)
                     
                     while media_index < media_count:
                         media_item = media_list[media_index]
-                        media_file_id = media_item.get("file_id")
-                        # Проверяем, не было ли это медиа уже отправлено через маркер
-                        if media_file_id not in sent_media_file_ids:
+                        media_file_id = str(media_item.get("file_id") or "")
+                        media_path = str(media_item.get("path") or "")
+                        media_name = Path(media_path).name if media_path else ""
+                        normalized_media_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                        
+                        # Проверяем, не было ли это медиа уже отправлено через маркер (по file_id, path или имени)
+                        already_sent = (
+                            (media_file_id and media_file_id in sent_media_file_ids) or
+                            (normalized_media_path and normalized_media_path in sent_media_paths) or
+                            (media_name and media_name in sent_media_filenames)
+                        )
+                        
+                        if not already_sent:
                             await self._send_media_item(user.user_id, media_item, day)
                             logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
                         else:
@@ -3452,12 +3563,11 @@ class CourseBot:
                     # каждый пост после [POST] отправляется как отдельный блок
                     # Медиа-маркеры вставляются в тот блок (пост), где они находятся в тексте
                     if len(lesson_posts) > 1:
-                        # Собираем file_id медиа, которые будут отправлены через маркеры в постах
+                        # Собираем file_id и пути медиа, которые будут отправлены через маркеры в постах
                         sent_media_file_ids = set()
-                        if media_markers:
-                            for marker_id, marker_info in media_markers.items():
-                                if any(f"[{marker_id}]" in post for post in lesson_posts):
-                                    sent_media_file_ids.add(marker_info.get("file_id"))
+                        sent_media_paths = set()
+                        sent_media_filenames = set()
+                        all_sent_media_from_posts = set()
                         
                         # Обрабатываем все посты в цикле, включая первый
                         # Каждый пост отправляется как отдельный блок (после [POST])
@@ -3468,7 +3578,8 @@ class CourseBot:
                                 if media_markers and any(f"[{marker}]" in post_text for marker in media_markers.keys()):
                                     # Используем встроенную вставку медиа по маркерам
                                     # Медиа вставляется в этот блок (пост) в местах, где находятся маркеры
-                                    await self._send_text_with_inline_media(user.user_id, post_text.strip(), media_markers, day)
+                                    sent_media_from_post = await self._send_text_with_inline_media(user.user_id, post_text.strip(), media_markers, day)
+                                    all_sent_media_from_posts.update(sent_media_from_post)
                                     logger.info(f"   ✅ Sent lesson post {i + 1}/{len(lesson_posts)} with inline media markers for day {day} (separate block after [POST])")
                                 else:
                                     # Отправляем пост без медиа-маркеров как отдельный блок
@@ -3481,11 +3592,44 @@ class CourseBot:
                         
                         logger.info(f"   ✅ Sent {len(lesson_posts)} lesson posts as separate blocks (with [POST] markers) for day {day}")
                         
+                        # Обновляем наборы отправленных медиа из данных _send_text_with_inline_media
+                        for (fid, path, filename) in all_sent_media_from_posts:
+                            if fid:
+                                sent_media_file_ids.add(fid)
+                            if path:
+                                sent_media_paths.add(path)
+                            if filename:
+                                sent_media_filenames.add(filename)
+                        
+                        # Также добавляем медиа из media_markers для обратной совместимости
+                        if media_markers:
+                            for marker_id, marker_info in media_markers.items():
+                                if any(f"[{marker_id}]" in post for post in lesson_posts):
+                                    fid = marker_info.get("file_id")
+                                    if fid:
+                                        sent_media_file_ids.add(str(fid))
+                                    path = marker_info.get("path")
+                                    if path:
+                                        normalized_path = str(Path(path)).replace('\\', '/')
+                                        sent_media_paths.add(normalized_path)
+                                        sent_media_filenames.add(Path(path).name)
+                        
                         # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры в постах
                         while media_index < media_count:
                             media_item = media_list[media_index]
-                            media_file_id = media_item.get("file_id")
-                            if media_file_id not in sent_media_file_ids:
+                            media_file_id = str(media_item.get("file_id") or "")
+                            media_path = str(media_item.get("path") or "")
+                            media_name = Path(media_path).name if media_path else ""
+                            normalized_media_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                            
+                            # Проверяем, не было ли это медиа уже отправлено через маркер (по file_id, path или имени)
+                            already_sent = (
+                                (media_file_id and media_file_id in sent_media_file_ids) or
+                                (normalized_media_path and normalized_media_path in sent_media_paths) or
+                                (media_name and media_name in sent_media_filenames)
+                            )
+                            
+                            if not already_sent:
                                 await self._send_media_item(user.user_id, media_item, day)
                                 logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after posts for lesson {day}")
                             else:
@@ -3495,24 +3639,53 @@ class CourseBot:
                     else:
                         # Если только один пост, обрабатываем его как обычно
                         # Проверяем, есть ли маркеры медиа в тексте для встроенной вставки
+                        sent_media_from_text = set()
                         if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
                             # Используем встроенную вставку медиа по маркерам
-                            await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
+                            sent_media_from_text = await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
                             logger.info(f"   ✅ Sent lesson text with inline media markers for day {day}")
                             
                             # НЕ отправляем медиа из списка, если они уже отправлены через маркеры
-                            # Собираем file_id медиа, которые были отправлены через маркеры
+                            # Используем данные из _send_text_with_inline_media для точной фильтрации
                             sent_media_file_ids = set()
+                            sent_media_paths = set()
+                            sent_media_filenames = set()
+                            for (fid, path, filename) in sent_media_from_text:
+                                if fid:
+                                    sent_media_file_ids.add(fid)
+                                if path:
+                                    sent_media_paths.add(path)
+                                if filename:
+                                    sent_media_filenames.add(filename)
+                            
+                            # Также добавляем медиа из media_markers для обратной совместимости
                             for marker_id, marker_info in media_markers.items():
                                 if f"[{marker_id}]" in text:
-                                    sent_media_file_ids.add(marker_info.get("file_id"))
+                                    fid = marker_info.get("file_id")
+                                    if fid:
+                                        sent_media_file_ids.add(str(fid))
+                                    path = marker_info.get("path")
+                                    if path:
+                                        normalized_path = str(Path(path)).replace('\\', '/')
+                                        sent_media_paths.add(normalized_path)
+                                        sent_media_filenames.add(Path(path).name)
                             
                             # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
                             while media_index < media_count:
                                 media_item = media_list[media_index]
-                                media_file_id = media_item.get("file_id")
-                                # Проверяем, не было ли это медиа уже отправлено через маркер
-                                if media_file_id not in sent_media_file_ids:
+                                media_file_id = str(media_item.get("file_id") or "")
+                                media_path = str(media_item.get("path") or "")
+                                media_name = Path(media_path).name if media_path else ""
+                                normalized_media_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                                
+                                # Проверяем, не было ли это медиа уже отправлено через маркер (по file_id, path или имени)
+                                already_sent = (
+                                    (media_file_id and media_file_id in sent_media_file_ids) or
+                                    (normalized_media_path and normalized_media_path in sent_media_paths) or
+                                    (media_name and media_name in sent_media_filenames)
+                                )
+                                
+                                if not already_sent:
                                     await self._send_media_item(user.user_id, media_item, day)
                                     logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after inline media for lesson {day}")
                                 else:
@@ -3551,32 +3724,60 @@ class CourseBot:
                                 # Отправляем оставшиеся медиа после последнего абзаца (если есть)
                                 # ВАЖНО: Проверяем, не были ли медиа уже отправлены через маркеры
                                 sent_media_file_ids = set()
+                                sent_media_paths = set()
+                                sent_media_filenames = set()
                                 if media_markers:
                                     for marker_id, marker_info in media_markers.items():
                                         if f"[{marker_id}]" in text:
-                                            sent_media_file_ids.add(marker_info.get("file_id"))
-                                
-                                while media_index < media_count:
-                                    media_item = media_list[media_index]
-                                    media_file_id = media_item.get("file_id")
-                                    if media_file_id not in sent_media_file_ids:
-                                        await self._send_media_item(user.user_id, media_item, day)
-                                        logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
-                                    else:
-                                        logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
-                                    media_index += 1
-                                    await asyncio.sleep(0.3)
-                            else:
-                                # Если нет абзацев (текст пустой или не разбивается на абзацы)
+                                            fid = marker_info.get("file_id")
+                                            if fid:
+                                                sent_media_file_ids.add(str(fid))
+                                            path = marker_info.get("path")
+                                            if path:
+                                                normalized_path = str(Path(path)).replace('\\', '/')
+                                                sent_media_paths.add(normalized_path)
+                                                sent_media_filenames.add(Path(path).name)
+                    
+                    while media_index < media_count:
+                        media_item = media_list[media_index]
+                        media_file_id = str(media_item.get("file_id") or "")
+                        media_path = str(media_item.get("path") or "")
+                        media_name = Path(media_path).name if media_path else ""
+                        normalized_media_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                        
+                        # Проверяем, не было ли это медиа уже отправлено через маркер (по file_id, path или имени)
+                        already_sent = (
+                            (media_file_id and media_file_id in sent_media_file_ids) or
+                            (normalized_media_path and normalized_media_path in sent_media_paths) or
+                            (media_name and media_name in sent_media_filenames)
+                        )
+                        
+                        if not already_sent:
+                            await self._send_media_item(user.user_id, media_item, day)
+                            logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
+                        else:
+                            logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
+                        media_index += 1
+                        await asyncio.sleep(0.3)
+                    else:
+                        # Если нет абзацев (текст пустой или не разбивается на абзацы)
                                 # ВАЖНО: Если урок разбит на несколько постов (через [POST]), 
                                 # каждый пост отправляется как отдельный блок, медиа вставляется в соответствующий блок
                                 if len(lesson_posts) > 1:
-                                    # Собираем file_id медиа, которые будут отправлены через маркеры в постах
+                                    # Собираем file_id и пути медиа, которые будут отправлены через маркеры в постах
                                     sent_media_file_ids = set()
+                                    sent_media_paths = set()
                                     if media_markers:
                                         for marker_id, marker_info in media_markers.items():
                                             if any(f"[{marker_id}]" in post for post in lesson_posts):
-                                                sent_media_file_ids.add(marker_info.get("file_id"))
+                                                fid = marker_info.get("file_id")
+                                                if fid:
+                                                    sent_media_file_ids.add(str(fid))
+                                                path = marker_info.get("path")
+                                                if path:
+                                                    normalized_path = str(Path(path)).replace('\\', '/')
+                                                    sent_media_paths.add(normalized_path)
+                                                    sent_media_filenames.add(Path(path).name)
                                     
                                     # Обрабатываем все посты в цикле, включая первый
                                     # Каждый пост отправляется как отдельный блок (после [POST])
@@ -3600,8 +3801,19 @@ class CourseBot:
                                     # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры в постах
                                     while media_index < media_count:
                                         media_item = media_list[media_index]
-                                        media_file_id = media_item.get("file_id")
-                                        if media_file_id not in sent_media_file_ids:
+                                        media_file_id = str(media_item.get("file_id") or "")
+                                        media_path = str(media_item.get("path") or "")
+                                        media_name = Path(media_path).name if media_path else ""
+                                        normalized_media_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                                        
+                                        # Проверяем, не было ли это медиа уже отправлено через маркер (по file_id, path или имени)
+                                        already_sent = (
+                                            (media_file_id and media_file_id in sent_media_file_ids) or
+                                            (normalized_media_path and normalized_media_path in sent_media_paths) or
+                                            (media_name and media_name in sent_media_filenames)
+                                        )
+                                        
+                                        if not already_sent:
                                             await self._send_media_item(user.user_id, media_item, day)
                                             logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after posts for lesson {day}")
                                         else:
@@ -3645,12 +3857,20 @@ class CourseBot:
                 # каждый пост после [POST] отправляется как отдельный блок
                 # Медиа-маркеры вставляются в тот блок (пост), где они находятся в тексте
                 if len(lesson_posts) > 1:
-                    # Собираем file_id медиа, которые будут отправлены через маркеры в постах
+                    # Собираем file_id и пути медиа, которые будут отправлены через маркеры в постах
                     sent_media_file_ids = set()
+                    sent_media_paths = set()
                     if media_markers:
                         for marker_id, marker_info in media_markers.items():
                             if any(f"[{marker_id}]" in post for post in lesson_posts):
-                                sent_media_file_ids.add(marker_info.get("file_id"))
+                                fid = marker_info.get("file_id")
+                                if fid:
+                                    sent_media_file_ids.add(str(fid))
+                                path = marker_info.get("path")
+                                if path:
+                                    normalized_path = str(Path(path)).replace('\\', '/')
+                                    sent_media_paths.add(normalized_path)
+                                    sent_media_filenames.add(Path(path).name)
                     
                     # Обрабатываем все посты в цикле
                     # Каждый пост отправляется как отдельный блок (после [POST])
@@ -3686,8 +3906,19 @@ class CourseBot:
                     # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
                     while media_index < media_count:
                         media_item = media_list[media_index]
-                        media_file_id = media_item.get("file_id")
-                        if media_file_id not in sent_media_file_ids:
+                        media_file_id = str(media_item.get("file_id") or "")
+                        media_path = str(media_item.get("path") or "")
+                        media_name = Path(media_path).name if media_path else ""
+                        normalized_media_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                        
+                        # Проверяем, не было ли это медиа уже отправлено через маркер (по file_id, path или имени)
+                        already_sent = (
+                            (media_file_id and media_file_id in sent_media_file_ids) or
+                            (normalized_media_path and normalized_media_path in sent_media_paths) or
+                            (media_name and media_name in sent_media_filenames)
+                        )
+                        
+                        if not already_sent:
                             await self._send_media_item(user.user_id, media_item, day)
                             logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after posts for lesson {day}")
                         else:
@@ -3700,12 +3931,20 @@ class CourseBot:
                     await send_typing_action(self.bot, user.user_id, 0.5)
                     # Проверяем маркеры в тексте
                     sent_media_file_ids = set()
+                    sent_media_paths = set()
                     if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
                         await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
-                        # Собираем file_id медиа, которые были отправлены через маркеры
+                        # Собираем file_id и пути медиа, которые были отправлены через маркеры
                         for marker_id, marker_info in media_markers.items():
                             if f"[{marker_id}]" in text:
-                                sent_media_file_ids.add(marker_info.get("file_id"))
+                                fid = marker_info.get("file_id")
+                                if fid:
+                                    sent_media_file_ids.add(str(fid))
+                                path = marker_info.get("path")
+                                if path:
+                                    normalized_path = str(Path(path)).replace('\\', '/')
+                                    sent_media_paths.add(normalized_path)
+                                    sent_media_filenames.add(Path(path).name)
                     else:
                         await self._safe_send_message(user.user_id, text)
                     await asyncio.sleep(0.5)  # Пауза для плавности
@@ -3713,8 +3952,19 @@ class CourseBot:
                     # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
                     while media_index < media_count:
                         media_item = media_list[media_index]
-                        media_file_id = media_item.get("file_id")
-                        if media_file_id not in sent_media_file_ids:
+                        media_file_id = str(media_item.get("file_id") or "")
+                        media_path = str(media_item.get("path") or "")
+                        media_name = Path(media_path).name if media_path else ""
+                        normalized_media_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
+                        
+                        # Проверяем, не было ли это медиа уже отправлено через маркер (по file_id, path или имени)
+                        already_sent = (
+                            (media_file_id and media_file_id in sent_media_file_ids) or
+                            (normalized_media_path and normalized_media_path in sent_media_paths) or
+                            (media_name and media_name in sent_media_filenames)
+                        )
+                        
+                        if not already_sent:
                             await self._send_media_item(user.user_id, media_item, day)
                             logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
                         else:

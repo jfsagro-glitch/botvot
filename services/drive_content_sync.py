@@ -575,17 +575,28 @@ class DriveContentSync:
                             processed_links += 1
                             rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
                             
-                            # Создаем маркер для этого файла
-                            marker_id = f"MEDIA_{file_id}_{len(media_markers)}"
-                            media_markers[marker_id] = {
-                                "type": media_type,
-                                "path": rel_path,
-                                "file_id": file_id,
-                                "name": file_name
-                            }
+                            # КРИТИЧЕСКИ ВАЖНО: Проверяем, не был ли уже создан маркер для этого file_id
+                            # Если один и тот же файл встречается в папке несколько раз, используем один маркер
+                            marker_id = None
+                            for existing_marker_id, existing_info in media_markers.items():
+                                if existing_info.get("file_id") == file_id and existing_info.get("path") == rel_path:
+                                    marker_id = existing_marker_id
+                                    logger.info(f"   ♻️ Reusing existing marker: [{marker_id}] for file {file_name} (file_id: {file_id})")
+                                    break
+                            
+                            # Если маркер не найден, создаем новый
+                            if not marker_id:
+                                marker_id = f"MEDIA_{file_id}_{len(media_markers)}"
+                                media_markers[marker_id] = {
+                                    "type": media_type,
+                                    "path": rel_path,
+                                    "file_id": file_id,
+                                    "name": file_name
+                                }
+                                logger.info(f"   ✅ Created new media marker: [{marker_id}] for file {file_name} (path: {rel_path})")
+                            
                             folder_markers.append(marker_id)
                             folder_media_count += 1
-                            logger.info(f"   ✅ Created media marker: [{marker_id}] for file {file_name} (path: {rel_path})")
                             
                             media_items.append({"type": media_type, "path": rel_path, "marker_id": marker_id})
                         
@@ -668,16 +679,25 @@ class DriveContentSync:
                         processed_links += 1
                         rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
                         
-                        # КРИТИЧЕСКИ ВАЖНО: Создаем маркер ВСЕГДА, даже если файл был пропущен
-                        # Маркер нужен для встроенной вставки независимо от статуса скачивания
-                        marker_id = f"MEDIA_{fid}_{len(media_markers)}"
-                        media_markers[marker_id] = {
-                            "type": media_type,
-                            "path": rel_path,
-                            "file_id": fid,
-                            "name": name
-                        }
-                        logger.info(f"   ✅ Created media marker: [{marker_id}] for file {name} (path: {rel_path})")
+                        # КРИТИЧЕСКИ ВАЖНО: Проверяем, не был ли уже создан маркер для этого file_id
+                        # Если один и тот же файл встречается в тексте несколько раз, используем один маркер
+                        marker_id = None
+                        for existing_marker_id, existing_info in media_markers.items():
+                            if existing_info.get("file_id") == fid and existing_info.get("path") == rel_path:
+                                marker_id = existing_marker_id
+                                logger.info(f"   ♻️ Reusing existing marker: [{marker_id}] for file {name} (file_id: {fid})")
+                                break
+                        
+                        # Если маркер не найден, создаем новый
+                        if not marker_id:
+                            marker_id = f"MEDIA_{fid}_{len(media_markers)}"
+                            media_markers[marker_id] = {
+                                "type": media_type,
+                                "path": rel_path,
+                                "file_id": fid,
+                                "name": name
+                            }
+                            logger.info(f"   ✅ Created new media marker: [{marker_id}] for file {name} (path: {rel_path})")
                         
                         # Заменяем ссылку в тексте на маркер
                         # Используем оригинальный URL из текста (link_url) для точной замены
@@ -1242,9 +1262,19 @@ class DriveContentSync:
                                 self._download_binary_file(drive, file_id, dest)
                                 media_downloaded += 1
                             
-                            processed_links += 1
-                            rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
-                            
+                        processed_links += 1
+                        rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
+                        
+                        # КРИТИЧЕСКИ ВАЖНО: Проверяем, не был ли уже создан маркер для этого file_id
+                        marker_id = None
+                        for existing_marker_id, existing_info in media_markers.items():
+                            if existing_info.get("file_id") == file_id and existing_info.get("path") == rel_path:
+                                marker_id = existing_marker_id
+                                logger.info(f"   ♻️ Reusing existing marker: [{marker_id}] for file {file_name} (file_id: {file_id})")
+                                break
+                        
+                        # Если маркер не найден, создаем новый
+                        if not marker_id:
                             marker_id = f"MEDIA_{file_id}_{len(media_markers)}"
                             media_markers[marker_id] = {
                                 "type": media_type,
@@ -1252,7 +1282,9 @@ class DriveContentSync:
                                 "file_id": file_id,
                                 "name": file_name
                             }
-                            folder_markers.append(marker_id)
+                            logger.info(f"   ✅ Created new media marker: [{marker_id}] for file {file_name} (path: {rel_path})")
+                        
+                        folder_markers.append(marker_id)
                         
                         if folder_markers:
                             markers_text = "\n".join([f"[{m}]" for m in folder_markers])
@@ -1287,13 +1319,24 @@ class DriveContentSync:
                         processed_links += 1
                         rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
                         
-                        marker_id = f"MEDIA_{fid}_{len(media_markers)}"
-                        media_markers[marker_id] = {
-                            "type": media_type,
-                            "path": rel_path,
-                            "file_id": fid,
-                            "name": name
-                        }
+                        # КРИТИЧЕСКИ ВАЖНО: Проверяем, не был ли уже создан маркер для этого file_id
+                        marker_id = None
+                        for existing_marker_id, existing_info in media_markers.items():
+                            if existing_info.get("file_id") == fid and existing_info.get("path") == rel_path:
+                                marker_id = existing_marker_id
+                                logger.info(f"   ♻️ Reusing existing marker: [{marker_id}] for file {name} (file_id: {fid})")
+                                break
+                        
+                        # Если маркер не найден, создаем новый
+                        if not marker_id:
+                            marker_id = f"MEDIA_{fid}_{len(media_markers)}"
+                            media_markers[marker_id] = {
+                                "type": media_type,
+                                "path": rel_path,
+                                "file_id": fid,
+                                "name": name
+                            }
+                            logger.info(f"   ✅ Created new media marker: [{marker_id}] for file {name} (path: {rel_path})")
                         
                         marker_placeholder = f"[{marker_id}]"
                         if link_url in lesson_text:
