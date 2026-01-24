@@ -2777,9 +2777,9 @@ class CourseBot:
                 for post in lesson_posts:
                     if not isinstance(post, str) or not post.strip():
                         continue
-                    # Remove square bracket markers (block separators) from text
-                    # These markers should not be visible to users
-                    cleaned_post = re.sub(r'^\s*\[.*?\]\s*$', '', post, flags=re.MULTILINE)
+                    # Remove block-separator markers, but keep media markers for inline insertion.
+                    block_marker_re = r'^\s*\[(?:POST\d*|POST|ДОПОЛНЕНИЕ|BLOCK|БЛОК)\]\s*$'
+                    cleaned_post = re.sub(block_marker_re, '', post, flags=re.MULTILINE | re.IGNORECASE)
                     cleaned_post = re.sub(r'^\s*(?:---POST---|---)\s*$', '', cleaned_post, flags=re.MULTILINE | re.IGNORECASE)
                     # Remove empty lines that might remain after marker removal
                     cleaned_post = '\n'.join([line for line in cleaned_post.split('\n') if line.strip() or cleaned_post.count('\n') == 0])
