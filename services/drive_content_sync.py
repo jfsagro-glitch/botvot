@@ -48,6 +48,8 @@ class SyncResult:
     days_synced: int
     lessons_path: str
     media_files_downloaded: int
+    total_blocks: int  # Общее количество блоков (posts) во всех уроках
+    total_media_files: int  # Общее количество медиафайлов (обработанных, не только загруженных)
     warnings: List[str]
 
 
@@ -445,7 +447,7 @@ class DriveContentSync:
 
         return out
     
-    def _sync_from_master_doc(self, drive, warnings: List[str]) -> Tuple[Dict[str, Any], int]:
+    def _sync_from_master_doc(self, drive, warnings: List[str]) -> Tuple[Dict[str, Any], int, int, int]:
         master_id = (Config.DRIVE_MASTER_DOC_ID or "").strip()
         if not master_id:
             raise RuntimeError("DRIVE_MASTER_DOC_ID is empty")
@@ -465,6 +467,8 @@ class DriveContentSync:
         media_downloaded = 0
 
         compiled: Dict[str, Any] = {}
+        total_blocks = 0
+        total_media_files = 0
         for day, data in sorted(day_map.items(), key=lambda x: x[0]):
             title = (data.get("title") or "").strip() or f"День {day}"
             lesson_raw = data.get("lesson") or ""
@@ -780,8 +784,12 @@ class DriveContentSync:
             else:
                 logger.warning(f"   ⚠️ No media_markers for day {day} (drive_links found: {len(drive_links)})")
             compiled[str(day)] = entry
+            
+            # Собираем статистику
+            total_blocks += len(lesson_posts)
+            total_media_files += len(media_markers)
 
-        return compiled, media_downloaded
+        return compiled, media_downloaded, total_blocks, total_media_files
 
     def _build_drive_client(self):
         # Lazy import to avoid hard dependency if feature disabled
@@ -1204,7 +1212,7 @@ class DriveContentSync:
 
         # Single-doc mode
         if (Config.DRIVE_MASTER_DOC_ID or "").strip():
-            compiled, media_downloaded = self._sync_from_master_doc(drive, warnings)
+            compiled, media_downloaded, total_blocks, total_media_files = self._sync_from_master_doc(drive, warnings)
             target = self._target_lessons_path()
             target.parent.mkdir(parents=True, exist_ok=True)
             self._backup_file_if_exists(target)
@@ -1217,6 +1225,8 @@ class DriveContentSync:
                 days_synced=len(compiled),
                 lessons_path=str(target),
                 media_files_downloaded=media_downloaded,
+                total_blocks=total_blocks,
+                total_media_files=total_media_files,
                 warnings=warnings,
             )
 
@@ -1239,6 +1249,8 @@ class DriveContentSync:
 
         compiled: Dict[str, Any] = {}
         media_downloaded = 0
+        total_blocks = 0
+        total_media_files = 0
 
         for day, folder in day_folders:
             folder_id = folder["id"]
@@ -1481,6 +1493,10 @@ class DriveContentSync:
                 entry["silent"] = bool(meta.get("silent"))
 
             compiled[str(day)] = entry
+            
+            # Собираем статистику
+            total_blocks += len(lesson_posts)
+            total_media_files += len(media_markers)
 
         if not compiled:
             raise RuntimeError("No lessons compiled (check Drive folder contents)")
@@ -1503,5 +1519,7 @@ class DriveContentSync:
             days_synced=len(compiled),
             lessons_path=str(target),
             media_files_downloaded=media_downloaded,
+            total_blocks=total_blocks,
+            total_media_files=total_media_files,
             warnings=warnings,
         )
