@@ -2781,8 +2781,7 @@ class CourseBot:
                     block_marker_re = r'^\s*\[(?:POST\d*|POST|ДОПОЛНЕНИЕ|BLOCK|БЛОК)\]\s*$'
                     cleaned_post = re.sub(block_marker_re, '', post, flags=re.MULTILINE | re.IGNORECASE)
                     cleaned_post = re.sub(r'^\s*(?:---POST---|---)\s*$', '', cleaned_post, flags=re.MULTILINE | re.IGNORECASE)
-                    # Remove empty lines that might remain after marker removal
-                    cleaned_post = '\n'.join([line for line in cleaned_post.split('\n') if line.strip() or cleaned_post.count('\n') == 0])
+                    # Keep original spacing between paragraphs; don't collapse empty lines.
                     if not cleaned_post.strip():
                         continue
                     if not extracted_task_from_posts:
@@ -2811,6 +2810,20 @@ class CourseBot:
             intro_text_raw = intro_text
             about_me_text_raw = about_me_text
             lesson_posts_raw = list(lesson_posts)
+
+            # If extra blocks are already present inside the main lesson text, don't send them separately.
+            # This avoids "double text" when content sources accidentally duplicate intro/about sections.
+            lesson_full_text = "\n\n".join([p for p in lesson_posts_raw if isinstance(p, str) and p.strip()])
+            if about_me_text and about_me_text.strip():
+                about_me_stripped = about_me_text.strip()
+                if about_me_stripped in lesson_full_text:
+                    logger.info(f"   ⏭️ Skipping about_me_text for day {day}: already present in main text")
+                    about_me_text = ""
+            if intro_text and intro_text.strip():
+                intro_stripped = intro_text.strip()
+                if intro_stripped in lesson_full_text:
+                    logger.info(f"   ⏭️ Skipping intro_text for day {day}: already present in main text")
+                    intro_text = ""
 
             # Collect preview URLs once and strip URL-only lines to avoid duplicates
             combined_text_raw = "\n\n".join(
@@ -2853,6 +2866,39 @@ class CourseBot:
             
             # Получаем список медиа для урока
             media_list = lesson_data.get("media", [])
+
+            # If a media file is referenced via an inline marker in any text block, do not send it again
+            # from the generic media_list flow (prevents duplicate photos/videos).
+            try:
+                inline_marker_file_ids: set[str] = set()
+                if media_markers:
+                    haystacks = []
+                    if intro_text:
+                        haystacks.append(intro_text)
+                    if about_me_text:
+                        haystacks.append(about_me_text)
+                    if task:
+                        haystacks.append(task)
+                    haystacks.extend([p for p in lesson_posts if isinstance(p, str) and p])
+
+                    for marker_id, marker_info in media_markers.items():
+                        token = f"[{marker_id}]"
+                        if any(token in h for h in haystacks):
+                            fid = marker_info.get("file_id")
+                            if fid:
+                                inline_marker_file_ids.add(str(fid))
+
+                if inline_marker_file_ids and media_list:
+                    before = len(media_list)
+                    media_list = [
+                        m for m in media_list
+                        if str(m.get("file_id") or "") not in inline_marker_file_ids
+                    ]
+                    removed = before - len(media_list)
+                    if removed:
+                        logger.info(f"   🧹 Removed {removed} media items already referenced via inline markers for day {day}")
+            except Exception as e:
+                logger.debug(f"Could not filter media_list by inline markers for day {day}: {e}")
             
             # Для урока 0: извлекаем видео, чтобы отправить его с intro_text в caption
             lesson0_video_with_intro = None
@@ -3080,6 +3126,14 @@ class CourseBot:
             # ВАЖНО: Если картинка "ОБО МНЕ" встроена через media_markers в текст, не отправляем её отдельно
             about_me_photo_file_id = lesson_data.get("about_me_photo_file_id", "")
             about_me_photo_path = lesson_data.get("about_me_photo_path", "")
+
+            # Avoid sending the same "about me" photo twice (once as generic media, once with the about_me block).
+            if about_me_photo_file_id and media_list:
+                before = len(media_list)
+                media_list = [m for m in media_list if str(m.get("file_id") or "") != str(about_me_photo_file_id)]
+                removed = before - len(media_list)
+                if removed:
+                    logger.info(f"   🧹 Removed {removed} media items matching about_me_photo_file_id for day {day}")
             
             # Проверяем, есть ли маркер для картинки "ОБО МНЕ" в тексте
             about_me_photo_in_text = False
