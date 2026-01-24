@@ -208,6 +208,7 @@ class SalesBot:
         self.dp.callback_query.register(self.handle_talk_to_human, F.data == "sales:talk_to_human")
         self.dp.callback_query.register(self.handle_talk_to_human_stop, F.data == "sales:talk_to_human:stop")
         self.dp.callback_query.register(self.handle_show_tariffs_online, F.data == "sales:tariffs:online")
+        self.dp.callback_query.register(self.handle_show_tariffs_online_second, F.data == "sales:tariffs:online:second")
         self.dp.callback_query.register(self.handle_show_tariffs_offline, F.data == "sales:tariffs:offline")
         self.dp.callback_query.register(self.handle_offline_info, F.data == "sales:offline_info")
         self.dp.callback_query.register(self.handle_about_course, F.data == "sales:about_course")
@@ -928,6 +929,8 @@ class SalesBot:
             referral_partner_id = None
             upgrade_requested = False
             tariffs_requested = False
+            second_level_requested = False
+            offline_requested = False
             if message.text and len(message.text.split()) > 1:
                 param = message.text.split()[1]
                 if param == "upgrade":
@@ -936,6 +939,12 @@ class SalesBot:
                 elif param == "tariffs":
                     tariffs_requested = True
                     logger.info(f"User {user_id} requested tariffs view")
+                elif param == "second_level":
+                    second_level_requested = True
+                    logger.info(f"User {user_id} requested second level tariffs")
+                elif param == "offline":
+                    offline_requested = True
+                    logger.info(f"User {user_id} requested offline tariffs")
                 else:
                     referral_partner_id = param
                     logger.info(f"User {user_id} accessed via referral: {referral_partner_id}")
@@ -965,6 +974,112 @@ class SalesBot:
             if referral_partner_id and not user.referral_partner_id:
                 user.referral_partner_id = referral_partner_id
                 await self.db.update_user(user)
+            
+            # Если запрошена вторая ступень - показываем тарифы второй ступени
+            if second_level_requested:
+                # Создаем временный callback для показа тарифов второй ступени
+                from aiogram.types import CallbackQuery
+                # Используем внутренний метод для показа тарифов
+                promo_code = await self._get_user_promo_code(user_id)
+                prices = await self._get_online_prices_for_user(user_id)
+                basic_price = prices.get(Tariff.BASIC, 0)
+                feedback_price = prices.get(Tariff.FEEDBACK, 0)
+                practic_price = prices.get(Tariff.PRACTIC, 0)
+                
+                text = (
+                    "💠 <b>онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ (2-я ступень)</b> 💠\n\n"
+                    + (f"🎟 Промокод: <code>{promo_code}</code>\n\n" if promo_code else "")
+                    + "💎 <b>BASIC</b>\n"
+                    "<b>Что включено</b>\n"
+                    "30 занятий\n\n"
+                    "Ежедневные материалы (тексты, фото, видео, ссылки)\n\n"
+                    "Практические задания к каждому уроку\n\n"
+                    "Доступ к сообществу\n\n"
+                    "<b>Особенности</b>\n"
+                    "Полный доступ ко всему контенту\n\n"
+                    "Выполняйте задания в своем темпе\n\n"
+                    "Без обратной связи от лидера\n\n"
+                    f"💰 <b>{basic_price:.0f} ₽</b>\n\n"
+                    "⭐ <b>FEEDBACK</b>\n"
+                    "<b>Что включено</b>\n"
+                    "Всё из Базового тарифа\n\n"
+                    "Персональная обратная связь от лидера\n\n"
+                    "Проверка выполненных заданий\n\n"
+                    "Ответы на ваши вопросы\n\n"
+                    "<b>Особенности</b>\n"
+                    "Лидер проверяет ваши задания\n\n"
+                    "Персональные комментарии\n\n"
+                    "Можно задавать вопросы и получать ответы\n\n"
+                    f"💰 <b>{feedback_price:.0f} ₽</b>\n\n"
+                    "👑 <b>PRACTIC</b>\n"
+                    "<b>Что включено</b>\n"
+                    "Всё из тарифов Basic + Feedback\n\n"
+                    "Организация 3-х интервью онлайн\n\n"
+                    "Видеозапись 3-х интервью\n\n"
+                    "Профессиональный разбор 3-х интервью от лидера или куратора\n\n"
+                    "<b>Особенности</b>\n"
+                    "Каждое интервью до 15 мин\n\n"
+                    "Подбор собеседника\n\n"
+                    "Профессиональный формат\n\n"
+                    f"💰 <b>{practic_price:.0f} ₽</b>\n\n"
+                    "✨ <b>Выберите тариф для оплаты:</b>"
+                )
+                
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=f"💎 Оплатить BASIC · {int(basic_price)}₽", callback_data="pay:online:second:basic")],
+                    [InlineKeyboardButton(text=f"⭐ Оплатить FEEDBACK · {int(feedback_price)}₽", callback_data="pay:online:second:feedback")],
+                    [InlineKeyboardButton(text=f"👑 Оплатить PRACTIC · {int(practic_price)}₽", callback_data="pay:online:second:practic")],
+                    [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_tariffs")],
+                ])
+                await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+                return
+            
+            # Если запрошен офлайн - показываем тарифы офлайн
+            if offline_requested:
+                promo_code = await self._get_user_promo_code(user_id)
+                prices = await self._get_offline_prices_for_user(user_id)
+                slushatel_price = prices.get("slushatel", 6000.0)
+                aktivist_price = prices.get("aktivist", 12000.0)
+                media_persona_price = prices.get("media_persona", 22000.0)
+                glavnyi_geroi_price = prices.get("glavnyi_geroi", 30000.0)
+                
+                text = (
+                    "🎬 <b>офлайн · ГЛАВНЫЙ ГЕРОЙ</b> 🎬\n\n"
+                    + (f"🎟 Промокод: <code>{promo_code}</code>\n\n" if promo_code else "")
+                    + "👂 <b>СЛУШАТЕЛЬ</b>\n"
+                    "• Присутствие\n"
+                    "• Лекционная часть\n"
+                    "• Обсуждение\n"
+                    "• Нетворкинг\n"
+                    f"💰 <b>{int(slushatel_price)} ₽</b>\n\n"
+                    "🎯 <b>АКТИВИСТ</b>\n"
+                    "• Всё, что в прошлом тарифе\n"
+                    "• Берёт интервью как ведущий\n"
+                    "• Даёт интервью как спикер\n"
+                    "• Разбор от тренеров\n"
+                    f"💰 <b>{int(aktivist_price)} ₽</b>\n\n"
+                    "📹 <b>МЕДИА-ПЕРСОНА</b>\n"
+                    "• Всё, что в прошлом тарифе\n"
+                    "• Получает смонтированные видео\n"
+                    "• 2 видеоинтервью по 10-15 мин\n"
+                    f"💰 <b>{int(media_persona_price)} ₽</b>\n\n"
+                    "👑 <b>ГЛАВНЫЙ ГЕРОЙ</b>\n"
+                    "• Всё, что в прошлом тарифе\n"
+                    "• 10 рилсов для продвижения\n"
+                    "• Личная стратегическая онлайн-консультация\n"
+                    f"💰 <b>{int(glavnyi_geroi_price)} ₽</b>\n\n"
+                    "✨ <b>Выберите тариф для оплаты:</b>"
+                )
+                
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=f"👂 Оплатить СЛУШАТЕЛЬ · {int(slushatel_price)}₽", callback_data="pay:offline:slushatel")],
+                    [InlineKeyboardButton(text=f"🎯 Оплатить АКТИВИСТ · {int(aktivist_price)}₽", callback_data="pay:offline:aktivist")],
+                    [InlineKeyboardButton(text=f"📹 Оплатить МЕДИА-ПЕРСОНА · {int(media_persona_price)}₽", callback_data="pay:offline:media_persona")],
+                    [InlineKeyboardButton(text=f"👑 Оплатить ГЛАВНЫЙ ГЕРОЙ · {int(glavnyi_geroi_price)}₽", callback_data="pay:offline:glavnyi_geroi")],
+                    [InlineKeyboardButton(text="⬅️ Назад к описанию", callback_data="sales:offline_info")],
+                ])
+                await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+                return
             
             # Если запрошены тарифы - показываем только тарифы
             if tariffs_requested:
@@ -1069,7 +1184,7 @@ class SalesBot:
 
         # Show online tariffs + pay buttons (existing payment flow)
         text = (
-            "💠 <b>онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ</b> 💠\n\n"
+            "💠 <b>онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ (1-я ступень)</b> 💠\n\n"
             + (f"🎟 Промокод: <code>{promo_code}</code>\n\n" if promo_code else "")
             + "💎 <b>BASIC</b>\n"
             "<b>Что включено</b>\n"
@@ -1111,6 +1226,67 @@ class SalesBot:
             [InlineKeyboardButton(text=f"💎 Оплатить BASIC · {int(basic_price)}₽", callback_data="pay:online:basic")],
             [InlineKeyboardButton(text=f"⭐ Оплатить FEEDBACK · {int(feedback_price)}₽", callback_data="pay:online:feedback")],
             [InlineKeyboardButton(text=f"👑 Оплатить PRACTIC · {int(practic_price)}₽", callback_data="pay:online:practic")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_tariffs")],
+        ])
+        await callback.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+
+    async def handle_show_tariffs_online_second(self, callback: CallbackQuery):
+        """Show tariffs for second level (вторая ступень) of online course."""
+        try:
+            await callback.answer()
+        except Exception:
+            pass
+
+        promo_code = await self._get_user_promo_code(callback.from_user.id)
+        prices = await self._get_online_prices_for_user(callback.from_user.id)
+        basic_price = prices.get(Tariff.BASIC, 0)
+        feedback_price = prices.get(Tariff.FEEDBACK, 0)
+        practic_price = prices.get(Tariff.PRACTIC, 0)
+
+        # Show second level online tariffs
+        text = (
+            "💠 <b>онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ (2-я ступень)</b> 💠\n\n"
+            + (f"🎟 Промокод: <code>{promo_code}</code>\n\n" if promo_code else "")
+            + "💎 <b>BASIC</b>\n"
+            "<b>Что включено</b>\n"
+            "30 занятий\n\n"
+            "Ежедневные материалы (тексты, фото, видео, ссылки)\n\n"
+            "Практические задания к каждому уроку\n\n"
+            "Доступ к сообществу\n\n"
+            "<b>Особенности</b>\n"
+            "Полный доступ ко всему контенту\n\n"
+            "Выполняйте задания в своем темпе\n\n"
+            "Без обратной связи от лидера\n\n"
+            f"💰 <b>{basic_price:.0f} ₽</b>\n\n"
+            "⭐ <b>FEEDBACK</b>\n"
+            "<b>Что включено</b>\n"
+            "Всё из Базового тарифа\n\n"
+            "Персональная обратная связь от лидера\n\n"
+            "Проверка выполненных заданий\n\n"
+            "Ответы на ваши вопросы\n\n"
+            "<b>Особенности</b>\n"
+            "Лидер проверяет ваши задания\n\n"
+            "Персональные комментарии\n\n"
+            "Можно задавать вопросы и получать ответы\n\n"
+            f"💰 <b>{feedback_price:.0f} ₽</b>\n\n"
+            "👑 <b>PRACTIC</b>\n"
+            "<b>Что включено</b>\n"
+            "Всё из тарифов Basic + Feedback\n\n"
+            "Организация 3-х интервью онлайн\n\n"
+            "Видеозапись 3-х интервью\n\n"
+            "Профессиональный разбор 3-х интервью от лидера или куратора\n\n"
+            "<b>Особенности</b>\n"
+            "Каждое интервью до 15 мин\n\n"
+            "Подбор собеседника\n\n"
+            "Профессиональный формат\n\n"
+            f"💰 <b>{practic_price:.0f} ₽</b>\n\n"
+            "✨ <b>Выберите тариф для оплаты:</b>"
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💎 Оплатить BASIC · {int(basic_price)}₽", callback_data="pay:online:second:basic")],
+            [InlineKeyboardButton(text=f"⭐ Оплатить FEEDBACK · {int(feedback_price)}₽", callback_data="pay:online:second:feedback")],
+            [InlineKeyboardButton(text=f"👑 Оплатить PRACTIC · {int(practic_price)}₽", callback_data="pay:online:second:practic")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_tariffs")],
         ])
         await callback.message.answer(text, reply_markup=kb, disable_web_page_preview=True)
@@ -2254,14 +2430,24 @@ class SalesBot:
                         self._selected_program[callback.from_user.id] = prog
                 return
             
-            # supports pay:<tariff> and pay:<program>:<tariff>
+            # supports pay:<tariff> and pay:<program>:<tariff> and pay:<program>:<level>:<tariff>
             rest = callback.data[len("pay:"):]
             prog = None
+            level = None
             tariff_str = rest.strip()
             if ":" in rest:
-                prog, tariff_str = rest.split(":", 1)
-                prog = (prog or "").strip().lower() or None
-                tariff_str = (tariff_str or "").strip().lower()
+                parts = rest.split(":")
+                if len(parts) == 2:
+                    # pay:online:basic or pay:offline:slushatel
+                    prog, tariff_str = parts
+                    prog = (prog or "").strip().lower() or None
+                    tariff_str = (tariff_str or "").strip().lower()
+                elif len(parts) == 3:
+                    # pay:online:second:basic
+                    prog, level, tariff_str = parts
+                    prog = (prog or "").strip().lower() or None
+                    level = (level or "").strip().lower() or None
+                    tariff_str = (tariff_str or "").strip().lower()
             
             # Offline tariffs mapping (not in Tariff enum)
             OFFLINE_TARIFF_PRICES = {
@@ -2298,6 +2484,18 @@ class SalesBot:
                     logger.error(f"   ❌ Invalid tariff: '{tariff_str}'")
                     await callback.message.answer(f"❌ Ошибка: неверный тариф '{tariff_str}'. Попробуйте снова.")
                     return
+                
+                # Check if this is second level
+                is_second_level = (level == "second")
+                # Store program with level info
+                if is_second_level:
+                    self._selected_program[callback.from_user.id] = "online:second"
+                elif prog in ("online", "offline"):
+                    self._selected_program[callback.from_user.id] = prog
+            else:
+                # For simple pay:<tariff> format, default to online
+                if prog in ("online", "offline"):
+                    self._selected_program[callback.from_user.id] = prog
             
             user_id = callback.from_user.id
             user = await self.user_service.get_or_create_user(
@@ -2432,8 +2630,16 @@ class SalesBot:
                 price, _ = await self.payment_service._apply_promo_to_amount(base_price, promo_code)
                 currency_symbol = "₽" if Config.PAYMENT_CURRENCY == "RUB" else Config.PAYMENT_CURRENCY
                 
+                # Determine program name for display
+                program_name = "онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ"
+                if is_second_level:
+                    program_name = "онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ (2-я ступень)"
+                elif self._selected_program.get(user_id) == "online":
+                    program_name = "онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ (1-я ступень)"
+                
                 await callback.message.edit_text(
                     f"💳 <b>Требуется оплата</b>\n\n"
+                    f"Программа: <b>{program_name}</b>\n"
                     f"Тариф: <b>{tariff.value.upper()}</b>\n"
                     + (f"🎟 Промокод: <code>{promo_code}</code>\n" if promo_code else "")
                     + f"Сумма: {price:.0f}{currency_symbol}\n\n"

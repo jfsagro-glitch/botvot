@@ -3640,8 +3640,79 @@ class CourseBot:
                                     all_sent_media_from_posts.update(sent_media_from_post)
                                     logger.info(f"   ✅ Sent lesson post {i + 1}/{len(lesson_posts)} with inline media markers for day {day} (separate block after [POST])")
                                 else:
-                                    # Отправляем пост без медиа-маркеров как отдельный блок
-                                    await self._safe_send_message(user.user_id, post_text.strip())
+                                    # Специальная обработка для урока 28: добавляем кнопку после определенного текста
+                                    if day == 28 or str(day) == "28":
+                                        target_text = "Впрочем, зачем обязательно расставаться? Если вам интересно и полезно — давайте продолжать!"
+                                        if target_text in post_text:
+                                            # Находим позицию текста и добавляем кнопку после него
+                                            text_pos = post_text.find(target_text)
+                                            if text_pos != -1:
+                                                # Текст до целевого предложения
+                                                before_text = post_text[:text_pos + len(target_text)].strip()
+                                                # Текст после целевого предложения (если есть)
+                                                after_text = post_text[text_pos + len(target_text):].strip()
+                                                
+                                                # Отправляем текст с кнопкой
+                                                button_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                                                    [InlineKeyboardButton(
+                                                        text="ИДУ НА ВТОРУЮ СТУПЕНЬ КУРСА",
+                                                        url="https://t.me/StartNowQ_bot?start=second_level"
+                                                    )]
+                                                ])
+                                                full_text = before_text
+                                                if after_text:
+                                                    full_text += "\n\n" + after_text
+                                                await self.bot.send_message(
+                                                    user.user_id,
+                                                    full_text,
+                                                    reply_markup=button_keyboard,
+                                                    disable_web_page_preview=True
+                                                )
+                                                logger.info(f"   ✅ Sent lesson 28 with button after continuation text")
+                                            else:
+                                                await self._safe_send_message(user.user_id, post_text.strip())
+                                        else:
+                                            await self._safe_send_message(user.user_id, post_text.strip())
+                                    # Специальная обработка для урока 30: добавляем кнопки после ссылки на main-hero
+                                    elif day == 30 or str(day) == "30":
+                                        main_hero_url = "https://sites.google.com/view/nikitinartem/education/main-hero"
+                                        if main_hero_url in post_text:
+                                            # Находим позицию ссылки
+                                            url_pos = post_text.find(main_hero_url)
+                                            if url_pos != -1:
+                                                # Текст до ссылки (включая "Подробнее об этом: ")
+                                                before_url = post_text[:url_pos + len(main_hero_url)].strip()
+                                                # Текст после ссылки (если есть)
+                                                after_url = post_text[url_pos + len(main_hero_url):].strip()
+                                                
+                                                # Отправляем текст с кнопками
+                                                button_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                                                    [InlineKeyboardButton(
+                                                        text="Вторая ступень курса",
+                                                        url="https://t.me/StartNowQ_bot?start=second_level"
+                                                    )],
+                                                    [InlineKeyboardButton(
+                                                        text="Главный герой",
+                                                        url="https://t.me/StartNowQ_bot?start=offline"
+                                                    )]
+                                                ])
+                                                full_text = before_url
+                                                if after_url:
+                                                    full_text += "\n\n" + after_url
+                                                await self.bot.send_message(
+                                                    user.user_id,
+                                                    full_text,
+                                                    reply_markup=button_keyboard,
+                                                    disable_web_page_preview=True
+                                                )
+                                                logger.info(f"   ✅ Sent lesson 30 with buttons after main-hero link")
+                                            else:
+                                                await self._safe_send_message(user.user_id, post_text.strip())
+                                        else:
+                                            await self._safe_send_message(user.user_id, post_text.strip())
+                                    else:
+                                        # Отправляем пост без медиа-маркеров как отдельный блок
+                                        await self._safe_send_message(user.user_id, post_text.strip())
                                     logger.info(f"   ✅ Sent lesson post {i + 1}/{len(lesson_posts)} for day {day} (separate block after [POST])")
                                 
                                 # Пауза между блоками (постами)

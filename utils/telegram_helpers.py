@@ -98,9 +98,10 @@ def create_programs_tariff_keyboard() -> InlineKeyboardMarkup:
     offline_url = "https://sites.google.com/view/nikitinartem/education/main-hero"
 
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ →", url=online_url)],
+        [InlineKeyboardButton(text="Онлайн · ВОПРОСЫ, КОТОРЫЕ МЕНЯЮТ ВСЁ (1-я ступень) →", url=online_url)],
         [InlineKeyboardButton(text="Офлайн · ГЛАВНЫЙ ГЕРОЙ →", url=offline_url)],
-        [InlineKeyboardButton(text="Тарифы онлайн →", callback_data="sales:tariffs:online")],
+        [InlineKeyboardButton(text="Тарифы онлайн (1-я ступень) →", callback_data="sales:tariffs:online")],
+        [InlineKeyboardButton(text="Тарифы онлайн (2-я ступень) →", callback_data="sales:tariffs:online:second")],
         [InlineKeyboardButton(text="Тарифы офлайн →", callback_data="sales:tariffs:offline")],
     ])
 
