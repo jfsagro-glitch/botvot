@@ -4828,9 +4828,19 @@ class CourseBot:
         if not context.get("waiting_for_question"):
             raise SkipHandler()
 
+        # Получаем или создаем пользователя, если его нет
         user = await self.user_service.get_user(user_id)
+        if not user:
+            # Создаем пользователя автоматически, если его нет (может быть тестовый пользователь или новый)
+            user = await self.user_service.get_or_create_user(
+                user_id=user_id,
+                username=message.from_user.username,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name
+            )
+            logger.info(f"Auto-created user {user_id} when asking question")
         
-        if not user or not user.has_access():
+        if not user.has_access():
             raise SkipHandler()
 
         lesson_day = int(context.get("lesson_day") or user.current_day)
@@ -4904,9 +4914,19 @@ class CourseBot:
         if not context.get("waiting_for_question"):
             raise SkipHandler()
 
+        # Получаем или создаем пользователя, если его нет
         user = await self.user_service.get_user(user_id)
-
-        if not user or not user.has_access() or not message.voice:
+        if not user:
+            # Создаем пользователя автоматически, если его нет
+            user = await self.user_service.get_or_create_user(
+                user_id=user_id,
+                username=message.from_user.username,
+                first_name=message.from_user.first_name,
+                last_name=message.from_user.last_name
+            )
+            logger.info(f"Auto-created user {user_id} when asking voice question")
+        
+        if not user.has_access() or not message.voice:
             raise SkipHandler()
 
         lesson_day = int(context.get("lesson_day") or user.current_day)

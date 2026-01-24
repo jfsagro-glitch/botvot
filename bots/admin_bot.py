@@ -1641,18 +1641,16 @@ class AdminBot:
         from aiogram.exceptions import TelegramBadRequest
 
         # Проверяем, что пользователь существует в БД
+        # Для course бота пользователь должен существовать (создается при /start или при первом вопросе)
+        # Для sales бота пользователь может не существовать в БД
         user = None
         if bot_type == "course":
             user = await self.user_service.get_user(user_id)
             if not user:
-                raise ValueError(
-                    f"Пользователь с ID {user_id} не найден в базе данных. "
-                    f"Убедитесь, что пользователь зарегистрирован в обучающем боте (отправил /start)."
-                )
-        else:
-            # Для sales бота тоже можно проверить, если нужно
-            # Но обычно sales бот не требует регистрации в БД
-            pass
+                # Пользователь не найден - возможно, он задал вопрос, но не зарегистрирован
+                # Попробуем отправить сообщение все равно (может быть пользователь начал диалог, но не зарегистрирован)
+                logger.warning(f"User {user_id} not found in DB, but attempting to send message anyway")
+                # Не выбрасываем ошибку сразу - попробуем отправить, Telegram сам вернет ошибку если чата нет
 
         # Determine which bot to use
         if bot_type == "sales":
