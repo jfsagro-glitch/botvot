@@ -45,25 +45,49 @@ SOFT_TEMPLATES = [
 ]
 
 
-def get_mentor_reminder_text(assignment_text: str) -> str:
+def get_mentor_reminder_text(assignment_text: str, user_temperature: int = None, user_charisma: int = None) -> str:
     """
-    Генерирует случайное напоминание о задании.
+    Генерирует случайное напоминание о задании с учетом данных тестирования.
     
     Args:
         assignment_text: Текст задания
+        user_temperature: Температура наставника (0-5) из тестирования
+        user_charisma: Харизма наставника (0-5) из тестирования
     
     Returns:
         Текст напоминания с заданием
     """
-    reminder_template = random.choice(SOFT_TEMPLATES)
+    # Выбираем шаблон с учетом температуры (чем выше, тем более формальный/деловой тон)
+    # Температура 0-2: мягкие шаблоны, 3-4: нейтральные, 5: более деловые
+    if user_temperature is not None:
+        if user_temperature <= 2:
+            # Мягкие шаблоны (первые 15)
+            available_templates = SOFT_TEMPLATES[:15]
+        elif user_temperature <= 4:
+            # Нейтральные шаблоны (средние)
+            available_templates = SOFT_TEMPLATES[10:25]
+        else:
+            # Более деловые шаблоны (последние)
+            available_templates = SOFT_TEMPLATES[20:]
+        reminder_template = random.choice(available_templates)
+    else:
+        reminder_template = random.choice(SOFT_TEMPLATES)
 
     # Keep message compact: show only first chunk of the task to avoid huge spam.
     task = (assignment_text or "").strip()
     if len(task) > 900:
         task = task[:900].rstrip() + "…"
 
+    # Добавляем эмодзи в зависимости от харизмы (чем выше, тем больше эмодзи)
+    emoji_prefix = ""
+    if user_charisma is not None:
+        if user_charisma >= 4:
+            emoji_prefix = "✨ "
+        elif user_charisma >= 2:
+            emoji_prefix = "💫 "
+
     return (
-        f"{reminder_template}\n\n"
+        f"{emoji_prefix}{reminder_template}\n\n"
         f"📘 <b>Задание</b>\n"
         f"{task}\n\n"
         f"☑️ Когда сделаешь — просто отправь ответ сюда (как обычно)."

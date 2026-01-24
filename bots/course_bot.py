@@ -6100,8 +6100,13 @@ class CourseBot:
             # Импортируем функцию для генерации напоминания
             from bots.mentor_reminders import get_mentor_reminder_text
             
-            # Генерируем текст напоминания
-            reminder_text = get_mentor_reminder_text(task)
+            # Генерируем текст напоминания с учетом данных тестирования
+            # Используем данные тестирования для персонализации тона и стиля
+            reminder_text = get_mentor_reminder_text(
+                task,
+                user_temperature=getattr(user, "mentor_temperature", None),
+                user_charisma=getattr(user, "mentor_charisma", None)
+            )
             
             # Отправляем напоминание
             await self.bot.send_message(user.user_id, reminder_text)
