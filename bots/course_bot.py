@@ -2383,7 +2383,7 @@ class CourseBot:
         re.IGNORECASE,
     )
 
-    async def _send_text_with_inline_media(self, user_id: int, text: str, media_markers: Dict[str, Dict[str, Any]], day: int):
+    async def _send_text_with_inline_media(self, user_id: int, text: str, media_markers: Dict[str, Dict[str, Any]], day: int, keyboard: Optional[InlineKeyboardMarkup] = None):
         """
         Отправляет текст с встроенными медиа-файлами в местах маркеров.
         
@@ -2392,6 +2392,7 @@ class CourseBot:
             text: Текст урока с маркерами вида [MEDIA_fileid_index]
             media_markers: Словарь маркеров -> информация о медиа
             day: Номер дня урока
+            keyboard: Опциональная клавиатура, которая будет добавлена к последнему сообщению
         """
         logger.info(f"   📎 _send_text_with_inline_media called for user {user_id}, day {day}")
         logger.info(f"   📎 Text length: {len(text)}, media_markers count: {len(media_markers) if media_markers else 0}")
@@ -2412,7 +2413,11 @@ class CourseBot:
         if not markers:
             # Нет маркеров, отправляем текст как есть
             logger.info(f"   📎 No markers found, sending text as-is")
-            await self._safe_send_message(user_id, text)
+            if keyboard:
+                # Если есть клавиатура, отправляем текст с клавиатурой
+                await self.bot.send_message(user_id, text, reply_markup=keyboard, disable_web_page_preview=True)
+            else:
+                await self._safe_send_message(user_id, text)
             return
         
         # Разбиваем текст на части по маркерам
@@ -2420,6 +2425,9 @@ class CourseBot:
         parts = re.split(marker_pattern, text)
         
         logger.info(f"   📎 Split text into {len(parts)} parts")
+        
+        # Отслеживаем последнюю отправленную часть (текст или медиа) для добавления клавиатуры
+        last_sent_message_id = None
         
         for i, part in enumerate(parts):
             if not part.strip():
@@ -2506,7 +2514,14 @@ class CourseBot:
                         try:
                             if media_type == "photo":
                                 photo_file = FSInputFile(file_path)
-                                sent_message = await self.bot.send_photo(user_id, photo_file)
+                                # Если это последняя часть и есть клавиатура, добавляем её к фото
+                                is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip())
+                                sent_message = await self.bot.send_photo(
+                                    user_id, 
+                                    photo_file,
+                                    reply_markup=keyboard if (is_last and keyboard) else None
+                                )
+                                last_sent_message_id = sent_message.message_id
                                 # Сохраняем file_id для фото (может быть список, берем самое большое)
                                 if sent_message.photo:
                                     file_id = sent_message.photo[-1].file_id
@@ -2517,8 +2532,15 @@ class CourseBot:
                                 compressed_path = await self._compress_video_if_needed(file_path)
                                 video_path_to_use = compressed_path if compressed_path else file_path
                                 
+                                # Если это последняя часть и есть клавиатура, добавляем её к видео
+                                is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip())
                                 video_file = FSInputFile(video_path_to_use)
-                                sent_message = await self.bot.send_video(user_id, video_file)
+                                sent_message = await self.bot.send_video(
+                                    user_id, 
+                                    video_file,
+                                    reply_markup=keyboard if (is_last and keyboard) else None
+                                )
+                                last_sent_message_id = sent_message.message_id
                                 # Сохраняем file_id для видео
                                 if sent_message.video:
                                     file_id = sent_message.video.file_id
@@ -2555,8 +2577,49 @@ class CourseBot:
             else:
                 # Отправляем текстовую часть
                 if part.strip():
-                    await self._safe_send_message(user_id, part.strip())
+                    # Если это последняя часть и есть клавиатура, добавляем её к тексту
+                    is_last = i == len(parts) - 1
+                    if is_last and keyboard:
+                        sent_message = await self.bot.send_message(
+                            user_id, 
+                            part.strip(), 
+                            reply_markup=keyboard,
+                            disable_web_page_preview=True
+                        )
+                        last_sent_message_id = sent_message.message_id
+                    else:
+                        await self._safe_send_message(user_id, part.strip())
                     await asyncio.sleep(0.2)
+        
+        # Если клавиатура не была добавлена к последнему сообщению (например, если последнее было медиа без caption),
+        # добавляем её отдельным сообщением
+        if keyboard and last_sent_message_id:
+            try:
+                # Пытаемся отредактировать последнее сообщение, чтобы добавить клавиатуру
+                await self.bot.edit_message_reply_markup(
+                    chat_id=user_id,
+                    message_id=last_sent_message_id,
+                    reply_markup=keyboard
+                )
+                logger.info(f"   ✅ Added keyboard to last message (message_id: {last_sent_message_id})")
+            except Exception as e:
+                # Если не удалось отредактировать (например, это медиа без caption), отправляем клавиатуру отдельно
+                logger.warning(f"   ⚠️ Could not edit last message to add keyboard: {e}, sending separately")
+                await self.bot.send_message(
+                    user_id,
+                    "📝 <b>Задание</b>",
+                    reply_markup=keyboard,
+                    disable_web_page_preview=True
+                )
+        elif keyboard:
+            # Если не было отправлено ни одного сообщения, отправляем клавиатуру отдельно
+            logger.warning(f"   ⚠️ No messages sent, sending keyboard separately")
+            await self.bot.send_message(
+                user_id,
+                "📝 <b>Задание</b>",
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
     
     def _split_assignment_from_text(self, text: str) -> tuple[str, str]:
         """
@@ -3883,18 +3946,12 @@ class CourseBot:
                 task_sent_with_media = False
                 if media_markers and any(f"[{marker}]" in task_message_clean for marker in media_markers.keys()):
                     # Используем встроенную вставку медиа по маркерам в задании
+                    # ВАЖНО: Кнопка должна быть строго под последним блоком задания
                     # Отправляем задание с маркерами (без префикса "📝 Задание:")
                     task_text_without_prefix = task if task else ""
-                    await self._send_text_with_inline_media(user.user_id, task_text_without_prefix, media_markers, day)
-                    # Отправляем заголовок задания с клавиатурой отдельно
-                    if keyboard:
-                        await self.bot.send_message(
-                            user.user_id,
-                            "📝 <b>Задание</b>",
-                            reply_markup=keyboard,
-                            disable_web_page_preview=True
-                        )
-                    logger.info(f"   ✅ Sent task with inline media markers for day {day}")
+                    # Отправляем задание с медиа, передавая клавиатуру для последнего сообщения
+                    await self._send_text_with_inline_media(user.user_id, task_text_without_prefix, media_markers, day, keyboard=keyboard)
+                    logger.info(f"   ✅ Sent task with inline media markers for day {day} (keyboard attached to last message)")
                     task_sent_with_media = True
                 
                 if not task_sent_with_media:

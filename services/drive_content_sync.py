@@ -90,7 +90,6 @@ class DriveContentSync:
         return list(ids)
     
     @staticmethod
-    @staticmethod
     def _find_drive_links_with_positions(text: str) -> List[Dict[str, str]]:
         """
         Find all Drive links in text with their positions and file/folder IDs.
@@ -129,29 +128,191 @@ class DriveContentSync:
                     "end": match.end()
                 })
         
-        # Remove duplicates (same file_id/folder_id, keep first occurrence)
-        seen_ids = set()
-        unique_links = []
-        for link in links:
-            link_key = (link["file_id"], link.get("is_folder", False))
-            if link_key not in seen_ids:
-                seen_ids.add(link_key)
-                unique_links.append(link)
-        
-        return unique_links
+        # IMPORTANT: do NOT dedupe occurrences here. The same Drive URL can appear multiple times
+        # and must be replaced in every position to preserve exact placement. Downloading is
+        # deduped later by file_id/folder_id.
+        return links
 
     @staticmethod
-    def _split_master_doc(text: str) -> Dict[int, Dict[str, str]]:
+    def _split_lesson_into_posts(lesson_text: str, max_length: int = 4000) -> List[str]:
         """
-        Split a master doc (plain text export) into per-day blocks.
+        Разделяет текст урока на посты с сохранением форматирования.
+        
+        Поддерживает:
+        1. Ручные маркеры: [POST], [ДОПОЛНЕНИЕ], [BLOCK], [БЛОК] на отдельной строке
+        2. Автоматическое разделение по длине (>4000 символов) на границах абзацев
+        
+        ВАЖНО: Сохраняет все форматирование (пробелы, отступы, пунктуацию, эмодзи)
+        ВАЖНО: Медиа-маркеры [MEDIA_...] НЕ являются разделителями постов
+        
+        Args:
+            lesson_text: Полный текст урока
+            max_length: Максимальная длина поста (по умолчанию 4000, лимит Telegram 4096)
+        
+        Returns:
+            Список текстов постов
+        """
+        if not lesson_text or not lesson_text.strip():
+            return [""]
+        
+        # Шаг 1: Разделение по ручным маркерам
+        # Поддерживаем: [POST], [ДОПОЛНЕНИЕ], [BLOCK], [БЛОК] на отдельной строке
+        # ВАЖНО: Сохраняем все форматирование, включая пробелы и переносы строк
+        
+        # Разбиваем на строки, сохраняя переносы строк
+        lines = lesson_text.split('\n')
+        posts = []
+        current_post_lines = []
+        
+        for line in lines:
+            line_stripped = line.strip()
+            
+            # Проверяем, является ли строка медиа-маркером (не разделитель постов)
+            is_media_marker = re.match(r'^\s*\[MEDIA_[a-zA-Z0-9_-]+\]\s*$', line)
+            
+            # Проверяем, является ли строка маркером разделения постов
+            # Поддерживаем: [POST], [ДОПОЛНЕНИЕ], [BLOCK], [БЛОК] и их вариации
+            is_post_marker = False
+            if not is_media_marker:
+                # Проверяем маркеры на отдельной строке
+                post_marker_pattern = r'^\s*\[(POST|ДОПОЛНЕНИЕ|BLOCK|БЛОК|POST\d*|ДОПОЛНЕНИЕ\d*)\]\s*$'
+                if re.match(post_marker_pattern, line, re.IGNORECASE):
+                    is_post_marker = True
+            
+            if is_post_marker:
+                # Сохраняем текущий пост, если он не пустой
+                if current_post_lines:
+                    post_text = '\n'.join(current_post_lines)
+                    # Убираем только лишние пробелы в начале и конце, но сохраняем внутреннее форматирование
+                    post_text = post_text.rstrip()
+                    if post_text:
+                        posts.append(post_text)
+                    current_post_lines = []
+                # Маркер не включается в пост
+            else:
+                # Добавляем строку в текущий пост (сохраняем форматирование)
+                current_post_lines.append(line)
+        
+        # Добавляем последний пост, если он есть
+        if current_post_lines:
+            post_text = '\n'.join(current_post_lines)
+            post_text = post_text.rstrip()
+            if post_text:
+                posts.append(post_text)
+        
+        # Если нашли маркеры и разделили, возвращаем посты
+        if len(posts) > 1:
+            return posts
+        
+        # Шаг 2: Если ручных маркеров нет, проверяем длину и разделяем автоматически при необходимости
+        lesson_text_stripped = lesson_text.rstrip()
+        if len(lesson_text_stripped) <= max_length:
+            return [lesson_text_stripped] if lesson_text_stripped else [""]
+        
+        # Автоматическое разделение по абзацам, стараясь сохранить посты под max_length
+        posts = []
+        # Разбиваем на абзацы (двойные переносы строк), сохраняя форматирование
+        paragraphs = lesson_text.split('\n\n')
+        current_post_parts = []
+        current_length = 0
+        
+        for para in paragraphs:
+            # Сохраняем оригинальный абзац с форматированием
+            para_original = para
+            para_stripped = para.rstrip()
+            
+            if not para_stripped:
+                # Пустой абзац - добавляем как есть для сохранения форматирования
+                if current_post_parts:
+                    current_post_parts.append("")
+                continue
+            
+            para_length = len(para_stripped)
+            
+            # Если один абзац превышает max_length, разбиваем его по строкам
+            if para_length > max_length:
+                # Сохраняем текущий пост, если он есть
+                if current_post_parts:
+                    post_text = '\n\n'.join(current_post_parts)
+                    post_text = post_text.rstrip()
+                    if post_text:
+                        posts.append(post_text)
+                    current_post_parts = []
+                    current_length = 0
+                
+                # Разбиваем длинный абзац по строкам
+                para_lines = para.split('\n')
+                current_line_parts = []
+                current_line_length = 0
+                
+                for line in para_lines:
+                    line_stripped = line.rstrip()
+                    if not line_stripped:
+                        # Пустая строка - добавляем как есть
+                        if current_line_parts:
+                            current_line_parts.append("")
+                        continue
+                    
+                    line_length = len(line_stripped)
+                    # Проверяем, не превысит ли добавление строки max_length
+                    if current_line_parts and current_line_length + line_length + 2 > max_length:  # +2 для \n\n
+                        # Сохраняем текущий пост
+                        if current_line_parts:
+                            post_text = '\n'.join(current_line_parts)
+                            post_text = post_text.rstrip()
+                            if post_text:
+                                posts.append(post_text)
+                            current_line_parts = []
+                            current_line_length = 0
+                    
+                    current_line_parts.append(line)
+                    current_line_length += len(line) + 1  # +1 для \n
+                
+                # Добавляем оставшиеся строки как последний пост
+                if current_line_parts:
+                    post_text = '\n'.join(current_line_parts)
+                    post_text = post_text.rstrip()
+                    if post_text:
+                        posts.append(post_text)
+            else:
+                # Проверяем, не превысит ли добавление абзаца max_length
+                if current_post_parts and current_length + para_length + 2 > max_length:  # +2 для \n\n
+                    # Сохраняем текущий пост
+                    post_text = '\n\n'.join(current_post_parts)
+                    post_text = post_text.rstrip()
+                    if post_text:
+                        posts.append(post_text)
+                    current_post_parts = []
+                    current_length = 0
+                
+                # Добавляем абзац в текущий пост (сохраняем оригинальное форматирование)
+                current_post_parts.append(para_original)
+                current_length += len(para_original) + 2  # +2 для \n\n
+        
+        # Добавляем оставшийся пост
+        if current_post_parts:
+            post_text = '\n\n'.join(current_post_parts)
+            post_text = post_text.rstrip()
+            if post_text:
+                posts.append(post_text)
+        
+        return posts if posts else [lesson_text_stripped] if lesson_text_stripped else [""]
 
-        Expected markers in doc (Russian or English):
+    def _split_master_doc(self, text: str) -> Dict[int, Dict[str, str]]:
+        """
+        Разделяет мастер-документ (plain text export) на блоки по дням.
+        
+        Ожидаемые маркеры в документе (русский или английский):
           - "День 0" ... "День 30"
           - "Day 0" ... "Day 30"
-
-        Inside each day block:
-          - Optional title line: "Заголовок: ..." or "Title: ..."
-          - Task starts at a line beginning with "Задание:" / "Task:"
+        
+        Внутри каждого блока дня:
+          - Опциональная строка заголовка: "Заголовок: ..." или "Title: ..."
+          - Задание начинается со строки, начинающейся с "Задание:" / "Task:"
+          - Вводный текст: "Intro:" или "Введение:" или "Вводный текст:"
+          - Обо мне: "Обо мне:" или "About me:" или "About_me:"
+        
+        ВАЖНО: Сохраняет все форматирование (пробелы, отступы, пунктуацию, эмодзи)
         """
         blocks: Dict[int, List[str]] = {}
         current_day: Optional[int] = None
@@ -166,7 +327,7 @@ class DriveContentSync:
                 if 0 <= day <= 30:
                     current_day = day
                     blocks.setdefault(day, [])
-                    # If header has title after colon, store it as first line hint
+                    # Если заголовок имеет название после двоеточия, сохраняем его как первую строку
                     title_hint = (m.group(2) or "").strip()
                     if title_hint:
                         blocks[day].append(f"Заголовок: {title_hint}")
@@ -176,27 +337,28 @@ class DriveContentSync:
 
         out: Dict[int, Dict[str, str]] = {}
         for day, bl in blocks.items():
-            raw = "\n".join(bl).strip()
-            if not raw:
+            # Сохраняем оригинальный текст с форматированием
+            raw = "\n".join(bl)
+            if not raw.strip():
                 continue
 
             title = ""
             lesson = raw
             task = ""
+            intro_text = ""
+            about_me_text = ""
 
-            # title line
+            # Извлекаем заголовок
             for ln in bl[:10]:
                 mm = re.match(r"^\s*(?:Заголовок|Title)\s*:\s*(.+)\s*$", ln, re.IGNORECASE)
                 if mm:
                     title = mm.group(1).strip()
                     break
 
-            # split task, intro_text, and about_me_text
-            # Support both formats:
-            #   "Задание:" (on its own line)
-            #   "Задание: текст задания" (text on same line)
-            #   "Intro:" or "Введение:" for intro_text
-            #   "Обо мне:" or "About me:" for about_me_text
+            # Разделяем на секции: task, intro_text, about_me_text
+            # Поддерживаем оба формата:
+            #   "Задание:" (на отдельной строке)
+            #   "Задание: текст задания" (текст на той же строке)
             task_re = re.compile(r"^\s*(?:Задание|Task)\s*:\s*(.*)$", re.IGNORECASE)
             intro_re = re.compile(r"^\s*(?:Intro|Введение|Вводный текст)\s*:\s*(.*)$", re.IGNORECASE)
             about_me_re = re.compile(r"^\s*(?:Обо мне|About me|About_me)\s*:\s*(.*)$", re.IGNORECASE)
@@ -211,7 +373,7 @@ class DriveContentSync:
             in_about_me = False
             
             for ln in bl:
-                # Check for task marker
+                # Проверяем маркер задания
                 m_task = task_re.match(ln)
                 if m_task:
                     in_task = True
@@ -222,7 +384,7 @@ class DriveContentSync:
                         parts_task.append(task_text_on_line)
                     continue
                 
-                # Check for intro marker
+                # Проверяем маркер вводного текста
                 m_intro = intro_re.match(ln)
                 if m_intro:
                     in_intro = True
@@ -233,7 +395,7 @@ class DriveContentSync:
                         parts_intro.append(intro_text_on_line)
                     continue
                 
-                # Check for about_me marker
+                # Проверяем маркер "Обо мне"
                 m_about_me = about_me_re.match(ln)
                 if m_about_me:
                     in_about_me = True
@@ -244,7 +406,7 @@ class DriveContentSync:
                         parts_about_me.append(about_me_text_on_line)
                     continue
                 
-                # Add line to appropriate section
+                # Добавляем строку в соответствующую секцию
                 if in_task:
                     parts_task.append(ln)
                 elif in_intro:
@@ -254,20 +416,26 @@ class DriveContentSync:
                 else:
                     parts_lesson.append(ln)
             
-            lesson = "\n".join(parts_lesson).strip()
-            task = "\n".join(parts_task).strip()
-            intro_text = "\n".join(parts_intro).strip()
-            about_me_text = "\n".join(parts_about_me).strip()
+            # Собираем текст секций, сохраняя форматирование
+            # Убираем только лишние пробелы в начале и конце, но сохраняем внутреннее форматирование
+            lesson = "\n".join(parts_lesson).rstrip()
+            task = "\n".join(parts_task).rstrip()
+            intro_text = "\n".join(parts_intro).rstrip()
+            about_me_text = "\n".join(parts_about_me).rstrip()
 
-            # Split lesson into posts:
-            # 1. By manual markers: ---POST--- or [POST] or ---
-            # 2. Automatically by length (>4000 chars)
+            # Разделяем урок на посты:
+            # 1. По ручным маркерам: [POST], [ДОПОЛНЕНИЕ] и т.д.
+            # 2. Автоматически по длине (>4000 символов)
             lesson_posts = DriveContentSync._split_lesson_into_posts(lesson)
             
-            # If lesson was split into multiple posts, store as list; otherwise as string (backward compatible)
-            lesson_data = {"title": title, "lesson": lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else ""), "task": task}
+            # Если урок разделен на несколько постов, сохраняем как список; иначе как строку (обратная совместимость)
+            lesson_data = {
+                "title": title, 
+                "lesson": lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else ""), 
+                "task": task
+            }
             
-            # Store intro_text and about_me_text if they were extracted
+            # Сохраняем intro_text и about_me_text, если они были извлечены
             if intro_text:
                 lesson_data["intro_text"] = intro_text
             if about_me_text:
@@ -277,162 +445,12 @@ class DriveContentSync:
 
         return out
     
-    @staticmethod
-    def _split_lesson_into_posts(lesson_text: str, max_length: int = 4000) -> List[str]:
-        """
-        Split lesson text into multiple posts.
-        
-        Supports:
-        1. Manual markers: ---POST---, [POST], --- (on its own line)
-        2. Automatic splitting by length (>4000 chars) at paragraph boundaries
-        
-        Args:
-            lesson_text: Full lesson text
-            max_length: Maximum length per post (default 4000, Telegram limit is 4096)
-        
-        Returns:
-            List of post texts
-        """
-        if not lesson_text or not lesson_text.strip():
-            return [""]
-        
-        # Step 1: Split by manual markers
-        # Support: ---POST---, [POST], [любые квадратные кавычки], --- (on its own line)
-        # Split by lines first to find markers
-        lines = lesson_text.split('\n')
-        posts = []
-        current_post = []
-        
-        for line in lines:
-            # Check if line is a post marker
-            # Match: ---POST---, [POST], [любые квадратные кавычки на отдельной строке], ---
-            # Также проверяем, если квадратные скобки в начале или конце строки с текстом
-            line_stripped = line.strip()
-            # ВАЖНО: Не считаем медиа-маркеры [MEDIA_...] разделителями постов
-            # Они должны оставаться в тексте для встроенной вставки медиа
-            is_media_marker = re.match(r'^\s*\[MEDIA_[a-zA-Z0-9_-]+\]\s*$', line)
-            is_marker = (
-                re.match(r'^\s*(?:---POST---|---)\s*$', line, re.IGNORECASE) or
-                (re.match(r'^\s*\[.*?\]\s*$', line) and not is_media_marker) or  # Любые квадратные кавычки на отдельной строке, кроме медиа-маркеров
-                (line_stripped.startswith('[') and line_stripped.endswith(']') and len(line_stripped) < 50 and not is_media_marker)  # Короткие маркеры вроде [POST], но не медиа-маркеры
-            )
-            
-            if is_marker:
-                # Save current post if it has content
-                if current_post:
-                    post_text = '\n'.join(current_post).strip()
-                    if post_text:
-                        posts.append(post_text)
-                    current_post = []
-                # Marker line itself is NOT included in any post
-            else:
-                # Проверяем, есть ли квадратные скобки внутри строки (не только маркеры)
-                # Если строка содержит [POST] или подобные маркеры, разделяем по ним
-                # ВАЖНО: Медиа-маркеры [MEDIA_...] НЕ являются разделителями постов
-                if '[' in line and ']' in line:
-                    # Ищем маркеры разделения постов внутри строки (но не медиа-маркеры)
-                    marker_pattern = r'\[(POST|ДОПОЛНЕНИЕ|BLOCK|БЛОК|POST\d*)\]'
-                    matches = list(re.finditer(marker_pattern, line, re.IGNORECASE))
-                    if matches:
-                        # Разделяем строку по маркерам
-                        last_pos = 0
-                        for match in matches:
-                            # Добавляем текст до маркера
-                            if match.start() > last_pos:
-                                text_before = line[last_pos:match.start()].strip()
-                                if text_before:
-                                    current_post.append(text_before)
-                            # Сохраняем текущий пост и начинаем новый
-                            if current_post:
-                                post_text = '\n'.join(current_post).strip()
-                                if post_text:
-                                    posts.append(post_text)
-                                current_post = []
-                            last_pos = match.end()
-                        # Добавляем текст после последнего маркера
-                        if last_pos < len(line):
-                            text_after = line[last_pos:].strip()
-                            if text_after:
-                                current_post.append(text_after)
-                    else:
-                        # Нет маркеров разделения внутри, просто добавляем строку (включая медиа-маркеры)
-                        current_post.append(line)
-                else:
-                    current_post.append(line)
-        
-        # Add last post if any
-        if current_post:
-            post_text = '\n'.join(current_post).strip()
-            if post_text:
-                posts.append(post_text)
-        
-        # If we found markers and split, return posts
-        if len(posts) > 1:
-            return posts
-        
-        # Step 2: If no manual markers, check length and split automatically if needed
-        if len(lesson_text) <= max_length:
-            return [lesson_text.strip()]
-        
-        # Auto-split by paragraphs, trying to keep posts under max_length
-        posts = []
-        paragraphs = lesson_text.split('\n\n')
-        current_post = []
-        current_length = 0
-        
-        for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
-            
-            para_length = len(para)
-            
-            # If single paragraph exceeds max_length, split it by lines
-            if para_length > max_length:
-                # Save current post if any
-                if current_post:
-                    posts.append('\n\n'.join(current_post))
-                    current_post = []
-                    current_length = 0
-                
-                # Split long paragraph by lines
-                lines = para.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    
-                    line_length = len(line)
-                    if current_length + line_length + 2 > max_length:  # +2 for \n\n
-                        if current_post:
-                            posts.append('\n\n'.join(current_post))
-                            current_post = []
-                            current_length = 0
-                    
-                    current_post.append(line)
-                    current_length += line_length + 2  # +2 for \n\n
-            else:
-                # Check if adding this paragraph would exceed max_length
-                if current_post and current_length + para_length + 2 > max_length:  # +2 for \n\n
-                    posts.append('\n\n'.join(current_post))
-                    current_post = []
-                    current_length = 0
-                
-                current_post.append(para)
-                current_length += para_length + 2  # +2 for \n\n
-        
-        # Add remaining post
-        if current_post:
-            posts.append('\n\n'.join(current_post))
-        
-        return posts if posts else [lesson_text.strip()]
-
     def _sync_from_master_doc(self, drive, warnings: List[str]) -> Tuple[Dict[str, Any], int]:
         master_id = (Config.DRIVE_MASTER_DOC_ID or "").strip()
         if not master_id:
             raise RuntimeError("DRIVE_MASTER_DOC_ID is empty")
 
-        # Download master doc text
+        # Скачиваем текст мастер-документа
         master_text = self._download_text_file(drive, master_id, GOOGLE_DOC_MIME)
         master_text, w = self._sanitize_telegram_html(master_text or "")
         if w:
@@ -450,25 +468,25 @@ class DriveContentSync:
         for day, data in sorted(day_map.items(), key=lambda x: x[0]):
             title = (data.get("title") or "").strip() or f"День {day}"
             lesson_raw = data.get("lesson") or ""
-            # Support multi-post lessons returned as list
+            # Поддерживаем много-постовые уроки, возвращаемые как список
             # ВАЖНО: Если урок уже разделен на посты (через маркеры [POST]), сохраняем структуру постов
             lesson_was_split = isinstance(lesson_raw, list)
             if lesson_was_split:
-                lesson_posts_list = [str(x).strip() for x in lesson_raw if str(x).strip()]
-                lesson_text = "\n\n".join(lesson_posts_list).strip()
+                lesson_posts_list = [str(x).rstrip() for x in lesson_raw if str(x).strip()]
+                lesson_text = "\n\n".join(lesson_posts_list)
             else:
-                lesson_text = str(lesson_raw).strip()
+                lesson_text = str(lesson_raw).rstrip()
                 lesson_posts_list = None
-            task_text = (data.get("task") or "").strip()
-            intro_text = (data.get("intro_text") or "").strip()
-            about_me_text = (data.get("about_me_text") or "").strip()
+            task_text = (data.get("task") or "").rstrip()
+            intro_text = (data.get("intro_text") or "").rstrip()
+            about_me_text = (data.get("about_me_text") or "").rstrip()
 
-            # Process Drive-linked media referenced in the text/task
-            # Replace links with markers and download files
+            # Обрабатываем медиа, связанные с Drive, упомянутые в тексте/задании
+            # Заменяем ссылки на маркеры и скачиваем файлы
             media_items: List[Dict[str, Any]] = []
             media_markers: Dict[str, Dict[str, Any]] = {}  # marker_id -> media_info
             
-            # Find all Drive links in lesson, task, intro_text, and about_me_text
+            # Находим все Drive ссылки в lesson, task, intro_text, и about_me_text
             # ВАЖНО: В режиме master doc intro_text и about_me_text извлекаются из самого текста урока
             # Они уже извлечены в _split_master_doc, поэтому используем их здесь
             combined_text = lesson_text + "\n" + task_text
@@ -477,97 +495,22 @@ class DriveContentSync:
             if about_me_text:
                 combined_text += "\n" + about_me_text
             
-            # Special logging for day 0 to debug missing links
-            if day == 0:
-                logger.info(f"   🔍 DEBUG Day 0: lesson_text length: {len(lesson_text)}, task_text length: {len(task_text)}")
-                logger.info(f"   🔍 DEBUG Day 0: lesson_text preview (first 500 chars): {lesson_text[:500]}")
-                logger.info(f"   🔍 DEBUG Day 0: task_text preview (first 500 chars): {task_text[:500]}")
-                # Check if link is in text but not found by pattern
-                if "drive.google.com" in combined_text.lower() or "1XpI71z0vSm6uK1C8krBsBFrUwMSPNzXL" in combined_text:
-                    logger.warning(f"   ⚠️ DEBUG Day 0: Found 'drive.google.com' or file_id in text, but pattern didn't match!")
-                    # Try to find the exact string
-                    all_drive_mentions = re.findall(r'[^\s]*drive\.google\.com[^\s]*', combined_text, re.IGNORECASE)
-                    if all_drive_mentions:
-                        logger.warning(f"   ⚠️ DEBUG Day 0: Found drive.google.com mentions: {all_drive_mentions[:5]}")
-                # Check for file ID pattern in text (might be just the ID without full URL)
-                file_id_pattern = re.findall(r'[a-zA-Z0-9_-]{25,}', combined_text)
-                if file_id_pattern:
-                    logger.warning(f"   ⚠️ DEBUG Day 0: Found potential file IDs in text: {file_id_pattern[:3]}")
-                # Check if "000 Шерлок 3.mp4" is in text - this might be a link that was already processed
-                if "000 Шерлок 3.mp4" in combined_text or "Шерлок" in combined_text:
-                    logger.warning(f"   ⚠️ DEBUG Day 0: Found 'Шерлок' in text - checking if it's a link format")
-                    # Try to find any URL-like patterns near "Шерлок"
-                    url_patterns = re.findall(r'https?://[^\s]+', combined_text)
-                    if url_patterns:
-                        logger.warning(f"   ⚠️ DEBUG Day 0: Found URL patterns in text: {url_patterns[:3]}")
-            
             drive_links = self._find_drive_links_with_positions(combined_text)
             
             logger.info(f"   📎 Day {day}: Found {len(drive_links)} Drive links in text")
             if drive_links:
                 for link in drive_links:
-                    logger.info(f"   📎   - Link: {link['url'][:60]}... (file_id: {link['file_id']})")
-            elif day == 0:
-                logger.warning(f"   ⚠️ Day 0: No Drive links found! This may indicate the link format is different or link is in a different field")
-                # Special handling for day 0: if we see "000 Шерлок 3.mp4" but no link, 
-                # try to find the file by name in Drive and create a marker manually
-                if "000 Шерлок 3.mp4" in combined_text or "Шерлок" in combined_text.lower():
-                    logger.warning(f"   ⚠️ Day 0: Found 'Шерлок' in text but no Drive link. Attempting to find file by name...")
-                    # Known file ID for day 0 video (from user's previous message)
-                    known_file_id = "1XpI71z0vSm6uK1C8krBsBFrUwMSPNzXL"
-                    try:
-                        meta = drive.files().get(fileId=known_file_id, fields="id,name,mimeType,modifiedTime,size").execute()
-                        mt = (meta.get("mimeType") or "").lower()
-                        name = (meta.get("name") or "").strip()
-                        if mt.startswith("video/"):
-                            logger.info(f"   ✅ Day 0: Found video file by known ID: {name} (MIME: {mt})")
-                            safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
-                            dest = media_root / f"day_00" / safe_name
-                            dest.parent.mkdir(parents=True, exist_ok=True)
-                            
-                            should_skip = self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime"))
-                            if not should_skip or not dest.exists():
-                                logger.info(f"   📎   Downloading day 0 video: {name} -> {dest}")
-                                self._download_binary_file(drive, known_file_id, dest)
-                                media_downloaded += 1
-                            else:
-                                logger.info(f"   📎   Day 0 video already exists: {dest}")
-                            
-                            rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
-                            marker_id = f"MEDIA_{known_file_id}_0"
-                            media_markers[marker_id] = {
-                                "type": "video",
-                                "path": rel_path,
-                                "file_id": known_file_id,
-                                "name": name
-                            }
-                            logger.info(f"   ✅ Created media marker for day 0: [{marker_id}]")
-                            
-                            # Replace "000 Шерлок 3.mp4" with marker in text
-                            if "000 Шерлок 3.mp4" in lesson_text:
-                                lesson_text = lesson_text.replace("000 Шерлок 3.mp4", f"[{marker_id}]")
-                                logger.info(f"   ✅ Replaced '000 Шерлок 3.mp4' with marker in lesson_text")
-                            elif "Шерлок" in lesson_text.lower():
-                                # Try to find and replace the line containing "Шерлок"
-                                lines = lesson_text.split("\n")
-                                for i, line in enumerate(lines):
-                                    if "Шерлок" in line.lower() and ".mp4" in line.lower():
-                                        lines[i] = f"[{marker_id}]"
-                                        lesson_text = "\n".join(lines)
-                                        logger.info(f"   ✅ Replaced line containing 'Шерлок' with marker in lesson_text")
-                                        break
-                        else:
-                            logger.warning(f"   ⚠️ Day 0: File {known_file_id} is not a video (MIME: {mt})")
-                    except Exception as e:
-                        logger.error(f"   ❌ Day 0: Failed to process known file ID {known_file_id}: {e}")
+                    logger.info(f"   📎   - Link: {link['url'][:60]}... (file_id: {link['file_id']}, is_folder: {link.get('is_folder', False)})")
             
-            # Process links in reverse order to preserve positions when replacing
+            # Обрабатываем ссылки в обратном порядке, чтобы сохранить позиции при замене
             drive_links.sort(key=lambda x: x["start"], reverse=True)
             
             processed_links = 0
             skipped_links = 0
             error_links = 0
             
+            # ВАЖНО: Заменяем ссылки в тексте, сохраняя точные позиции
+            # Используем обратный порядок, чтобы позиции не сдвигались при замене
             for link_info in drive_links:
                 fid = link_info["file_id"]
                 link_url = link_info["url"]
@@ -575,11 +518,11 @@ class DriveContentSync:
                 
                 try:
                     if is_folder:
-                        # Handle folder: get all files in folder and process each as media
+                        # Обрабатываем папку: получаем все файлы в папке и обрабатываем каждый как медиа
                         folder_id = link_info.get("folder_id") or fid
                         logger.info(f"   📁 Processing Drive folder: {link_url[:60]}... (folder_id: {folder_id})")
                         
-                        # Get all files in the folder
+                        # Получаем все файлы в папке
                         folder_files = self._list_children(drive, folder_id)
                         logger.info(f"   📁   Found {len(folder_files)} items in folder")
                         
@@ -588,7 +531,7 @@ class DriveContentSync:
                             skipped_links += 1
                             continue
                         
-                        # Collect all markers for files in this folder
+                        # Собираем все маркеры для файлов в этой папке
                         folder_markers = []
                         folder_media_count = 0
                         
@@ -599,7 +542,7 @@ class DriveContentSync:
                             
                             logger.info(f"   📁   Processing folder item: {file_name} (MIME: {file_mime})")
                             
-                            # Only process media files (images/videos)
+                            # Обрабатываем только медиа-файлы (изображения/видео)
                             if file_mime.startswith("image/"):
                                 media_type = "photo"
                             elif file_mime.startswith("video/"):
@@ -611,7 +554,7 @@ class DriveContentSync:
                             safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", file_name)
                             dest = media_root / f"day_{day:02d}" / safe_name
                             
-                            # Ensure destination directory exists
+                            # Убеждаемся, что директория назначения существует
                             dest.parent.mkdir(parents=True, exist_ok=True)
                             
                             should_skip = self._should_skip_download(dest, folder_file.get("size"), folder_file.get("modifiedTime"))
@@ -628,12 +571,11 @@ class DriveContentSync:
                                 logger.info(f"   ✅ Downloaded media file from folder: {file_name} (total downloaded: {media_downloaded})")
                             else:
                                 logger.info(f"   📁     File already exists and up-to-date, skipping download: {dest}")
-                                skipped_links += 1
                             
                             processed_links += 1
                             rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
                             
-                            # Create marker for this file
+                            # Создаем маркер для этого файла
                             marker_id = f"MEDIA_{file_id}_{len(media_markers)}"
                             media_markers[marker_id] = {
                                 "type": media_type,
@@ -647,12 +589,16 @@ class DriveContentSync:
                             
                             media_items.append({"type": media_type, "path": rel_path, "marker_id": marker_id})
                         
-                        # Replace folder link with all markers (one per line or comma-separated)
+                        # Заменяем ссылку на папку всеми маркерами (по одному на строку или через запятую)
                         if folder_markers:
-                            # Replace folder URL with all markers, one per line
+                            # Заменяем URL папки всеми маркерами, по одному на строку
                             markers_text = "\n".join([f"[{m}]" for m in folder_markers])
                             replaced_in_lesson = False
                             replaced_in_task = False
+                            replaced_in_intro = False
+                            replaced_in_about_me = False
+                            
+                            # ВАЖНО: Заменяем точную ссылку в каждом поле текста
                             if link_url in lesson_text:
                                 lesson_text = lesson_text.replace(link_url, markers_text)
                                 replaced_in_lesson = True
@@ -661,21 +607,25 @@ class DriveContentSync:
                                 task_text = task_text.replace(link_url, markers_text)
                                 replaced_in_task = True
                                 logger.info(f"   ✅ Replaced Drive folder link in task_text with {len(folder_markers)} markers")
+                            if intro_text and link_url in intro_text:
+                                intro_text = intro_text.replace(link_url, markers_text)
+                                replaced_in_intro = True
+                                logger.info(f"   ✅ Replaced Drive folder link in intro_text with {len(folder_markers)} markers")
+                            if about_me_text and link_url in about_me_text:
+                                about_me_text = about_me_text.replace(link_url, markers_text)
+                                replaced_in_about_me = True
+                                logger.info(f"   ✅ Replaced Drive folder link in about_me_text with {len(folder_markers)} markers")
                             
-                            if not replaced_in_lesson and not replaced_in_task:
-                                logger.warning(f"   ⚠️ Drive folder link not found in lesson_text or task_text: {link_url[:60]}...")
+                            if not replaced_in_lesson and not replaced_in_task and not replaced_in_intro and not replaced_in_about_me:
+                                logger.warning(f"   ⚠️ Drive folder link not found in any text field: {link_url[:60]}...")
                             
                             logger.info(f"   📁 Folder processed: {folder_media_count} media files, {len(folder_markers)} markers created")
                         else:
                             logger.warning(f"   ⚠️ No media files found in folder {folder_id}")
                             skipped_links += 1
                     else:
-                        # Handle single file (existing logic)
+                        # Обрабатываем одиночный файл (существующая логика)
                         logger.info(f"   📎 Processing Drive link: {link_url[:60]}... (file_id: {fid})")
-                        
-                        # Special handling for day 1 video: 1TQMTaSEhWgvJmrE9MJkh9BGsNCyRNtYO
-                        if day == 1 and fid == "1TQMTaSEhWgvJmrE9MJkh9BGsNCyRNtYO":
-                            logger.info(f"   📎   Special handling for day 1 video: {fid}")
                         
                         meta = drive.files().get(fileId=fid, fields="id,name,mimeType,modifiedTime,size").execute()
                         mt = (meta.get("mimeType") or "").lower()
@@ -690,12 +640,12 @@ class DriveContentSync:
                         else:
                             logger.info(f"   📎   Skipping non-media file: {name} (MIME: {mt})")
                             skipped_links += 1
-                            continue  # Skip non-media files
+                            continue  # Пропускаем не-медиа файлы
                         
                         safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", name)
                         dest = media_root / f"day_{day:02d}" / safe_name
                         
-                        # Ensure destination directory exists
+                        # Убеждаемся, что директория назначения существует
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         
                         should_skip = self._should_skip_download(dest, meta.get("size"), meta.get("modifiedTime"))
@@ -712,14 +662,14 @@ class DriveContentSync:
                             logger.info(f"   ✅ Downloaded media file: {name} (total downloaded: {media_downloaded})")
                         else:
                             logger.info(f"   📎   File already exists and up-to-date, skipping download: {dest}")
-                            # Count existing files as "processed" for reporting
+                            # Считаем существующие файлы как "обработанные" для отчетности
                             skipped_links += 1
                         
                         processed_links += 1
                         rel_path = str(dest.relative_to(project_root)).replace("\\", "/")
                         
-                        # CRITICAL: Create marker ALWAYS, even if file was skipped
-                        # The marker is needed for inline insertion regardless of download status
+                        # КРИТИЧЕСКИ ВАЖНО: Создаем маркер ВСЕГДА, даже если файл был пропущен
+                        # Маркер нужен для встроенной вставки независимо от статуса скачивания
                         marker_id = f"MEDIA_{fid}_{len(media_markers)}"
                         media_markers[marker_id] = {
                             "type": media_type,
@@ -729,15 +679,16 @@ class DriveContentSync:
                         }
                         logger.info(f"   ✅ Created media marker: [{marker_id}] for file {name} (path: {rel_path})")
                         
-                        # Replace link in text with marker
-                        # Use the original URL from text (link_url) for exact replacement
+                        # Заменяем ссылку в тексте на маркер
+                        # Используем оригинальный URL из текста (link_url) для точной замены
                         marker_placeholder = f"[{marker_id}]"
-                        # Replace all occurrences of the link URL in both texts, intro_text, and about_me_text
+                        # Заменяем все вхождения ссылки URL в обоих текстах, intro_text, и about_me_text
                         replaced_in_lesson = False
                         replaced_in_task = False
                         replaced_in_intro = False
                         replaced_in_about_me = False
                         
+                        # ВАЖНО: Заменяем точную ссылку в каждом поле текста
                         if link_url in lesson_text:
                             lesson_text = lesson_text.replace(link_url, marker_placeholder)
                             replaced_in_lesson = True
@@ -769,7 +720,7 @@ class DriveContentSync:
             if drive_links:
                 logger.info(f"   📎 Day {day} summary: {processed_links} processed, {skipped_links} skipped, {error_links} errors, {media_downloaded} downloaded")
 
-            # Split lesson into posts by square brackets (if not already split)
+            # Разделяем урок на посты по квадратным скобкам (если еще не разделен)
             # ВАЖНО: Если урок уже был разделен на посты в _split_master_doc, 
             # нужно разделить его снова после замены ссылок на маркеры,
             # чтобы маркеры медиа остались в правильных постах
@@ -791,7 +742,7 @@ class DriveContentSync:
                 "task": task_text,
             }
             
-            # Store intro_text and about_me_text if they were extracted from master doc
+            # Сохраняем intro_text и about_me_text, если они были извлечены из мастер-документа
             if intro_text:
                 entry["intro_text"] = intro_text
             if about_me_text:
@@ -799,8 +750,8 @@ class DriveContentSync:
             
             if media_items:
                 entry["media"] = media_items
-            # CRITICAL: Store media markers for inline insertion
-            # Always store markers if they exist, even if no files were downloaded
+            # КРИТИЧЕСКИ ВАЖНО: Сохраняем маркеры медиа для встроенной вставки
+            # Всегда сохраняем маркеры, если они существуют, даже если файлы не были скачаны
             if media_markers:
                 entry["media_markers"] = media_markers
                 logger.info(f"   ✅ Stored {len(media_markers)} media_markers in entry for day {day}")
@@ -940,6 +891,8 @@ class DriveContentSync:
         Allowed tags (Telegram HTML): b/strong, i/em, u/ins, s/strike/del, code, pre,
         a (href only), tg-spoiler, blockquote.
         Also supports span class="tg-spoiler" (Telegram spoiler).
+        
+        ВАЖНО: Сохраняет все форматирование (пробелы, отступы, пунктуацию, эмодзи)
         """
         warnings: List[str] = []
 
@@ -961,6 +914,7 @@ class DriveContentSync:
                 self.out: List[str] = []
 
             def handle_data(self, data: str) -> None:
+                # Сохраняем данные как есть (включая пробелы, отступы, эмодзи)
                 self.out.append(data)
 
             def handle_entityref(self, name: str) -> None:
@@ -1396,13 +1350,13 @@ class DriveContentSync:
                 title = f"День {day}"
 
             # Split lesson into posts by square brackets
-            lesson_posts = DriveContentSync._split_lesson_into_posts((lesson_text or "").strip())
+            lesson_posts = DriveContentSync._split_lesson_into_posts((lesson_text or "").rstrip())
             
             entry: Dict[str, Any] = {
                 "day_number": day,
                 "title": title,
                 "text": lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else ""),
-                "task": (task_text or "").strip(),
+                "task": (task_text or "").rstrip(),
             }
             if media_items:
                 entry["media"] = media_items
