@@ -224,6 +224,10 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_admin_promo_share, F.data.startswith("admin:promo:share:"))
         self.dp.callback_query.register(self.handle_admin_promo_delete, F.data.startswith("admin:promo:delete:"))
         self.dp.callback_query.register(self.handle_admin_promo_send, F.data.startswith("admin:promo:send:"))
+        # Questions list callbacks
+        self.dp.callback_query.register(self.handle_questions_unanswered, F.data == "admin:questions:unanswered")
+        self.dp.callback_query.register(self.handle_questions_answered, F.data == "admin:questions:answered")
+        self.dp.callback_query.register(self.handle_questions_back, F.data == "admin:questions:back")
         # Always restore persistent keyboard after inline callbacks (some clients hide it).
         self.dp.callback_query.register(self._restore_admin_keyboard_after_callback)
         
@@ -233,6 +237,7 @@ class AdminBot:
         # Persistent keyboard buttons
         self.dp.message.register(self.handle_stats_button, F.text == "📊 Статистика")
         self.dp.message.register(self.handle_users_button, F.text == "👥 Пользователи")
+        self.dp.message.register(self.handle_questions_button, F.text == "❓ Вопросы")
         self.dp.message.register(self.handle_settings_button, F.text == "⚙️ Настройки")
         self.dp.message.register(self.handle_sync_button, F.text == "🔄 Обновить контент")
         self.dp.message.register(self.handle_restore_button, F.text == "⏪ Откатить обновление")
@@ -284,10 +289,11 @@ class AdminBot:
                     KeyboardButton(text="👥 Пользователи")
                 ],
                 [
-                    KeyboardButton(text="⚙️ Настройки"),
-                    KeyboardButton(text="🔄 Обновить контент")
+                    KeyboardButton(text="❓ Вопросы"),
+                    KeyboardButton(text="⚙️ Настройки")
                 ],
                 [
+                    KeyboardButton(text="🔄 Обновить контент"),
                     KeyboardButton(text="⏪ Откатить обновление")
                 ]
             ],
@@ -1867,6 +1873,281 @@ class AdminBot:
     async def handle_users_button(self, message: Message):
         """Handle users button from keyboard."""
         await self.handle_users(message)
+    
+    async def handle_questions_button(self, message: Message):
+        """Handle questions button from keyboard - show list of all questions."""
+        try:
+            await self.db.connect()
+            
+            # Получаем статистику вопросов
+            stats = await self.question_service.get_questions_stats()
+            
+            # Получаем все вопросы (последние 50)
+            questions = await self.question_service.get_all_questions(limit=50)
+            
+            if not questions:
+                await message.answer("❓ <b>Вопросы</b>\n\nВопросы не найдены.")
+                return
+            
+            # Формируем заголовок со статистикой
+            text = (
+                f"❓ <b>Вопросы</b>\n\n"
+                f"📊 <b>Статистика:</b>\n"
+                f"Всего: {stats.get('total', 0)}\n"
+                f"✅ Отвечено: {stats.get('answered', 0)}\n"
+                f"⏳ Без ответа: {stats.get('unanswered', 0)}\n\n"
+                f"{'─' * 30}\n\n"
+            )
+            
+            # Группируем вопросы: сначала без ответа, потом с ответом
+            unanswered = [q for q in questions if not q.get('answered_at')]
+            answered = [q for q in questions if q.get('answered_at')]
+            
+            # Показываем сначала неотвеченные
+            if unanswered:
+                text += f"⏳ <b>Без ответа ({len(unanswered)}):</b>\n\n"
+                for q in unanswered[:20]:  # Показываем первые 20
+                    user_name = self._format_user_name_from_question(q)
+                    day = q.get('day_number') or q.get('lesson_id') or '?'
+                    question_id = q.get('question_id', '?')
+                    question_preview = (q.get('question_text') or '🎤 Голосовое')[:50]
+                    if len(question_preview) < len(q.get('question_text') or ''):
+                        question_preview += "..."
+                    
+                    # Форматируем дату
+                    created_at = q.get('created_at')
+                    date_str = ""
+                    if created_at:
+                        try:
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                            date_str = dt.strftime("%d.%m %H:%M")
+                        except:
+                            date_str = created_at[:10] if created_at else ""
+                    
+                    text += (
+                        f"🔴 #{question_id} | День {day} | {user_name}\n"
+                        f"   {question_preview}\n"
+                        f"   📅 {date_str}\n\n"
+                    )
+                
+                if len(unanswered) > 20:
+                    text += f"   ... и еще {len(unanswered) - 20} без ответа\n\n"
+                text += f"{'─' * 30}\n\n"
+            
+            # Показываем отвеченные (первые 10)
+            if answered:
+                text += f"✅ <b>Отвечено ({len(answered)}):</b>\n\n"
+                for q in answered[:10]:  # Показываем первые 10 отвеченных
+                    user_name = self._format_user_name_from_question(q)
+                    day = q.get('day_number') or q.get('lesson_id') or '?'
+                    question_id = q.get('question_id', '?')
+                    question_preview = (q.get('question_text') or '🎤 Голосовое')[:40]
+                    if len(question_preview) < len(q.get('question_text') or ''):
+                        question_preview += "..."
+                    
+                    # Форматируем дату ответа
+                    answered_at = q.get('answered_at')
+                    date_str = ""
+                    if answered_at:
+                        try:
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(answered_at.replace('Z', '+00:00'))
+                            date_str = dt.strftime("%d.%m %H:%M")
+                        except:
+                            date_str = answered_at[:10] if answered_at else ""
+                    
+                    text += (
+                        f"🟢 #{question_id} | День {day} | {user_name}\n"
+                        f"   {question_preview} | ✅ {date_str}\n\n"
+                    )
+                
+                if len(answered) > 10:
+                    text += f"   ... и еще {len(answered) - 10} отвеченных\n\n"
+            
+            # Добавляем кнопки для навигации
+            keyboard_buttons = []
+            if unanswered:
+                # Кнопка для просмотра неотвеченных
+                keyboard_buttons.append([
+                    InlineKeyboardButton(
+                        text=f"⏳ Без ответа ({len(unanswered)})",
+                        callback_data="admin:questions:unanswered"
+                    )
+                ])
+            
+            if answered:
+                # Кнопка для просмотра всех отвеченных
+                keyboard_buttons.append([
+                    InlineKeyboardButton(
+                        text=f"✅ Отвечено ({len(answered)})",
+                        callback_data="admin:questions:answered"
+                    )
+                ])
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons) if keyboard_buttons else None
+            
+            # Разбиваем на части, если сообщение слишком длинное
+            max_length = 4000
+            if len(text) > max_length:
+                parts = text.split('\n\n')
+                current_text = ""
+                for part in parts:
+                    if len(current_text) + len(part) + 2 > max_length:
+                        await message.answer(current_text, reply_markup=keyboard if keyboard and current_text == text[:len(current_text)] else None, parse_mode="HTML")
+                        current_text = part + "\n\n"
+                        keyboard = None  # Клавиатуру показываем только в последнем сообщении
+                    else:
+                        current_text += part + "\n\n"
+                if current_text:
+                    await message.answer(current_text, reply_markup=keyboard, parse_mode="HTML")
+            else:
+                await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                
+        except Exception as e:
+            logger.error(f"Error showing questions list: {e}", exc_info=True)
+            await message.answer("❌ Ошибка при получении списка вопросов.")
+    
+    def _format_user_name_from_question(self, question: dict) -> str:
+        """Format user name from question dict."""
+        first_name = question.get('first_name', '')
+        last_name = question.get('last_name', '')
+        username = question.get('username', '')
+        
+        name = f"{first_name} {last_name}".strip() if first_name or last_name else "Пользователь"
+        if username:
+            name += f" (@{username})"
+        
+        return name[:40]  # Ограничиваем длину
+    
+    async def handle_questions_unanswered(self, callback: CallbackQuery):
+        """Handle unanswered questions filter button."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        try:
+            await self.db.connect()
+            unanswered = await self.question_service.get_unanswered_questions(limit=100)
+            
+            if not unanswered:
+                await callback.message.answer("⏳ Нет неотвеченных вопросов.")
+                return
+            
+            text = f"⏳ <b>Неотвеченные вопросы ({len(unanswered)}):</b>\n\n"
+            
+            for q in unanswered:
+                user_name = self._format_user_name_from_question(q)
+                day = q.get('day_number') or q.get('lesson_id') or '?'
+                question_id = q.get('question_id', '?')
+                question_text = q.get('question_text', '')
+                question_preview = question_text[:60] if question_text else '🎤 Голосовое'
+                if question_text and len(question_text) > 60:
+                    question_preview += "..."
+                
+                # Форматируем дату
+                created_at = q.get('created_at')
+                date_str = ""
+                if created_at:
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                        date_str = dt.strftime("%d.%m %H:%M")
+                    except:
+                        date_str = created_at[:10] if created_at else ""
+                
+                text += (
+                    f"🔴 #{question_id} | День {day} | {user_name}\n"
+                    f"   {question_preview}\n"
+                    f"   📅 {date_str}\n\n"
+                )
+                
+                # Разбиваем на части, если слишком длинно
+                if len(text) > 3500:
+                    await callback.message.answer(text, parse_mode="HTML")
+                    text = ""
+            
+            if text:
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="admin:questions:back")]
+                ])
+                await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                
+        except Exception as e:
+            logger.error(f"Error showing unanswered questions: {e}", exc_info=True)
+            await callback.message.answer("❌ Ошибка при получении неотвеченных вопросов.")
+    
+    async def handle_questions_answered(self, callback: CallbackQuery):
+        """Handle answered questions filter button."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        try:
+            await self.db.connect()
+            all_questions = await self.question_service.get_all_questions(limit=100)
+            answered = [q for q in all_questions if q.get('answered_at')]
+            
+            if not answered:
+                await callback.message.answer("✅ Нет отвеченных вопросов.")
+                return
+            
+            text = f"✅ <b>Отвеченные вопросы ({len(answered)}):</b>\n\n"
+            
+            for q in answered:
+                user_name = self._format_user_name_from_question(q)
+                day = q.get('day_number') or q.get('lesson_id') or '?'
+                question_id = q.get('question_id', '?')
+                question_text = q.get('question_text', '')
+                question_preview = question_text[:50] if question_text else '🎤 Голосовое'
+                if question_text and len(question_text) > 50:
+                    question_preview += "..."
+                
+                # Форматируем дату ответа
+                answered_at = q.get('answered_at')
+                date_str = ""
+                if answered_at:
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(answered_at.replace('Z', '+00:00'))
+                        date_str = dt.strftime("%d.%m %H:%M")
+                    except:
+                        date_str = answered_at[:10] if answered_at else ""
+                
+                text += (
+                    f"🟢 #{question_id} | День {day} | {user_name}\n"
+                    f"   {question_preview} | ✅ {date_str}\n\n"
+                )
+                
+                # Разбиваем на части, если слишком длинно
+                if len(text) > 3500:
+                    await callback.message.answer(text, parse_mode="HTML")
+                    text = ""
+            
+            if text:
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="admin:questions:back")]
+                ])
+                await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                
+        except Exception as e:
+            logger.error(f"Error showing answered questions: {e}", exc_info=True)
+            await callback.message.answer("❌ Ошибка при получении отвеченных вопросов.")
+    
+    async def handle_questions_back(self, callback: CallbackQuery):
+        """Handle back button from questions filter - show full list."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        # Просто вызываем основной обработчик списка вопросов
+        from aiogram.types import Message
+        # Создаем фиктивное сообщение для вызова handle_questions_button
+        fake_message = callback.message
+        await self.handle_questions_button(fake_message)
     
     async def handle_settings_button(self, message: Message):
         """Handle settings button from keyboard."""
