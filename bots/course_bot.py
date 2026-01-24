@@ -5212,8 +5212,11 @@ class CourseBot:
     
     async def handle_curator_feedback(self, message: Message):
         """
-        Handle curator feedback reply to question (anonymous response).
+        Handle curator feedback reply to assignment (anonymous response).
         Works in PUP (premium group) - any user with access can reply.
+        
+        NOTE: Answers to questions are handled by admin_bot.py, not here.
+        This handler only processes assignment feedback.
         """
         if not message.reply_to_message:
             raise SkipHandler()
@@ -5243,29 +5246,35 @@ class CourseBot:
         
         # Проверяем, это ответ на вопрос или на задание
         # Если в сообщении есть "Новый вопрос" или "Вопрос:", это вопрос
-        # Также проверяем, если это ответ на сообщение с кнопкой "Ответить"
+        # ВАЖНО: Ответы на вопросы обрабатываются через admin_bot.py, не здесь
         is_question = (
             "❓" in reply_text or 
             "Новый вопрос" in reply_text or 
             "Вопрос:" in reply_text or
             "Ответ на вопрос" in reply_text or
-            "question:answer:" in str(message.reply_to_message.reply_markup) if message.reply_to_message and message.reply_to_message.reply_markup else False
+            "curator_reply:" in str(message.reply_to_message.reply_markup) if message.reply_to_message and message.reply_to_message.reply_markup else False
         )
         
-        # Проверяем, есть ли в callback_data кнопки question:answer:
+        # Проверяем, есть ли в callback_data кнопки curator_reply: или question:answer:
         if not is_question and message.reply_to_message and message.reply_to_message.reply_markup:
             try:
                 for row in message.reply_to_message.reply_markup.inline_keyboard:
                     for button in row:
-                        if button.callback_data and "question:answer:" in button.callback_data:
-                            is_question = True
-                            break
+                        if button.callback_data:
+                            if "curator_reply:" in button.callback_data or "question:answer:" in button.callback_data:
+                                is_question = True
+                                break
                     if is_question:
                         break
             except:
                 pass
         
+        # Если это вопрос - пропускаем обработку (admin_bot.py обработает)
         if is_question:
+            raise SkipHandler()
+        
+        # Обрабатываем только задания
+        if False:  # Удаляем старую логику обработки вопросов
             # Это ответ на вопрос
             # Сначала пытаемся извлечь question_id из кнопки
             question_id = None
