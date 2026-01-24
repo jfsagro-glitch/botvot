@@ -2397,6 +2397,7 @@ class CourseBot:
         Returns:
             set: Множество кортежей (file_id, normalized_path, filename) для отправленных медиа
         """
+        from pathlib import Path  # Импортируем Path для использования в функции
         logger.info(f"   📎 _send_text_with_inline_media called for user {user_id}, day {day}")
         logger.info(f"   📎 Text length: {len(text)}, media_markers count: {len(media_markers) if media_markers else 0}")
         
@@ -2490,7 +2491,6 @@ class CourseBot:
                             if sent_message:
                                 last_sent_message_id = sent_message.message_id
                                 # Отслеживаем отправленное медиа
-                                from pathlib import Path
                                 normalized_path = str(Path(media_path)).replace('\\', '/') if media_path else ""
                                 filename = Path(media_path).name if media_path else ""
                                 sent_media_keys.add((str(cached_file_id), normalized_path, filename))
@@ -2501,7 +2501,6 @@ class CourseBot:
                     
                     if not cached_file_id:
                         # Загружаем файл с диска и сохраняем file_id
-                        from pathlib import Path
                         from aiogram.types import FSInputFile
                         
                         # Определяем абсолютный путь к файлу
