@@ -3812,6 +3812,7 @@ class CourseBot:
                                     # Собираем file_id и пути медиа, которые будут отправлены через маркеры в постах
                                     sent_media_file_ids = set()
                                     sent_media_paths = set()
+                                    sent_media_filenames = set()
                                     if media_markers:
                                         for marker_id, marker_info in media_markers.items():
                                             if any(f"[{marker_id}]" in post for post in lesson_posts):
@@ -3905,6 +3906,7 @@ class CourseBot:
                     # Собираем file_id и пути медиа, которые будут отправлены через маркеры в постах
                     sent_media_file_ids = set()
                     sent_media_paths = set()
+                    sent_media_filenames = set()
                     if media_markers:
                         for marker_id, marker_info in media_markers.items():
                             if any(f"[{marker_id}]" in post for post in lesson_posts):
@@ -3982,6 +3984,7 @@ class CourseBot:
                     # Проверяем маркеры в тексте
                     sent_media_file_ids = set()
                     sent_media_paths = set()
+                    sent_media_filenames = set()
                     if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
                         await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
                         # Собираем file_id и пути медиа, которые были отправлены через маркеры
