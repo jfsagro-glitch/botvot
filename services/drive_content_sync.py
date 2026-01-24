@@ -1138,39 +1138,49 @@ class DriveContentSync:
         
         deleted_count = 0
         try:
-            # Удаляем все файлы и поддиректории в media_root
+            # Сначала собираем все файлы для удаления (чтобы избежать проблем с изменением структуры во время итерации)
+            files_to_delete = []
+            dirs_to_delete = []
+            
             for item in media_root.iterdir():
                 if item.is_file():
-                    item.unlink()
-                    deleted_count += 1
-                    logger.debug(f"   🗑️ Deleted file: {item.name}")
+                    files_to_delete.append(item)
                 elif item.is_dir():
-                    # Рекурсивно удаляем содержимое директории (файлы)
+                    # Собираем все файлы из поддиректорий
                     for subitem in item.rglob("*"):
                         if subitem.is_file():
-                            subitem.unlink()
-                            deleted_count += 1
-                            logger.debug(f"   🗑️ Deleted file: {subitem}")
-                    # Удаляем саму директорию (используем shutil для надежности)
+                            files_to_delete.append(subitem)
+                    dirs_to_delete.append(item)
+            
+            # Удаляем все файлы
+            for file_path in files_to_delete:
+                try:
+                    file_path.unlink()
+                    deleted_count += 1
+                    logger.debug(f"   🗑️ Deleted file: {file_path.relative_to(media_root)}")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Could not delete file {file_path}: {e}")
+            
+            # Удаляем все директории (shutil.rmtree удаляет рекурсивно, включая все файлы)
+            for dir_path in dirs_to_delete:
+                try:
+                    shutil.rmtree(dir_path)
+                    logger.debug(f"   🗑️ Deleted directory: {dir_path.relative_to(media_root)}")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Could not delete directory {dir_path}: {e}")
+                    # Пробуем удалить оставшиеся файлы вручную
+                    for remaining in dir_path.rglob("*"):
+                        if remaining.is_file():
+                            try:
+                                remaining.unlink()
+                                deleted_count += 1
+                            except Exception:
+                                pass
+                    # Пробуем удалить директорию снова
                     try:
-                        shutil.rmtree(item)
-                        logger.debug(f"   🗑️ Deleted directory: {item.name}")
-                    except OSError as e:
-                        # Если директория не пуста, пробуем удалить оставшиеся файлы
-                        logger.warning(f"   ⚠️ Could not remove directory {item.name}: {e}")
-                        # Пробуем удалить оставшиеся файлы вручную
-                        for remaining in item.rglob("*"):
-                            if remaining.is_file():
-                                try:
-                                    remaining.unlink()
-                                    deleted_count += 1
-                                except Exception:
-                                    pass
-                        # Пробуем удалить директорию снова
-                        try:
-                            item.rmdir()
-                        except Exception:
-                            pass
+                        dir_path.rmdir()
+                    except Exception:
+                        pass
             
             logger.info(f"✅ Cleaned {deleted_count} media files from {media_root}")
             return deleted_count
