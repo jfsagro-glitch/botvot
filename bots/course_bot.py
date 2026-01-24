@@ -3660,13 +3660,10 @@ class CourseBot:
                     # Анимация перед отправкой видео
                     await send_typing_action(self.bot, user.user_id, 0.5)
                     
-                    # Текст для caption видео - должен браться из Google Doc, без эмодзи
-                    # Если текст не в Google Doc, используем базовый текст без эмодзи
-                    video_caption = (
-                        "Добро пожаловать на корвет, исследователи!\n\n"
-                        "Наш корабль берёт курс на новые горизонты. "
-                        "Но прежде чем отправиться, я задам вам первый вопрос. Даже три."
-                    )
+                    # Do not hardcode caption text here: it causes duplicate text if the same lines
+                    # are already present in the lesson body. If you need a caption, store it in
+                    # lessons.json (e.g. lesson1_video_caption) and keep the body text unchanged.
+                    video_caption = (lesson_data.get("lesson1_video_caption") or "").strip() or None
                     
                     # Отправляем видео с текстом
                     media_type = lesson1_video_media.get("type", "video")
@@ -3772,8 +3769,11 @@ class CourseBot:
             if task:
                 # Анимация перед отправкой задания
                 await send_typing_action(self.bot, user.user_id, 0.6)
-                # Выделяем задание отдельным блоком
-                task_message = f"📝 Задание:\n\n{task}".strip()
+                # Avoid duplicating the "Задание" heading if it's already present in the task text.
+                if re.match(r"^\s*(?:📝\s*)?задание\b", (task or ""), re.IGNORECASE):
+                    task_message = (task or "").strip()
+                else:
+                    task_message = f"📝 Задание:\n\n{task}".strip()
             
             # If we will show previews for task links, remove URL-only lines from the task message.
             task_message_clean = task_message
