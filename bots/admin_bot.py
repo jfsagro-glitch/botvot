@@ -1643,6 +1643,7 @@ class AdminBot:
         # Проверяем, что пользователь существует в БД
         # Для course бота пользователь должен существовать (создается при /start или при первом вопросе)
         # Для sales бота пользователь может не существовать в БД
+        # ВАЖНО: Ответы на вопросы отправляются ВСЕМ пользователям, независимо от тарифа (в отличие от заданий)
         user = None
         if bot_type == "course":
             user = await self.user_service.get_user(user_id)
@@ -1651,6 +1652,11 @@ class AdminBot:
                 # Попробуем отправить сообщение все равно (может быть пользователь начал диалог, но не зарегистрирован)
                 logger.warning(f"User {user_id} not found in DB, but attempting to send message anyway")
                 # Не выбрасываем ошибку сразу - попробуем отправить, Telegram сам вернет ошибку если чата нет
+            else:
+                # Логируем информацию о пользователе для отладки
+                tariff_info = user.tariff.value if user.tariff else "None"
+                logger.info(f"Sending answer to user {user_id}, tariff: {tariff_info}, has_access: {user.has_access()}")
+                # ВАЖНО: Не проверяем тариф - ответы на вопросы отправляются всем, включая BASIC
 
         # Determine which bot to use
         if bot_type == "sales":
