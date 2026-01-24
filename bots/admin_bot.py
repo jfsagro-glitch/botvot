@@ -1418,13 +1418,23 @@ class AdminBot:
                 pass
         
         # Try extracting from callback data if available
+        question_id = None
         if not user_id and hasattr(message.reply_to_message, 'reply_markup'):
             if message.reply_to_message.reply_markup:
                 for row in message.reply_to_message.reply_markup.inline_keyboard:
                     for button in row:
                         if button.callback_data:
-                            # Try curator_reply format: curator_reply:user_id:lesson_day
+                            # Try curator_reply format: curator_reply:question_id (new format)
                             if "curator_reply:" in button.callback_data:
+                                try:
+                                    parts = button.callback_data.split(":")
+                                    if len(parts) >= 2:
+                                        question_id = int(parts[1])
+                                    break
+                                except (ValueError, IndexError):
+                                    pass
+                            # Try curator_reply format: curator_reply:user_id:lesson_day (old format for backward compatibility)
+                            elif "curator_reply:" in button.callback_data and len(button.callback_data.split(":")) >= 3:
                                 try:
                                     parts = button.callback_data.split(":")
                                     if len(parts) >= 2:
@@ -1445,6 +1455,24 @@ class AdminBot:
                                     break
                                 except (ValueError, IndexError):
                                     pass
+        
+        # If we have question_id, get question from DB
+        if question_id:
+            try:
+                from services.question_service import QuestionService
+                from core.database import Database
+                db = Database()
+                await db.connect()
+                try:
+                    question_service = QuestionService(db)
+                    question = await question_service.get_question(question_id)
+                    if question:
+                        user_id = question.get("user_id")
+                        lesson_day = question.get("day_number") or question.get("lesson_id")
+                finally:
+                    await db.close()
+            except Exception as e:
+                logger.error(f"Error getting question from DB: {e}", exc_info=True)
         
         # Extract lesson day from text
         if "📚 Урок:" in reply_text or "День" in reply_text:

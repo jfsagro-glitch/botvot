@@ -4852,62 +4852,39 @@ class CourseBot:
         except Exception:
             pass
         
-        # Форматируем вопрос для ПУП (премиум-группы)
+        # Форматируем вопрос для ПУП (админ-бот)
         curator_message = await self.question_service.format_question_for_admin(question_data)
         
-        # Send to PUP (premium group) so all users with access can see and reply
+        # Send to PUP (admin bot) - same mechanism as assignments
+        question_id = question_data.get("question_id")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="💬 Ответить пользователю",
-                    callback_data=f"curator_reply:{user_id}:{lesson_day}"
+                    callback_data=f"curator_reply:{question_id}"
                 )
             ]
         ])
         
-        # Отправляем в ПУП (премиум-группу) вместо личного чата админа
-        if not Config.PREMIUM_GROUP_ID:
-            logger.error("PREMIUM_GROUP_ID not configured. Cannot forward question to PUP.")
+        # Отправляем в ПУП через админ-бот (как задания)
+        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+        if not is_admin_bot_configured():
+            logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward question.")
             await message.answer("❌ Не удалось отправить вопрос: канал кураторов не настроен.")
             return
 
         try:
-            # Парсим chat_id из строки (используем тот же метод, что в Config)
-            def parse_chat_id(raw: str) -> int:
-                s = (raw or "").strip()
-                if not s:
-                    return 0
-                if s.startswith("#-") and s[2:].isdigit():
-                    return int(f"-100{s[2:]}")
-                try:
-                    return int(s)
-                except Exception:
-                    return 0
-            
-            pup_chat_id = parse_chat_id(Config.PREMIUM_GROUP_ID)
-            if pup_chat_id == 0:
-                logger.error(f"Invalid PREMIUM_GROUP_ID: {Config.PREMIUM_GROUP_ID}")
-                await message.answer("❌ Не удалось отправить вопрос: канал кураторов не настроен.")
-                return
-            
-            # Отправляем в ПУП через курс-бота
-            sent_message = await self.bot.send_message(
-                pup_chat_id,
+            ok = await send_to_admin_bot(
                 curator_message,
                 reply_markup=keyboard
             )
+            if not ok:
+                await message.answer("❌ Не удалось отправить вопрос кураторам. Попробуйте позже.")
+                return
             
-            # Сохраняем message_id вопроса в БД
-            question_id = question_data.get("question_id")
-            if question_id and sent_message:
-                await self.question_service.update_pup_message_id(question_id, sent_message.message_id)
-            
-            # Обновляем закрепленное сообщение с кнопкой "Вопросы"
-            await self._update_pup_questions_pinned_message(pup_chat_id)
-            
-            logger.info(f"✅ Question sent to PUP (premium group) from user {user_id}")
+            logger.info(f"✅ Question sent to PUP (admin bot) from user {user_id}, question_id={question_id}")
         except Exception as e:
-            logger.error(f"Error sending question to PUP: {e}", exc_info=True)
+            logger.error(f"Error sending question to admin bot: {e}", exc_info=True)
             await message.answer("❌ Не удалось отправить вопрос кураторам. Попробуйте позже.")
             return
         
@@ -4944,64 +4921,44 @@ class CourseBot:
         )
         curator_message = await self.question_service.format_question_for_admin(question_data)
 
+        # Send to PUP (admin bot) - same mechanism as assignments
+        question_id = question_data.get("question_id")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="💬 Ответить пользователю",
-                    callback_data=f"curator_reply:{user_id}:{lesson_day}"
+                    callback_data=f"curator_reply:{question_id}"
                 )
             ]
         ])
 
-        # Отправляем в ПУП (премиум-группу) вместо личного чата админа
-        if not Config.PREMIUM_GROUP_ID:
+        # Отправляем в ПУП через админ-бот (как задания)
+        from utils.admin_helpers import is_admin_bot_configured, send_to_admin_bot
+        if not is_admin_bot_configured():
+            logger.error("Admin bot not configured (ADMIN_BOT_TOKEN / ADMIN_CHAT_ID). Cannot forward question.")
             await message.answer("❌ Не удалось отправить вопрос: канал кураторов не настроен.")
             return
 
         try:
-            # Парсим chat_id из строки (используем тот же метод, что в Config)
-            def parse_chat_id(raw: str) -> int:
-                s = (raw or "").strip()
-                if not s:
-                    return 0
-                if s.startswith("#-") and s[2:].isdigit():
-                    return int(f"-100{s[2:]}")
-                try:
-                    return int(s)
-                except Exception:
-                    return 0
-            
-            pup_chat_id = parse_chat_id(Config.PREMIUM_GROUP_ID)
-            if pup_chat_id == 0:
-                logger.error(f"Invalid PREMIUM_GROUP_ID: {Config.PREMIUM_GROUP_ID}")
-                await message.answer("❌ Не удалось отправить вопрос: канал кураторов не настроен.")
-                return
-            
             # Загружаем голосовое сообщение
             import io
             buf = io.BytesIO()
             await self.bot.download(message.voice, destination=buf)
             
-            # Отправляем в ПУП через курс-бота
-            from aiogram.types import BufferedInputFile
-            sent_message = await self.bot.send_voice(
-                pup_chat_id,
-                BufferedInputFile(buf.getvalue(), filename="voice.ogg"),
-                caption=curator_message,
+            # Отправляем в ПУП через админ-бот (как голосовые задания)
+            ok = await send_to_admin_bot(
+                curator_message,
+                voice_bytes=buf.getvalue(),
+                voice_filename="voice.ogg",
                 reply_markup=keyboard
             )
+            if not ok:
+                await message.answer("❌ Не удалось отправить вопрос кураторам. Попробуйте позже.")
+                return
             
-            # Сохраняем message_id вопроса в БД
-            question_id = question_data.get("question_id")
-            if question_id and sent_message:
-                await self.question_service.update_pup_message_id(question_id, sent_message.message_id)
-            
-            # Обновляем закрепленное сообщение с кнопкой "Вопросы"
-            await self._update_pup_questions_pinned_message(pup_chat_id)
-            
-            logger.info(f"✅ Voice question sent to PUP (premium group) from user {user_id}")
+            logger.info(f"✅ Voice question sent to PUP (admin bot) from user {user_id}, question_id={question_id}")
         except Exception as e:
-            logger.error(f"Error sending voice question to PUP: {e}", exc_info=True)
+            logger.error(f"Error sending voice question to admin bot: {e}", exc_info=True)
             await message.answer("❌ Не удалось отправить вопрос кураторам. Попробуйте позже.")
             return
 
@@ -5104,14 +5061,23 @@ class CourseBot:
             pass
         
         try:
-            # Парсим user_id и lesson_day из callback
-            parts = callback.data.split(":")
-            if len(parts) >= 3:
-                user_id = int(parts[1])
-                lesson_day = int(parts[2])
-            else:
+            # Извлекаем question_id из callback_data
+            # Формат: curator_reply:question_id
+            data_parts = callback.data.split(":")
+            if len(data_parts) < 2:
                 await callback.message.answer("❌ Ошибка: неверный формат данных.")
                 return
+            
+            question_id = int(data_parts[1])
+            
+            # Получаем информацию о вопросе из БД
+            question = await self.question_service.get_question(question_id)
+            if not question:
+                await callback.message.answer("❌ Вопрос не найден.")
+                return
+            
+            user_id = question.get("user_id")
+            lesson_day = question.get("day_number") or question.get("lesson_id")
             
             # Проверяем, откуда пришел callback (группа или личный чат)
             if callback.message.chat.type in ["group", "supergroup"]:
@@ -5203,9 +5169,20 @@ class CourseBot:
                 try:
                     for row in message.reply_to_message.reply_markup.inline_keyboard:
                         for button in row:
-                            if button.callback_data and "question:answer:" in button.callback_data:
-                                question_id = int(button.callback_data.split(":")[-1])
-                                break
+                            if button.callback_data:
+                                # Новый формат: curator_reply:question_id
+                                if "curator_reply:" in button.callback_data:
+                                    try:
+                                        parts = button.callback_data.split(":")
+                                        if len(parts) >= 2:
+                                            question_id = int(parts[1])
+                                            break
+                                    except (ValueError, IndexError):
+                                        pass
+                                # Старый формат: question:answer:question_id
+                                elif "question:answer:" in button.callback_data:
+                                    question_id = int(button.callback_data.split(":")[-1])
+                                    break
                         if question_id:
                             break
                 except:

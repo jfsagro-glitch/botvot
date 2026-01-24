@@ -136,6 +136,18 @@ class DriveContentSync:
         return links
 
     @staticmethod
+    def _clean_text_markers(text: str) -> str:
+        """
+        Удаляет служебные маркеры [a][b][c][d] из текста урока.
+        """
+        if not text:
+            return text
+        # Удаляем [a][b][c][d] в конце текста (может быть с пробелами/переносами строк перед ним)
+        # Используем DOTALL чтобы . включал переносы строк, и MULTILINE для ^ и $
+        text = re.sub(r'\s*\[a\]\[b\]\[c\]\[d\]\s*$', '', text, flags=re.MULTILINE | re.DOTALL)
+        return text
+    
+    @staticmethod
     def _split_lesson_into_posts(lesson_text: str, max_length: int = 4000) -> List[str]:
         """
         Разделяет текст урока на посты с сохранением форматирования.
@@ -785,9 +797,13 @@ class DriveContentSync:
             
             # Сохраняем текст: список блоков, если больше одного, иначе строка
             text_to_save = lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else "")
+            
+            # Удаляем служебные маркеры [a][b][c][d] из текста
             if isinstance(text_to_save, list):
+                text_to_save = [DriveContentSync._clean_text_markers(post) for post in text_to_save]
                 logger.info(f"   ✅ Day {day}: Saving {len(text_to_save)} blocks as list (total {saved_length} chars)")
             else:
+                text_to_save = DriveContentSync._clean_text_markers(text_to_save)
                 logger.info(f"   ✅ Day {day}: Saving single block as string ({len(text_to_save) if text_to_save else 0} chars)")
             
             entry: Dict[str, Any] = {
@@ -1581,9 +1597,13 @@ class DriveContentSync:
             
             # Сохраняем текст: список блоков, если больше одного, иначе строка
             text_to_save = lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else "")
+            
+            # Удаляем служебные маркеры [a][b][c][d] из текста
             if isinstance(text_to_save, list):
+                text_to_save = [DriveContentSync._clean_text_markers(post) for post in text_to_save]
                 logger.info(f"   ✅ Day {day}: Saving {len(text_to_save)} blocks as list (total {saved_length} chars)")
             else:
+                text_to_save = DriveContentSync._clean_text_markers(text_to_save)
                 logger.info(f"   ✅ Day {day}: Saving single block as string ({len(text_to_save) if text_to_save else 0} chars)")
             
             entry: Dict[str, Any] = {
