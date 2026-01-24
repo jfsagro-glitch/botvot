@@ -2115,6 +2115,34 @@ class AdminBot:
         if total_actions > 0:
             activity_percent = min(100, (total_actions / 50) * 100)  # Normalize based on expected activity
         
+        # Данные тестирования
+        test_data_section = ""
+        if (user.question_asking_skill is not None or 
+            user.question_answering_skill is not None or 
+            user.listening_skill is not None or
+            user.mentor_persistence is not None or
+            user.mentor_temperature is not None or
+            user.mentor_charisma is not None):
+            test_data_section = "\n\n📋 <b>Данные тестирования:</b>\n"
+            if user.question_asking_skill is not None:
+                test_data_section += f"  • Умение задавать вопросы: {user.question_asking_skill}/5\n"
+            if user.question_answering_skill is not None:
+                test_data_section += f"  • Умение отвечать на вопросы: {user.question_answering_skill}/5\n"
+            if user.listening_skill is not None:
+                test_data_section += f"  • Умение слушать: {user.listening_skill}/5\n"
+            if user.mentor_persistence is not None:
+                test_data_section += f"  • Настойчивость наставника: {user.mentor_persistence}/5\n"
+            if user.mentor_temperature is not None:
+                test_data_section += f"  • Температура наставника: {user.mentor_temperature}/5\n"
+            if user.mentor_charisma is not None:
+                test_data_section += f"  • Харизма наставника: {user.mentor_charisma}/5\n"
+            if user.mentor_reminders is not None:
+                test_data_section += f"  • Напоминаний в день: {user.mentor_reminders}\n"
+            if getattr(user, "lesson_delivery_time_local", None):
+                test_data_section += f"  • Время доставки уроков: {user.lesson_delivery_time_local}\n"
+            if getattr(user, "mentor_reminder_start_local", None):
+                test_data_section += f"  • Окно напоминаний: {user.mentor_reminder_start_local} - {getattr(user, 'mentor_reminder_end_local', 'N/A')}\n"
+        
         # Top sections
         top_sections = sorted(stats["activity_by_section"].items(), key=lambda x: x[1], reverse=True)[:5]
         sections_text = "\n".join([f"  • {section}: {count}" for section, count in top_sections]) if top_sections else "  Нет данных"
@@ -2144,6 +2172,7 @@ class AdminBot:
             f"📊 <b>Процент активности:</b> {activity_percent:.1f}%\n\n"
             f"📂 <b>Популярные разделы:</b>\n{sections_text}\n\n"
             f"🎯 <b>Популярные действия:</b>\n{actions_text}"
+            f"{test_data_section}"
         )
     
     async def start(self):
