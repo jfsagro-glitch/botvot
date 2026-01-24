@@ -1904,6 +1904,7 @@ class AdminBot:
             answered = [q for q in questions if q.get('answered_at')]
             
             # Показываем сначала неотвеченные
+            keyboard_buttons = []
             if unanswered:
                 text += f"⏳ <b>Без ответа ({len(unanswered)}):</b>\n\n"
                 for q in unanswered[:20]:  # Показываем первые 20
@@ -1930,6 +1931,14 @@ class AdminBot:
                         f"   {question_preview}\n"
                         f"   📅 {date_str}\n\n"
                     )
+                    
+                    # Добавляем кнопку для ответа на каждый неотвеченный вопрос
+                    keyboard_buttons.append([
+                        InlineKeyboardButton(
+                            text=f"💬 Ответить на #{question_id}",
+                            callback_data=f"curator_reply:{question_id}"
+                        )
+                    ])
                 
                 if len(unanswered) > 20:
                     text += f"   ... и еще {len(unanswered) - 20} без ответа\n\n"
@@ -1965,25 +1974,44 @@ class AdminBot:
                 if len(answered) > 10:
                     text += f"   ... и еще {len(answered) - 10} отвеченных\n\n"
             
-            # Добавляем кнопки для навигации
-            keyboard_buttons = []
-            if unanswered:
-                # Кнопка для просмотра неотвеченных
-                keyboard_buttons.append([
-                    InlineKeyboardButton(
-                        text=f"⏳ Без ответа ({len(unanswered)})",
-                        callback_data="admin:questions:unanswered"
+            # Добавляем кнопки для навигации (если еще не добавлены кнопки ответов)
+            if not keyboard_buttons:
+                if unanswered:
+                    # Кнопка для просмотра неотвеченных
+                    keyboard_buttons.append([
+                        InlineKeyboardButton(
+                            text=f"⏳ Без ответа ({len(unanswered)})",
+                            callback_data="admin:questions:unanswered"
+                        )
+                    ])
+                
+                if answered:
+                    # Кнопка для просмотра всех отвеченных
+                    keyboard_buttons.append([
+                        InlineKeyboardButton(
+                            text=f"✅ Отвечено ({len(answered)})",
+                            callback_data="admin:questions:answered"
+                        )
+                    ])
+            else:
+                # Добавляем кнопки навигации в конец
+                nav_buttons = []
+                if unanswered and len(unanswered) > 20:
+                    nav_buttons.append(
+                        InlineKeyboardButton(
+                            text=f"⏳ Все без ответа ({len(unanswered)})",
+                            callback_data="admin:questions:unanswered"
+                        )
                     )
-                ])
-            
-            if answered:
-                # Кнопка для просмотра всех отвеченных
-                keyboard_buttons.append([
-                    InlineKeyboardButton(
-                        text=f"✅ Отвечено ({len(answered)})",
-                        callback_data="admin:questions:answered"
+                if answered:
+                    nav_buttons.append(
+                        InlineKeyboardButton(
+                            text=f"✅ Отвечено ({len(answered)})",
+                            callback_data="admin:questions:answered"
+                        )
                     )
-                ])
+                if nav_buttons:
+                    keyboard_buttons.append(nav_buttons)
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons) if keyboard_buttons else None
             
@@ -2036,6 +2064,7 @@ class AdminBot:
                 return
             
             text = f"⏳ <b>Неотвеченные вопросы ({len(unanswered)}):</b>\n\n"
+            keyboard_buttons = []
             
             for q in unanswered:
                 user_name = self._format_user_name_from_question(q)
@@ -2063,15 +2092,33 @@ class AdminBot:
                     f"   📅 {date_str}\n\n"
                 )
                 
-                # Разбиваем на части, если слишком длинно
-                if len(text) > 3500:
-                    await callback.message.answer(text, parse_mode="HTML")
+                # Добавляем кнопку для ответа на каждый вопрос
+                keyboard_buttons.append([
+                    InlineKeyboardButton(
+                        text=f"💬 Ответить на #{question_id}",
+                        callback_data=f"curator_reply:{question_id}"
+                    )
+                ])
+                
+                # Разбиваем на части, если слишком длинно (с кнопками)
+                if len(text) > 3000:
+                    # Отправляем текущий текст с кнопками
+                    current_keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+                    await callback.message.answer(text, reply_markup=current_keyboard, parse_mode="HTML")
                     text = ""
+                    keyboard_buttons = []
             
             if text:
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="admin:questions:back")]
-                ])
+                # Добавляем кнопку "Назад" в конец
+                if keyboard_buttons:
+                    keyboard_buttons.append([
+                        InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="admin:questions:back")
+                    ])
+                else:
+                    keyboard_buttons = [[
+                        InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="admin:questions:back")
+                    ]]
+                keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
                 await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
                 
         except Exception as e:
