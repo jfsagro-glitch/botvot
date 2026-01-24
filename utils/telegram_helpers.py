@@ -47,6 +47,9 @@ def create_persistent_keyboard(
             ],
             [
                 KeyboardButton(text="🧊 Забыть все")
+            ],
+            [
+                KeyboardButton(text="❓ FAQ")
             ]
         ],
         resize_keyboard=True,
