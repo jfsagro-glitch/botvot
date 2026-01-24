@@ -2478,8 +2478,6 @@ class SalesBot:
                 # Online tariff (from Tariff enum)
                 try:
                     tariff = Tariff(tariff_str)
-                    if prog in ("online", "offline"):
-                        self._selected_program[callback.from_user.id] = prog
                 except ValueError:
                     logger.error(f"   ❌ Invalid tariff: '{tariff_str}'")
                     await callback.message.answer(f"❌ Ошибка: неверный тариф '{tariff_str}'. Попробуйте снова.")
@@ -2492,10 +2490,9 @@ class SalesBot:
                     self._selected_program[callback.from_user.id] = "online:second"
                 elif prog in ("online", "offline"):
                     self._selected_program[callback.from_user.id] = prog
-            else:
-                # For simple pay:<tariff> format, default to online
-                if prog in ("online", "offline"):
-                    self._selected_program[callback.from_user.id] = prog
+                elif not prog:
+                    # For simple pay:<tariff> format, default to online
+                    self._selected_program[callback.from_user.id] = "online"
             
             user_id = callback.from_user.id
             user = await self.user_service.get_or_create_user(
