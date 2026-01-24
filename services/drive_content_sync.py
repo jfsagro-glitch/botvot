@@ -765,10 +765,25 @@ class DriveContentSync:
                 elif len(lesson_posts) > len(lesson_posts_list):
                     logger.info(f"   📎 Day {day}: Number of posts increased after link replacement ({len(lesson_posts_list)} -> {len(lesson_posts)}). This is normal if new [POST] markers were added.")
             
+            # Валидация блоков: проверяем, что нет пустых блоков
+            valid_lesson_posts = [post for post in lesson_posts if post and post.strip()]
+            if len(valid_lesson_posts) != len(lesson_posts):
+                empty_count = len(lesson_posts) - len(valid_lesson_posts)
+                logger.warning(f"   ⚠️ Day {day}: Found {empty_count} empty blocks, removing them")
+                lesson_posts = valid_lesson_posts
+            
+            # Проверяем, что весь текст сохраняется
+            original_length = len(lesson_text)
+            saved_length = sum(len(post) for post in lesson_posts)
+            if saved_length < original_length * 0.95:  # Допускаем небольшую потерю при rstrip()
+                logger.warning(f"   ⚠️ Day {day}: Possible text loss detected! Original: {original_length} chars, Saved: {saved_length} chars")
+            else:
+                logger.debug(f"   ✅ Day {day}: Text integrity check passed (original: {original_length}, saved: {saved_length} chars)")
+            
             # Сохраняем текст: список блоков, если больше одного, иначе строка
             text_to_save = lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else "")
             if isinstance(text_to_save, list):
-                logger.info(f"   ✅ Day {day}: Saving {len(text_to_save)} blocks as list")
+                logger.info(f"   ✅ Day {day}: Saving {len(text_to_save)} blocks as list (total {saved_length} chars)")
             else:
                 logger.info(f"   ✅ Day {day}: Saving single block as string ({len(text_to_save) if text_to_save else 0} chars)")
             
@@ -1226,6 +1241,16 @@ class DriveContentSync:
         # Single-doc mode
         if (Config.DRIVE_MASTER_DOC_ID or "").strip():
             compiled, media_downloaded, total_blocks, total_media_files = self._sync_from_master_doc(drive, warnings)
+            
+            # Basic validation: ensure each lesson has text
+            for k, v in compiled.items():
+                text = v.get("text", "")
+                if isinstance(text, list):
+                    if not text or all(not (block or "").strip() for block in text):
+                        warnings.append(f"day {k}: empty lesson text (all blocks are empty)")
+                elif not (text or "").strip():
+                    warnings.append(f"day {k}: empty lesson text")
+            
             target = self._target_lessons_path()
             target.parent.mkdir(parents=True, exist_ok=True)
             self._backup_file_if_exists(target)
@@ -1236,17 +1261,31 @@ class DriveContentSync:
             
             # Проверяем, что все блоки сохранены корректно
             total_saved_blocks = 0
+            total_saved_chars = 0
+            empty_blocks_found = 0
             for day_key, entry in compiled.items():
                 text = entry.get("text", "")
                 if isinstance(text, list):
                     total_saved_blocks += len(text)
+                    for block in text:
+                        if block and block.strip():
+                            total_saved_chars += len(block)
+                        else:
+                            empty_blocks_found += 1
                 elif text:
                     total_saved_blocks += 1
+                    if text.strip():
+                        total_saved_chars += len(text)
+                    else:
+                        empty_blocks_found += 1
             
             logger.info(f"✅ Drive master-doc sync wrote {len(compiled)} lessons to {target}")
             logger.info(f"   📦 Total blocks saved: {total_saved_blocks} (expected: {total_blocks})")
+            logger.info(f"   📝 Total characters saved: {total_saved_chars}")
             if total_saved_blocks != total_blocks:
                 logger.warning(f"   ⚠️ Block count mismatch! Saved: {total_saved_blocks}, Expected: {total_blocks}")
+            if empty_blocks_found > 0:
+                logger.warning(f"   ⚠️ Found {empty_blocks_found} empty blocks in saved data!")
             return SyncResult(
                 days_synced=len(compiled),
                 lessons_path=str(target),
@@ -1501,7 +1540,8 @@ class DriveContentSync:
                 title = f"День {day}"
 
             # Split lesson into posts by square brackets
-            lesson_posts = DriveContentSync._split_lesson_into_posts((lesson_text or "").rstrip())
+            lesson_text_clean = (lesson_text or "").rstrip()
+            lesson_posts = DriveContentSync._split_lesson_into_posts(lesson_text_clean)
             
             # Логируем информацию о блоках для диагностики
             logger.info(f"   📦 Day {day}: Split into {len(lesson_posts)} blocks")
@@ -1509,10 +1549,25 @@ class DriveContentSync:
                 post_preview = post[:100].replace('\n', ' ') if post else "(empty)"
                 logger.debug(f"   📦   Block {i}/{len(lesson_posts)}: {len(post)} chars, preview: {post_preview}...")
             
+            # Валидация блоков: проверяем, что нет пустых блоков
+            valid_lesson_posts = [post for post in lesson_posts if post and post.strip()]
+            if len(valid_lesson_posts) != len(lesson_posts):
+                empty_count = len(lesson_posts) - len(valid_lesson_posts)
+                logger.warning(f"   ⚠️ Day {day}: Found {empty_count} empty blocks, removing them")
+                lesson_posts = valid_lesson_posts
+            
+            # Проверяем, что весь текст сохраняется
+            original_length = len(lesson_text_clean)
+            saved_length = sum(len(post) for post in lesson_posts)
+            if saved_length < original_length * 0.95:  # Допускаем небольшую потерю при rstrip()
+                logger.warning(f"   ⚠️ Day {day}: Possible text loss detected! Original: {original_length} chars, Saved: {saved_length} chars")
+            else:
+                logger.debug(f"   ✅ Day {day}: Text integrity check passed (original: {original_length}, saved: {saved_length} chars)")
+            
             # Сохраняем текст: список блоков, если больше одного, иначе строка
             text_to_save = lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else "")
             if isinstance(text_to_save, list):
-                logger.info(f"   ✅ Day {day}: Saving {len(text_to_save)} blocks as list")
+                logger.info(f"   ✅ Day {day}: Saving {len(text_to_save)} blocks as list (total {saved_length} chars)")
             else:
                 logger.info(f"   ✅ Day {day}: Saving single block as string ({len(text_to_save) if text_to_save else 0} chars)")
             
@@ -1542,7 +1597,11 @@ class DriveContentSync:
 
         # Basic validation: ensure each lesson has text
         for k, v in compiled.items():
-            if not (v.get("text") or "").strip():
+            text = v.get("text", "")
+            if isinstance(text, list):
+                if not text or all(not (block or "").strip() for block in text):
+                    warnings.append(f"day {k}: empty lesson text (all blocks are empty)")
+            elif not (text or "").strip():
                 warnings.append(f"day {k}: empty lesson text")
 
         target = self._target_lessons_path()
@@ -1555,17 +1614,31 @@ class DriveContentSync:
 
         # Проверяем, что все блоки сохранены корректно
         total_saved_blocks = 0
+        total_saved_chars = 0
+        empty_blocks_found = 0
         for day_key, entry in compiled.items():
             text = entry.get("text", "")
             if isinstance(text, list):
                 total_saved_blocks += len(text)
+                for block in text:
+                    if block and block.strip():
+                        total_saved_chars += len(block)
+                    else:
+                        empty_blocks_found += 1
             elif text:
                 total_saved_blocks += 1
+                if text.strip():
+                    total_saved_chars += len(text)
+                else:
+                    empty_blocks_found += 1
         
         logger.info(f"✅ Drive sync wrote {len(compiled)} lessons to {target}")
         logger.info(f"   📦 Total blocks saved: {total_saved_blocks} (expected: {total_blocks})")
+        logger.info(f"   📝 Total characters saved: {total_saved_chars}")
         if total_saved_blocks != total_blocks:
             logger.warning(f"   ⚠️ Block count mismatch! Saved: {total_saved_blocks}, Expected: {total_blocks}")
+        if empty_blocks_found > 0:
+            logger.warning(f"   ⚠️ Found {empty_blocks_found} empty blocks in saved data!")
         return SyncResult(
             days_synced=len(compiled),
             lessons_path=str(target),
