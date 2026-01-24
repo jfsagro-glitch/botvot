@@ -750,6 +750,12 @@ class DriveContentSync:
             # чтобы маркеры медиа остались в правильных постах
             lesson_posts = DriveContentSync._split_lesson_into_posts(lesson_text)
             
+            # Логируем информацию о блоках для диагностики
+            logger.info(f"   📦 Day {day}: Split into {len(lesson_posts)} blocks")
+            for i, post in enumerate(lesson_posts, 1):
+                post_preview = post[:100].replace('\n', ' ') if post else "(empty)"
+                logger.debug(f"   📦   Block {i}/{len(lesson_posts)}: {len(post)} chars, preview: {post_preview}...")
+            
             # Если урок был разделен на посты изначально, убеждаемся, что структура сохранена
             if lesson_was_split and lesson_posts_list:
                 # Проверяем, что количество постов совпадает (или близко)
@@ -759,10 +765,17 @@ class DriveContentSync:
                 elif len(lesson_posts) > len(lesson_posts_list):
                     logger.info(f"   📎 Day {day}: Number of posts increased after link replacement ({len(lesson_posts_list)} -> {len(lesson_posts)}). This is normal if new [POST] markers were added.")
             
+            # Сохраняем текст: список блоков, если больше одного, иначе строка
+            text_to_save = lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else "")
+            if isinstance(text_to_save, list):
+                logger.info(f"   ✅ Day {day}: Saving {len(text_to_save)} blocks as list")
+            else:
+                logger.info(f"   ✅ Day {day}: Saving single block as string ({len(text_to_save) if text_to_save else 0} chars)")
+            
             entry: Dict[str, Any] = {
                 "day_number": day,
                 "title": title,
-                "text": lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else ""),
+                "text": text_to_save,
                 "task": task_text,
             }
             
@@ -1220,7 +1233,20 @@ class DriveContentSync:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(compiled, f, ensure_ascii=False, indent=2)
             os.replace(tmp, target)
+            
+            # Проверяем, что все блоки сохранены корректно
+            total_saved_blocks = 0
+            for day_key, entry in compiled.items():
+                text = entry.get("text", "")
+                if isinstance(text, list):
+                    total_saved_blocks += len(text)
+                elif text:
+                    total_saved_blocks += 1
+            
             logger.info(f"✅ Drive master-doc sync wrote {len(compiled)} lessons to {target}")
+            logger.info(f"   📦 Total blocks saved: {total_saved_blocks} (expected: {total_blocks})")
+            if total_saved_blocks != total_blocks:
+                logger.warning(f"   ⚠️ Block count mismatch! Saved: {total_saved_blocks}, Expected: {total_blocks}")
             return SyncResult(
                 days_synced=len(compiled),
                 lessons_path=str(target),
@@ -1477,10 +1503,23 @@ class DriveContentSync:
             # Split lesson into posts by square brackets
             lesson_posts = DriveContentSync._split_lesson_into_posts((lesson_text or "").rstrip())
             
+            # Логируем информацию о блоках для диагностики
+            logger.info(f"   📦 Day {day}: Split into {len(lesson_posts)} blocks")
+            for i, post in enumerate(lesson_posts, 1):
+                post_preview = post[:100].replace('\n', ' ') if post else "(empty)"
+                logger.debug(f"   📦   Block {i}/{len(lesson_posts)}: {len(post)} chars, preview: {post_preview}...")
+            
+            # Сохраняем текст: список блоков, если больше одного, иначе строка
+            text_to_save = lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else "")
+            if isinstance(text_to_save, list):
+                logger.info(f"   ✅ Day {day}: Saving {len(text_to_save)} blocks as list")
+            else:
+                logger.info(f"   ✅ Day {day}: Saving single block as string ({len(text_to_save) if text_to_save else 0} chars)")
+            
             entry: Dict[str, Any] = {
                 "day_number": day,
                 "title": title,
-                "text": lesson_posts if len(lesson_posts) > 1 else (lesson_posts[0] if lesson_posts else ""),
+                "text": text_to_save,
                 "task": (task_text or "").rstrip(),
             }
             if media_items:
@@ -1514,7 +1553,19 @@ class DriveContentSync:
             json.dump(compiled, f, ensure_ascii=False, indent=2)
         os.replace(tmp, target)
 
+        # Проверяем, что все блоки сохранены корректно
+        total_saved_blocks = 0
+        for day_key, entry in compiled.items():
+            text = entry.get("text", "")
+            if isinstance(text, list):
+                total_saved_blocks += len(text)
+            elif text:
+                total_saved_blocks += 1
+        
         logger.info(f"✅ Drive sync wrote {len(compiled)} lessons to {target}")
+        logger.info(f"   📦 Total blocks saved: {total_saved_blocks} (expected: {total_blocks})")
+        if total_saved_blocks != total_blocks:
+            logger.warning(f"   ⚠️ Block count mismatch! Saved: {total_saved_blocks}, Expected: {total_blocks}")
         return SyncResult(
             days_synced=len(compiled),
             lessons_path=str(target),
