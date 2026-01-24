@@ -1210,6 +1210,21 @@ class AdminBot:
         kind = state.get("kind")
         if kind == "question":
             try:
+                question_id = state.get("question_id")
+                # Сохраняем ответ в БД, если есть question_id
+                if question_id:
+                    try:
+                        from services.question_service import QuestionService
+                        question_service = QuestionService(self.db)
+                        await question_service.answer_question(
+                            question_id=question_id,
+                            answer_text=answer_text,
+                            answered_by_user_id=message.from_user.id if message.from_user else None
+                        )
+                    except Exception as e:
+                        logger.error(f"Error saving answer to DB: {e}", exc_info=True)
+                        # Продолжаем отправку даже если не удалось сохранить в БД
+                
                 await self._send_answer_to_user(
                     user_id=int(state["user_id"]),
                     answer_text=answer_text,
@@ -1260,6 +1275,22 @@ class AdminBot:
         kind = state.get("kind")
         if kind == "question":
             try:
+                question_id = state.get("question_id")
+                # Сохраняем ответ в БД, если есть question_id
+                if question_id:
+                    try:
+                        from services.question_service import QuestionService
+                        question_service = QuestionService(self.db)
+                        await question_service.answer_question(
+                            question_id=question_id,
+                            answer_text=answer_text,
+                            answer_voice_file_id=voice_file_id,
+                            answered_by_user_id=message.from_user.id if message.from_user else None
+                        )
+                    except Exception as e:
+                        logger.error(f"Error saving answer to DB: {e}", exc_info=True)
+                        # Продолжаем отправку даже если не удалось сохранить в БД
+                
                 await self._send_answer_to_user(
                     user_id=int(state["user_id"]),
                     answer_text=answer_text,
@@ -1460,17 +1491,18 @@ class AdminBot:
         if question_id:
             try:
                 from services.question_service import QuestionService
-                from core.database import Database
-                db = Database()
-                await db.connect()
-                try:
-                    question_service = QuestionService(db)
-                    question = await question_service.get_question(question_id)
-                    if question:
-                        user_id = question.get("user_id")
-                        lesson_day = question.get("day_number") or question.get("lesson_id")
-                finally:
-                    await db.close()
+                question_service = QuestionService(self.db)
+                question = await question_service.get_question(question_id)
+                if question:
+                    user_id = question.get("user_id")
+                    lesson_day = question.get("day_number") or question.get("lesson_id")
+                    # Сохраняем ответ в БД
+                    await question_service.answer_question(
+                        question_id=question_id,
+                        answer_text=answer_text,
+                        answer_voice_file_id=voice_file_id,
+                        answered_by_user_id=message.from_user.id if message.from_user else None
+                    )
             except Exception as e:
                 logger.error(f"Error getting question from DB: {e}", exc_info=True)
         
@@ -1769,22 +1801,52 @@ class AdminBot:
         """Handle question reply button."""
         await callback.answer()
         parts = callback.data.split(":")
-        user_id = int(parts[1])
+        
+        # Определяем тип бота
         bot_type = "sales" if callback.data.startswith("reply_question:") else "course"
-
-        if bot_type == "sales":
-            lesson_day = None
-        else:
+        
+        user_id = None
+        lesson_day = None
+        question_id = None
+        
+        if callback.data.startswith("curator_reply:"):
+            # Новый формат: curator_reply:question_id
+            # Извлекаем question_id и получаем данные из БД
             try:
+                question_id = int(parts[1])
+                # Получаем вопрос из БД
+                from services.question_service import QuestionService
+                question_service = QuestionService(self.db)
+                question = await question_service.get_question(question_id)
+                if question:
+                    user_id = question.get("user_id")
+                    lesson_day = question.get("day_number") or question.get("lesson_id")
+                else:
+                    await callback.message.answer("❌ Вопрос не найден в базе данных.")
+                    return
+            except (ValueError, IndexError, Exception) as e:
+                logger.error(f"Error extracting question_id from curator_reply: {e}", exc_info=True)
+                await callback.message.answer("❌ Ошибка при обработке кнопки. Попробуйте ответить через reply.")
+                return
+        elif callback.data.startswith("reply_question:"):
+            # Старый формат для продающего бота: reply_question:user_id
+            try:
+                user_id = int(parts[1])
                 lesson_day = int(parts[2]) if len(parts) > 2 else None
-            except Exception:
-                lesson_day = None
+            except (ValueError, IndexError):
+                await callback.message.answer("❌ Ошибка при обработке кнопки. Попробуйте ответить через reply.")
+                return
+        
+        if not user_id:
+            await callback.message.answer("❌ Не удалось определить пользователя. Попробуйте ответить через reply.")
+            return
 
         self._compose_reply[callback.from_user.id] = {
             "kind": "question",
             "user_id": user_id,
             "lesson_day": lesson_day,
             "bot_type": bot_type,
+            "question_id": question_id,  # Сохраняем question_id для сохранения ответа в БД
         }
 
         await callback.message.answer(
