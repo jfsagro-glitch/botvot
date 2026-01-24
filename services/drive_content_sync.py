@@ -451,10 +451,14 @@ class DriveContentSync:
             title = (data.get("title") or "").strip() or f"День {day}"
             lesson_raw = data.get("lesson") or ""
             # Support multi-post lessons returned as list
-            if isinstance(lesson_raw, list):
-                lesson_text = "\n\n".join([str(x) for x in lesson_raw]).strip()
+            # ВАЖНО: Если урок уже разделен на посты (через маркеры [POST]), сохраняем структуру постов
+            lesson_was_split = isinstance(lesson_raw, list)
+            if lesson_was_split:
+                lesson_posts_list = [str(x).strip() for x in lesson_raw if str(x).strip()]
+                lesson_text = "\n\n".join(lesson_posts_list).strip()
             else:
                 lesson_text = str(lesson_raw).strip()
+                lesson_posts_list = None
             task_text = (data.get("task") or "").strip()
             intro_text = (data.get("intro_text") or "").strip()
             about_me_text = (data.get("about_me_text") or "").strip()
@@ -766,7 +770,19 @@ class DriveContentSync:
                 logger.info(f"   📎 Day {day} summary: {processed_links} processed, {skipped_links} skipped, {error_links} errors, {media_downloaded} downloaded")
 
             # Split lesson into posts by square brackets (if not already split)
+            # ВАЖНО: Если урок уже был разделен на посты в _split_master_doc, 
+            # нужно разделить его снова после замены ссылок на маркеры,
+            # чтобы маркеры медиа остались в правильных постах
             lesson_posts = DriveContentSync._split_lesson_into_posts(lesson_text)
+            
+            # Если урок был разделен на посты изначально, убеждаемся, что структура сохранена
+            if lesson_was_split and lesson_posts_list:
+                # Проверяем, что количество постов совпадает (или близко)
+                # Это гарантирует, что маркеры [POST] правильно обработаны
+                if len(lesson_posts) < len(lesson_posts_list):
+                    logger.warning(f"   ⚠️ Day {day}: Number of posts changed after link replacement ({len(lesson_posts_list)} -> {len(lesson_posts)}). This may indicate a problem with [POST] marker processing.")
+                elif len(lesson_posts) > len(lesson_posts_list):
+                    logger.info(f"   📎 Day {day}: Number of posts increased after link replacement ({len(lesson_posts_list)} -> {len(lesson_posts)}). This is normal if new [POST] markers were added.")
             
             entry: Dict[str, Any] = {
                 "day_number": day,

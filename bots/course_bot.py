@@ -3305,41 +3305,53 @@ class CourseBot:
                         media_index += 1
                         await asyncio.sleep(0.3)
                 else:
-                    # Проверяем, есть ли маркеры медиа в тексте для встроенной вставки
-                    if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
-                        # Используем встроенную вставку медиа по маркерам
-                        await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
-                        logger.info(f"   ✅ Sent lesson text with inline media markers for day {day}")
-                        
-                        # НЕ отправляем медиа из списка, если они уже отправлены через маркеры
-                        # Собираем file_id медиа, которые были отправлены через маркеры
+                    # ВАЖНО: Если урок разбит на несколько постов (через маркеры [POST]), 
+                    # обрабатываем все посты одинаково, включая первый
+                    if len(lesson_posts) > 1:
+                        # Обрабатываем все посты в цикле, включая первый
                         sent_media_file_ids = set()
                         for marker_id, marker_info in media_markers.items():
-                            if f"[{marker_id}]" in text:
+                            if any(f"[{marker_id}]" in post for post in lesson_posts):
                                 sent_media_file_ids.add(marker_info.get("file_id"))
+                        
+                        for i, post_text in enumerate(lesson_posts):
+                            if post_text and post_text.strip():
+                                # Проверяем маркеры в этом посте
+                                if media_markers and any(f"[{marker}]" in post_text for marker in media_markers.keys()):
+                                    # Используем встроенную вставку медиа по маркерам
+                                    await self._send_text_with_inline_media(user.user_id, post_text.strip(), media_markers, day)
+                                    logger.info(f"   ✅ Sent lesson post {i + 1}/{len(lesson_posts)} with inline media markers for day {day}")
+                                else:
+                                    # Отправляем пост без медиа-маркеров
+                                    await self._safe_send_message(user.user_id, post_text.strip())
+                                    logger.info(f"   ✅ Sent lesson post {i + 1}/{len(lesson_posts)} for day {day}")
+                                
+                                if i < len(lesson_posts) - 1:
+                                    await asyncio.sleep(0.5)
+                        
+                        logger.info(f"   ✅ Sent {len(lesson_posts)} lesson posts (with [POST] markers) for day {day}")
                         
                         # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
                         while media_index < media_count:
                             media_item = media_list[media_index]
                             media_file_id = media_item.get("file_id")
-                            # Проверяем, не было ли это медиа уже отправлено через маркер
                             if media_file_id not in sent_media_file_ids:
                                 await self._send_media_item(user.user_id, media_item, day)
-                                logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after inline media for lesson {day}")
+                                logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after posts for lesson {day}")
                             else:
                                 logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
                             media_index += 1
                             await asyncio.sleep(0.3)
                     else:
-                        # Стандартная логика распределения медиа для всех остальных уроков
-                        # ВАЖНО: Сначала проверяем, есть ли маркеры медиа в тексте для встроенной вставки
-                        # Это должно быть проверено ДО разбиения на абзацы
+                        # Если только один пост, обрабатываем его как обычно
+                        # Проверяем, есть ли маркеры медиа в тексте для встроенной вставки
                         if media_markers and any(f"[{marker}]" in text for marker in media_markers.keys()):
                             # Используем встроенную вставку медиа по маркерам
                             await self._send_text_with_inline_media(user.user_id, text, media_markers, day)
                             logger.info(f"   ✅ Sent lesson text with inline media markers for day {day}")
                             
                             # НЕ отправляем медиа из списка, если они уже отправлены через маркеры
+                            # Собираем file_id медиа, которые были отправлены через маркеры
                             sent_media_file_ids = set()
                             for marker_id, marker_info in media_markers.items():
                                 if f"[{marker_id}]" in text:
@@ -3349,6 +3361,7 @@ class CourseBot:
                             while media_index < media_count:
                                 media_item = media_list[media_index]
                                 media_file_id = media_item.get("file_id")
+                                # Проверяем, не было ли это медиа уже отправлено через маркер
                                 if media_file_id not in sent_media_file_ids:
                                     await self._send_media_item(user.user_id, media_item, day)
                                     logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after inline media for lesson {day}")
@@ -3399,37 +3412,6 @@ class CourseBot:
                                 if media_file_id not in sent_media_file_ids:
                                     await self._send_media_item(user.user_id, media_item, day)
                                     logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after text for lesson {day}")
-                                else:
-                                    logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
-                                media_index += 1
-                                await asyncio.sleep(0.3)
-                        
-                        # Если урок разбит на несколько постов, отправляем остальные посты после медиа
-                        if len(lesson_posts) > 1:
-                            sent_media_file_ids = set()
-                            for marker_id, marker_info in media_markers.items():
-                                if any(f"[{marker_id}]" in post for post in lesson_posts):
-                                    sent_media_file_ids.add(marker_info.get("file_id"))
-                            
-                            for i in range(1, len(lesson_posts)):
-                                post_text = lesson_posts[i]
-                                if post_text and post_text.strip():
-                                    # Проверяем маркеры и в этом посте
-                                    if media_markers and any(f"[{marker}]" in post_text for marker in media_markers.keys()):
-                                        await self._send_text_with_inline_media(user.user_id, post_text.strip(), media_markers, day)
-                                    else:
-                                        await self._safe_send_message(user.user_id, post_text.strip())
-                                    if i < len(lesson_posts) - 1:
-                                        await asyncio.sleep(0.5)
-                            logger.info(f"   ✅ Sent {len(lesson_posts) - 1} additional lesson posts after media for day {day}")
-                            
-                            # Отправляем только те медиа из списка, которые НЕ были отправлены через маркеры
-                            while media_index < media_count:
-                                media_item = media_list[media_index]
-                                media_file_id = media_item.get("file_id")
-                                if media_file_id not in sent_media_file_ids:
-                                    await self._send_media_item(user.user_id, media_item, day)
-                                    logger.info(f"   ✅ Sent remaining media {media_index + 1}/{media_count} after posts for lesson {day}")
                                 else:
                                     logger.info(f"   ⏭️ Skipped media {media_index + 1}/{media_count} (already sent via marker) for lesson {day}")
                                 media_index += 1
