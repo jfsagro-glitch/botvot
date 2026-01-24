@@ -1507,6 +1507,12 @@ class DriveContentSync:
             
             if drive_links:
                 logger.info(f"   📎 Day {day} summary: {processed_links} processed, {skipped_links} skipped, {error_links} errors, {media_downloaded} downloaded")
+            logger.info(f"   📎 Day {day} media_markers created: {len(media_markers)}")
+            if media_markers:
+                for marker_id, marker_info in media_markers.items():
+                    logger.info(f"   📎   - {marker_id}: {marker_info.get('type')}, path={marker_info.get('path')}, name={marker_info.get('name')}")
+            elif drive_links:
+                logger.warning(f"   ⚠️ Day {day}: Found {len(drive_links)} drive_links but created 0 media_markers! This may indicate a problem.")
 
             meta: Dict[str, Any] = {}
             if meta_file and (meta_file.get("name") or "").lower().endswith(".json"):
