@@ -1498,14 +1498,30 @@ class AdminBot:
             await message.answer("❌ Не удалось найти ID пользователя. Убедитесь, что вы отвечаете на сообщение с вопросом.")
             return
         
+        # Логируем для отладки
+        logger.info(f"Attempting to send answer to user_id={user_id}, bot_type={bot_type}, lesson_day={lesson_day}")
+        
         # Send answer to user via appropriate bot (determined by bot_type)
         try:
             await self._send_answer_to_user(user_id, answer_text, lesson_day, bot_type, voice_file_id=voice_file_id)
             bot_name = "продающий бот" if bot_type == "sales" else "обучающий бот"
             await message.answer(f"✅ Ответ отправлен пользователю в {bot_name}.")
+        except ValueError as e:
+            # ValueError содержит понятное сообщение об ошибке
+            logger.error(f"Error sending answer to user {user_id}: {e}", exc_info=True)
+            await message.answer(f"❌ {str(e)}")
         except Exception as e:
-            logger.error(f"Error sending answer to user: {e}", exc_info=True)
-            await message.answer(f"❌ Ошибка при отправке ответа: {e}")
+            logger.error(f"Error sending answer to user {user_id}: {e}", exc_info=True)
+            error_msg = str(e)
+            if "chat not found" in error_msg.lower() or "bad request" in error_msg.lower():
+                bot_name = "обучающем" if bot_type == "course" else "продающем"
+                await message.answer(
+                    f"❌ Не удалось отправить ответ пользователю {user_id}.\n\n"
+                    f"Пользователь не начинал диалог с {bot_name} ботом.\n"
+                    f"Попросите пользователя отправить /start в соответствующем боте."
+                )
+            else:
+                await message.answer(f"❌ Ошибка при отправке ответа: {e}")
 
     async def _send_assignment_feedback_to_user(
         self,
@@ -1625,10 +1641,18 @@ class AdminBot:
         from aiogram.exceptions import TelegramBadRequest
 
         # Проверяем, что пользователь существует в БД
+        user = None
         if bot_type == "course":
             user = await self.user_service.get_user(user_id)
             if not user:
-                raise ValueError(f"Пользователь с ID {user_id} не найден в базе данных. Убедитесь, что пользователь зарегистрирован в обучающем боте.")
+                raise ValueError(
+                    f"Пользователь с ID {user_id} не найден в базе данных. "
+                    f"Убедитесь, что пользователь зарегистрирован в обучающем боте (отправил /start)."
+                )
+        else:
+            # Для sales бота тоже можно проверить, если нужно
+            # Но обычно sales бот не требует регистрации в БД
+            pass
 
         # Determine which bot to use
         if bot_type == "sales":
@@ -1664,10 +1688,25 @@ class AdminBot:
             else:
                 await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
         except TelegramBadRequest as e:
-            if "chat not found" in str(e).lower():
+            error_msg = str(e).lower()
+            if "chat not found" in error_msg or "chat_not_found" in error_msg:
+                bot_name = "обучающим" if bot_type == "course" else "продающим"
                 raise ValueError(
                     f"Не удалось отправить сообщение пользователю {user_id}. "
-                    f"Пользователь не начинал диалог с {'обучающим' if bot_type == 'course' else 'продающим'} ботом. "
+                    f"Пользователь не начинал диалог с {bot_name} ботом. "
+                    f"Попросите пользователя отправить /start в соответствующем боте."
+                )
+            # Логируем другие ошибки для отладки
+            logger.error(f"TelegramBadRequest when sending to user {user_id}: {e}")
+            raise
+        except Exception as e:
+            error_msg = str(e).lower()
+            # Проверяем, может быть это ошибка "chat not found" в другом формате
+            if "chat not found" in error_msg or "chat_not_found" in error_msg or "bad request" in error_msg:
+                bot_name = "обучающим" if bot_type == "course" else "продающим"
+                raise ValueError(
+                    f"Не удалось отправить сообщение пользователю {user_id}. "
+                    f"Пользователь не начинал диалог с {bot_name} ботом. "
                     f"Попросите пользователя отправить /start в соответствующем боте."
                 )
             raise
