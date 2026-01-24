@@ -1691,6 +1691,7 @@ class AdminBot:
                     )
             else:
                 await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
+                logger.info(f"✅ Successfully sent answer message to user {user_id}")
         except TelegramBadRequest as e:
             error_msg = str(e).lower()
             if "chat not found" in error_msg or "chat_not_found" in error_msg:
