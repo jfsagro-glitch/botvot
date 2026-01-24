@@ -227,6 +227,7 @@ class AdminBot:
         # Questions list callbacks
         self.dp.callback_query.register(self.handle_questions_unanswered, F.data == "admin:questions:unanswered")
         self.dp.callback_query.register(self.handle_questions_answered, F.data == "admin:questions:answered")
+        self.dp.callback_query.register(self.handle_questions_answered_by_date, F.data.startswith("admin:questions:answered:date:"))
         self.dp.callback_query.register(self.handle_questions_back, F.data == "admin:questions:back")
         # Always restore persistent keyboard after inline callbacks (some clients hide it).
         self.dp.callback_query.register(self._restore_admin_keyboard_after_callback)
@@ -2006,7 +2007,7 @@ class AdminBot:
             await callback.message.answer("❌ Ошибка при получении неотвеченных вопросов.")
     
     async def handle_questions_answered(self, callback: CallbackQuery):
-        """Handle answered questions filter button - show each question as separate message."""
+        """Handle answered questions filter button - show menu with dates."""
         try:
             await callback.answer()
         except:
@@ -2014,18 +2015,93 @@ class AdminBot:
         
         try:
             await self.db.connect()
-            all_questions = await self.question_service.get_all_questions(limit=100)
-            answered = [q for q in all_questions if q.get('answered_at')]
+            dates = await self.question_service.get_answered_questions_dates()
             
-            if not answered:
+            if not dates:
                 await callback.message.answer("✅ Нет отвеченных вопросов.")
                 return
             
-            # Отправляем заголовок
-            await callback.message.answer(f"✅ <b>Отвеченные вопросы ({len(answered)}):</b>", parse_mode="HTML")
+            # Формируем сообщение с датами
+            text = f"✅ <b>Отвеченные вопросы</b>\n\nВыберите дату:\n\n"
             
-            # Отправляем каждый отвеченный вопрос отдельным сообщением
-            for q in answered:
+            keyboard_buttons = []
+            for date_str in dates[:30]:  # Показываем последние 30 дат
+                try:
+                    from datetime import datetime
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                    # Получаем количество вопросов за эту дату
+                    questions_for_date = await self.question_service.get_answered_questions_by_date(date_str)
+                    count = len(questions_for_date)
+                    
+                    # Форматируем дату для отображения
+                    date_display = dt.strftime("%d.%m.%Y")
+                    weekday = dt.strftime("%A")
+                    weekday_ru = {
+                        "Monday": "Пн", "Tuesday": "Вт", "Wednesday": "Ср",
+                        "Thursday": "Чт", "Friday": "Пт", "Saturday": "Сб", "Sunday": "Вс"
+                    }.get(weekday, "")
+                    
+                    text += f"📅 {date_display} ({weekday_ru}) - {count} вопросов\n"
+                    
+                    keyboard_buttons.append([
+                        InlineKeyboardButton(
+                            text=f"📅 {date_display} ({weekday_ru}) - {count}",
+                            callback_data=f"admin:questions:answered:date:{date_str}"
+                        )
+                    ])
+                except Exception as e:
+                    logger.error(f"Error formatting date {date_str}: {e}")
+                    continue
+            
+            if len(dates) > 30:
+                text += f"\n... и еще {len(dates) - 30} дат\n"
+            
+            # Добавляем кнопку "Назад"
+            keyboard_buttons.append([
+                InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="admin:questions:back")
+            ])
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+            await callback.message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                
+        except Exception as e:
+            logger.error(f"Error showing answered questions dates: {e}", exc_info=True)
+            await callback.message.answer("❌ Ошибка при получении дат отвеченных вопросов.")
+    
+    async def handle_questions_answered_by_date(self, callback: CallbackQuery):
+        """Handle answered questions by date - show questions for specific date."""
+        try:
+            await callback.answer()
+        except:
+            pass
+        
+        try:
+            # Извлекаем дату из callback_data: admin:questions:answered:date:YYYY-MM-DD
+            date_str = callback.data.split(":")[-1]
+            
+            await self.db.connect()
+            questions = await self.question_service.get_answered_questions_by_date(date_str)
+            
+            if not questions:
+                await callback.message.answer(f"✅ Нет отвеченных вопросов за {date_str}.")
+                return
+            
+            # Форматируем дату для отображения
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                date_display = dt.strftime("%d.%m.%Y")
+            except:
+                date_display = date_str
+            
+            # Отправляем заголовок
+            await callback.message.answer(
+                f"✅ <b>Отвеченные вопросы за {date_display} ({len(questions)}):</b>",
+                parse_mode="HTML"
+            )
+            
+            # Отправляем каждый вопрос отдельным сообщением
+            for q in questions:
                 user_name = self._format_user_name_from_question(q)
                 day = q.get('day_number') or q.get('lesson_id') or '?'
                 question_id = q.get('question_id', '?')
@@ -2036,35 +2112,35 @@ class AdminBot:
                 
                 # Форматируем дату ответа
                 answered_at = q.get('answered_at')
-                date_str = ""
+                time_str = ""
                 if answered_at:
                     try:
                         from datetime import datetime
                         dt = datetime.fromisoformat(answered_at.replace('Z', '+00:00'))
-                        date_str = dt.strftime("%d.%m %H:%M")
+                        time_str = dt.strftime("%H:%M")
                     except:
-                        date_str = answered_at[:10] if answered_at else ""
+                        time_str = answered_at[11:16] if len(answered_at) > 16 else ""
                 
                 question_message = (
                     f"🟢 <b>Вопрос #{question_id}</b>\n"
                     f"👤 {user_name}\n"
                     f"📚 День {day}\n"
-                    f"✅ Отвечено: {date_str}\n\n"
+                    f"✅ Отвечено: {time_str}\n\n"
                     f"{question_preview}"
                 )
                 
                 await callback.message.answer(question_message, parse_mode="HTML")
                 await asyncio.sleep(0.1)  # Небольшая пауза между сообщениями
             
-            # Добавляем кнопку "Назад" в конце
+            # Добавляем кнопку "Назад"
             back_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="admin:questions:back")]
+                [InlineKeyboardButton(text="⬅️ Назад к датам", callback_data="admin:questions:answered")]
             ])
-            await callback.message.answer("⬅️ <b>Назад к списку</b>", reply_markup=back_keyboard, parse_mode="HTML")
+            await callback.message.answer("⬅️ <b>Назад к датам</b>", reply_markup=back_keyboard, parse_mode="HTML")
                 
         except Exception as e:
-            logger.error(f"Error showing answered questions: {e}", exc_info=True)
-            await callback.message.answer("❌ Ошибка при получении отвеченных вопросов.")
+            logger.error(f"Error showing answered questions by date: {e}", exc_info=True)
+            await callback.message.answer("❌ Ошибка при получении вопросов за выбранную дату.")
     
     async def handle_questions_back(self, callback: CallbackQuery):
         """Handle back button from questions filter - show full list."""

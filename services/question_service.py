@@ -112,6 +112,37 @@ class QuestionService:
                 }
         return {"total": 0, "unanswered": 0, "answered": 0}
     
+    async def get_answered_questions_dates(self) -> List[str]:
+        """Get list of unique dates (YYYY-MM-DD) when questions were answered, sorted descending."""
+        await self.db._ensure_connection()
+        async with self.db.conn.execute("""
+            SELECT DISTINCT DATE(answered_at) as answer_date
+            FROM questions
+            WHERE answered_at IS NOT NULL
+            ORDER BY answer_date DESC
+        """) as cursor:
+            rows = await cursor.fetchall()
+            dates = []
+            for row in rows:
+                if row["answer_date"]:
+                    # SQLite DATE() возвращает строку в формате YYYY-MM-DD
+                    dates.append(row["answer_date"])
+            return dates
+    
+    async def get_answered_questions_by_date(self, date_str: str) -> List[Dict]:
+        """Get answered questions for a specific date (YYYY-MM-DD format)."""
+        await self.db._ensure_connection()
+        # Используем DATE() для сравнения, так как answered_at хранится в ISO формате
+        async with self.db.conn.execute("""
+            SELECT q.*, u.first_name, u.last_name, u.username
+            FROM questions q
+            LEFT JOIN users u ON q.user_id = u.user_id
+            WHERE DATE(q.answered_at) = ?
+            ORDER BY q.answered_at DESC
+        """, (date_str,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+    
     async def answer_question(
         self,
         question_id: int,
