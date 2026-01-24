@@ -3806,6 +3806,18 @@ class CourseBot:
             task_preview_urls = set(self._collect_preview_urls(task_message, seen=link_preview_seen, limit=6))
             if task_preview_urls:
                 task_message_clean = self._strip_url_only_lines(task_message, task_preview_urls)
+
+            # Show previews for task links BEFORE sending the task block so the "submit" button
+            # stays directly under the task message (no messages should go after it).
+            try:
+                await self._send_previews_from_text(
+                    user.user_id,
+                    task_message,
+                    seen=link_preview_seen,
+                    limit=6,
+                )
+            except Exception:
+                pass
             
             # Отправляем задание, если есть
             if task_message_clean:
@@ -3945,17 +3957,6 @@ class CourseBot:
                             )
                         except Exception:
                             pass
-
-                # Если в задании есть ссылки на видео/картинки — показываем превью.
-                try:
-                    await self._send_previews_from_text(
-                        user.user_id,
-                        task_message,
-                        seen=link_preview_seen,
-                        limit=6,
-                    )
-                except Exception:
-                    pass
 
             else:
                 # Если задания нет, отправляем только клавиатуру
