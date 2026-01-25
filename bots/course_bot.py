@@ -1247,7 +1247,7 @@ class CourseBot:
                     # Если есть остаток текста, отправляем его отдельным сообщением
                     if remaining_text:
                         await asyncio.sleep(0.5)
-                        await self.bot.send_message(user_id, remaining_text, reply_markup=persistent_keyboard, protect_content=True)
+                        await self._safe_send_message(user_id, remaining_text, reply_markup=persistent_keyboard, protect_content=True)
                         logger.info(f"   ✅ Sent remaining final message text for lesson 30")
                     
                     await asyncio.sleep(0.8)
@@ -1352,7 +1352,7 @@ class CourseBot:
                         # Если есть остаток текста, отправляем его отдельным сообщением
                         if remaining_text:
                             await asyncio.sleep(0.5)
-                            await self.bot.send_message(user_id, remaining_text, reply_markup=persistent_keyboard, protect_content=True)
+                            await self._safe_send_message(user_id, remaining_text, reply_markup=persistent_keyboard, protect_content=True)
                             logger.info(f"   ✅ Sent remaining final message text for lesson 30")
                         
                         await asyncio.sleep(0.8)
@@ -1366,14 +1366,14 @@ class CourseBot:
                 try:
                     # Анимация перед отправкой текста
                     await send_typing_action(self.bot, user_id, 0.8)
-                    await self.bot.send_message(user_id, follow_up_text, reply_markup=persistent_keyboard, protect_content=True)
+                    await self._safe_send_message(user_id, follow_up_text, reply_markup=persistent_keyboard, protect_content=True)
                     logger.info(f"   ✅ Sent final message text (no photo) for lesson 30")
                 except Exception as text_error:
                     error_msg = str(text_error)
                     logger.error(f"   ❌ Error sending final message text for lesson 30: {error_msg}", exc_info=True)
                     # Пробуем отправить еще раз без клавиатуры
                     try:
-                        await self.bot.send_message(user_id, follow_up_text, protect_content=True)
+                        await self._safe_send_message(user_id, follow_up_text, protect_content=True)
                         logger.info(f"   ✅ Sent final message text without keyboard for lesson 30")
                     except Exception as retry_error:
                         logger.error(f"   ❌ Retry also failed for lesson 30: {retry_error}")
@@ -1424,15 +1424,15 @@ class CourseBot:
                 parts = self._split_long_message(text, MAX_MESSAGE_LENGTH)
                 for part in parts[:-1]:
                     if part and part.strip():
-                        await self.bot.send_message(user_id, part, protect_content=True)
+                        await self._safe_send_message(user_id, part, protect_content=True)
                         await asyncio.sleep(0.3)
                 last_part = parts[-1]
                 if last_part and last_part.strip():
-                    await self.bot.send_message(user_id, last_part, reply_markup=persistent_keyboard, protect_content=True)
+                    await self._safe_send_message(user_id, last_part, reply_markup=persistent_keyboard, protect_content=True)
                 elif persistent_keyboard:
                     await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
             else:
-                await self.bot.send_message(user_id, text, reply_markup=persistent_keyboard, protect_content=True)
+                await self._safe_send_message(user_id, text, reply_markup=persistent_keyboard, protect_content=True)
 
         # 1) Photo by file_id
         if follow_up_photo_file_id:
@@ -1521,15 +1521,15 @@ class CourseBot:
                 parts = self._split_long_message(text, MAX_MESSAGE_LENGTH)
                 for part in parts[:-1]:
                     if part and part.strip():
-                        await self.bot.send_message(user_id, part, protect_content=True)
+                        await self._safe_send_message(user_id, part, protect_content=True)
                         await asyncio.sleep(0.3)
                 last_part = parts[-1]
                 if last_part and last_part.strip():
-                    await self.bot.send_message(user_id, last_part, reply_markup=persistent_keyboard, protect_content=True)
+                    await self._safe_send_message(user_id, last_part, reply_markup=persistent_keyboard, protect_content=True)
                 elif persistent_keyboard:
                     await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
             else:
-                await self.bot.send_message(user_id, text, reply_markup=persistent_keyboard, protect_content=True)
+                await self._safe_send_message(user_id, text, reply_markup=persistent_keyboard, protect_content=True)
 
         # 1) Photo by file_id
         if follow_up_photo_file_id:
@@ -2460,8 +2460,8 @@ class CourseBot:
             # Нет маркеров, отправляем текст как есть
             logger.info(f"   📎 No markers found, sending text as-is")
             if keyboard:
-                # Если есть клавиатура, отправляем текст с клавиатурой
-                await self.bot.send_message(user_id, text, reply_markup=keyboard, disable_web_page_preview=True, protect_content=True)
+                # Если есть клавиатура, отправляем текст с клавиатурой (с водяным знаком)
+                await self._safe_send_message(user_id, text, reply_markup=keyboard, protect_content=True)
             else:
                 await self._safe_send_message(user_id, text, protect_content=True)
             return sent_media_keys
@@ -3214,8 +3214,8 @@ class CourseBot:
             # Формируем заголовок урока - только текст из Google Doc, без эмодзи и разделителей
             lesson_message = f"<b>{title}</b>\n\n"
             
-            # Отправляем заголовок урока (защищен от копирования)
-            await self.bot.send_message(user.user_id, lesson_message, protect_content=True)
+            # Отправляем заголовок урока (защищен от копирования с водяным знаком)
+            await self._safe_send_message(user.user_id, lesson_message, protect_content=True, parse_mode="HTML")
             await asyncio.sleep(0.5)  # Пауза для плавности
             
             # Для первого урока (день 0 или день 1) отправляем предупреждение о защите контента
@@ -4451,7 +4451,7 @@ class CourseBot:
                             # Отправляем все части до последней непустой без клавиатуры
                             for i, part in enumerate(message_parts[:last_non_empty_idx], 1):
                                 if part and part.strip():
-                                    await self.bot.send_message(user.user_id, part, disable_web_page_preview=True, protect_content=True)
+                                    await self._safe_send_message(user.user_id, part, protect_content=True)
                                     await asyncio.sleep(0.3)  # Небольшая пауза между сообщениями
                                     logger.info(f"   Sent task part {i}/{len(message_parts)}")
                                 else:
@@ -4477,8 +4477,8 @@ class CourseBot:
                                 f"   Sent task part {last_non_empty_idx + 1}/{len(message_parts)} with keyboard"
                             )
                     else:
-                        # Если сообщение короткое, отправляем как есть
-                        sent = await self.bot.send_message(user.user_id, task_message_clean, reply_markup=keyboard, disable_web_page_preview=True, protect_content=True)
+                        # Если сообщение короткое, отправляем как есть (с водяным знаком)
+                        sent = await self.bot.send_message(user.user_id, self._add_watermark(task_message_clean, user.user_id), reply_markup=keyboard, disable_web_page_preview=True, protect_content=True)
                         try:
                             await self.bot.edit_message_reply_markup(
                                 chat_id=user.user_id,
@@ -4675,7 +4675,7 @@ class CourseBot:
                         # Анимация перед отправкой текста
                         await send_typing_action(self.bot, user.user_id, 0.7)
                         logger.info(f"   📤 Sending follow_up_text for lesson {day} (length: {len(follow_up_text)} chars)")
-                        await self.bot.send_message(user.user_id, follow_up_text, reply_markup=persistent_keyboard, protect_content=True)
+                        await self._safe_send_message(user.user_id, follow_up_text, reply_markup=persistent_keyboard, protect_content=True)
                         logger.info(f"   ✅ Successfully sent follow_up_text for lesson {day}")
                     except Exception as text_error:
                         error_msg = str(text_error)
