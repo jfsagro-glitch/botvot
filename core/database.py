@@ -401,6 +401,18 @@ class Database:
             ON user_activity(user_id)
         """)
         
+        # Index for fast filtering users with access (used by schedulers)
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_users_tariff
+            ON users(tariff)
+        """)
+        
+        # Index for mentor reminders filtering
+        await self.conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_users_mentor_reminders
+            ON users(mentor_reminders)
+        """)
+        
         await self.conn.commit()
 
     # Payment operations (webhook idempotency)
@@ -1122,6 +1134,70 @@ class Database:
         ) as cursor:
             row = await cursor.fetchone()
             return bool(row[0]) if row else False
+    
+    async def batch_check_assignment_activity(self, user_day_pairs: List[tuple]) -> dict:
+        """
+        Batch check assignment activity for multiple users/days.
+        Returns dict: {(user_id, day_number): bool}
+        
+        Optimized version to avoid N+1 queries in mentor scheduler.
+        Uses simpler approach with multiple OR conditions for better SQLite compatibility.
+        """
+        await self._ensure_connection()
+        if not user_day_pairs:
+            return {}
+        
+        intent_since = (datetime.utcnow() - timedelta(hours=6)).isoformat()
+        
+        # Build result dict with all False initially
+        result = {(uid, day): False for uid, day in user_day_pairs}
+        
+        # Check assignment_intents with recent activity
+        if len(user_day_pairs) <= 50:  # SQLite has limits on query complexity
+            # Build OR conditions for each pair
+            conditions = []
+            params = []
+            for uid, day in user_day_pairs:
+                conditions.append("(user_id = ? AND day_number = ?)")
+                params.extend([uid, day])
+            params.append(intent_since)
+            
+            query = f"""
+                SELECT DISTINCT user_id, day_number 
+                FROM assignment_intents
+                WHERE ({' OR '.join(conditions)}) AND started_at >= ?
+            """
+            
+            async with self.conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                for row in rows:
+                    result[(row['user_id'], row['day_number'])] = True
+        
+        # Check assignments (no time limit)
+        if len(user_day_pairs) <= 50:
+            conditions = []
+            params = []
+            for uid, day in user_day_pairs:
+                conditions.append("(user_id = ? AND day_number = ?)")
+                params.extend([uid, day])
+            
+            query = f"""
+                SELECT DISTINCT user_id, day_number 
+                FROM assignments
+                WHERE {' OR '.join(conditions)}
+            """
+            
+            async with self.conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                for row in rows:
+                    result[(row['user_id'], row['day_number'])] = True
+        else:
+            # For large batches, fall back to individual queries (shouldn't happen often)
+            for uid, day in user_day_pairs:
+                if await self.has_assignment_activity_for_day(uid, day):
+                    result[(uid, day)] = True
+        
+        return result
     
     async def get_pending_assignments(self) -> List[Assignment]:
         """Get all assignments pending admin feedback."""

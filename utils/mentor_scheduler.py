@@ -147,8 +147,8 @@ class MentorReminderScheduler:
                 # Например, для 4 напоминаний: [0, 1/4, 2/4, 3/4] от начала окна
                 interval = window_duration / max(user.mentor_reminders, 1)
                 
-                # Подробное логирование для отладки
-                logger.info(
+                # Подробное логирование для отладки (DEBUG level to reduce log noise)
+                logger.debug(
                     f"   📊 mentor_reminder: user={user.user_id} "
                     f"window={window_start_t.strftime('%H:%M')}-{window_end_t.strftime('%H:%M')} "
                     f"window_duration={window_duration.total_seconds()/3600:.2f}h "
@@ -166,14 +166,14 @@ class MentorReminderScheduler:
                     # Compare dates to check if it's a different day
                     if last_local.date() < user_now.date():
                         # Last reminder was yesterday or earlier - send first reminder of today
-                        logger.info(
+                        logger.debug(
                             f"   📅 mentor_reminder: user={user.user_id} last was yesterday "
                             f"({last_local.strftime('%Y-%m-%d %H:%M')}), sending first today"
                         )
                         should_send = True
                     elif last_local < user_window_start_dt:
                         # Last reminder was earlier today but before window start - send first reminder in window
-                        logger.info(
+                        logger.debug(
                             f"   ⏰ mentor_reminder: user={user.user_id} last was before window "
                             f"({last_local.strftime('%H:%M')}), sending first in window"
                         )
@@ -183,7 +183,7 @@ class MentorReminderScheduler:
                         time_since_last = user_now - last_local
                         if time_since_last >= interval:
                             should_send = True
-                            logger.info(
+                            logger.debug(
                                 f"   ✅ mentor_reminder: user={user.user_id} interval passed "
                                 f"(since_last={time_since_last.total_seconds()/60:.1f}min, "
                                 f"interval={interval.total_seconds()/60:.1f}min, "
@@ -191,7 +191,7 @@ class MentorReminderScheduler:
                             )
                         else:
                             skipped_interval += 1
-                            logger.info(
+                            logger.debug(
                                 f"   ⏱️ mentor_reminder: user={user.user_id} skip=interval "
                                 f"(since_last={time_since_last.total_seconds()/60:.1f}min, "
                                 f"interval={interval.total_seconds()/60:.1f}min, "
@@ -199,7 +199,7 @@ class MentorReminderScheduler:
                             )
                 else:
                     # First reminder ever: only after window start (already ensured)
-                    logger.info(
+                    logger.debug(
                         f"   🆕 mentor_reminder: user={user.user_id} first reminder ever, "
                         f"window_start={user_window_start_dt.strftime('%H:%M')}, now={user_now.strftime('%H:%M')}"
                     )
@@ -208,9 +208,30 @@ class MentorReminderScheduler:
                 if not should_send:
                     continue
                 
+                # Collect users that passed time checks for batch activity check
+                users_to_check_activity.append((user.user_id, user.current_day))
+                users_ready_for_reminder.append(user)
+                
+            except Exception as e:
+                errors += 1
+                logger.error(f"Error processing mentor reminder for user {user.user_id}: {e}", exc_info=True)
+        
+        # Batch check assignment activity for all users at once (optimization)
+        if users_to_check_activity:
+            try:
+                activity_map = await self.db.batch_check_assignment_activity(users_to_check_activity)
+            except Exception as e:
+                logger.error(f"Error in batch_check_assignment_activity: {e}", exc_info=True)
+                activity_map = {}
+        else:
+            activity_map = {}
+        
+        # Process users that passed all checks
+        for user in users_ready_for_reminder:
+            try:
                 # ВАЖНО: Проверяем, не отправлено ли уже задание для текущего дня
                 # Если задание уже отправлено, не отправляем напоминания
-                activity = await self.db.has_assignment_activity_for_day(user.user_id, user.current_day)
+                activity = activity_map.get((user.user_id, user.current_day), False)
                 if activity:
                     # We don't distinguish started vs submitted here to save queries.
                     skipped_started += 1
@@ -221,14 +242,14 @@ class MentorReminderScheduler:
                 logger.info(
                     f"   📤 Sending mentor reminder to user {user.user_id} "
                     f"(day {user.current_day}, reminder #{sent + 1}/{user.mentor_reminders}) "
-                    f"at {user_now.strftime('%Y-%m-%d %H:%M:%S')} local time"
+                    f"at {local_now.strftime('%Y-%m-%d %H:%M:%S')} local time"
                 )
                 await self.reminder_callback(user)
                 sent += 1
                 
             except Exception as e:
                 errors += 1
-                logger.error(f"Error processing mentor reminder for user {user.user_id}: {e}", exc_info=True)
+                logger.error(f"Error sending mentor reminder to user {user.user_id}: {e}", exc_info=True)
 
         # High-signal periodic diagnostics (INFO) so we can debug "not coming" in production logs.
         try:

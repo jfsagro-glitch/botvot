@@ -107,8 +107,8 @@ class LessonService:
         # Check if lesson should be sent (time has passed)
         should_send = datetime.utcnow() >= expected_lesson_time_utc
         
-        # Log detailed information for debugging
-        logger.info(
+        # Log detailed information for debugging (DEBUG level to reduce log noise)
+        logger.debug(
             f"User {user.user_id} (day {user.current_day}): "
             f"delivery_time={delivery_time_str}, "
             f"expected_date={expected_lesson_date}, "
