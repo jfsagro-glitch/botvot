@@ -290,6 +290,11 @@ class AdminBot:
     async def handle_pin_input(self, message: Message):
         """Handle PIN input from user."""
         chat_id = message.chat.id
+        
+        # Если пользователь уже авторизован, пропускаем обработку PIN
+        if chat_id in self.authorized_users:
+            raise SkipHandler()
+        
         pin = message.text.strip()
         
         # Проверяем PIN
@@ -589,6 +594,9 @@ class AdminBot:
         return "\n".join(lines)
 
     async def handle_admin_prices_menu(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         await self.db.connect()
         text = (
@@ -604,6 +612,9 @@ class AdminBot:
         await callback.message.answer(text)
 
     async def handle_admin_promos_menu(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎛 Создать кнопками", callback_data="admin:promo:wiz")],
@@ -618,6 +629,9 @@ class AdminBot:
         )
 
     async def handle_admin_promo_list(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         await self.db.connect()
         promos = await self.db.list_promo_codes(limit=20, active_only=True)
@@ -633,6 +647,9 @@ class AdminBot:
         await callback.message.answer(text, reply_markup=keyboard)
 
     async def handle_admin_promo_create(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         self._admin_state[callback.from_user.id] = {"type": "create_promo"}
         await callback.message.answer(
@@ -646,6 +663,9 @@ class AdminBot:
         )
 
     async def handle_admin_promo_create_free(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         self._admin_state[callback.from_user.id] = {"type": "create_free_promo"}
         await callback.message.answer(
@@ -658,6 +678,9 @@ class AdminBot:
         )
 
     async def handle_admin_promo_send(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         parts = (callback.data or "").split(":")
         if len(parts) < 5:
@@ -814,6 +837,9 @@ class AdminBot:
             await callback.message.answer(text, reply_markup=kb)
 
     async def handle_admin_promo_wizard_action(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         admin_id = callback.from_user.id
         state = self._get_promo_wizard(admin_id)
@@ -907,6 +933,9 @@ class AdminBot:
             await callback.message.answer(text, reply_markup=kb)
 
     async def handle_admin_promo_view(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         parts = (callback.data or "").split(":")
         code = parts[3] if len(parts) > 3 else ""
@@ -934,6 +963,9 @@ class AdminBot:
         await callback.message.answer(text, reply_markup=keyboard)
 
     async def handle_admin_promo_share(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         parts = (callback.data or "").split(":")
         code = parts[3] if len(parts) > 3 else ""
@@ -948,6 +980,9 @@ class AdminBot:
         await callback.message.answer(self._promo_share_text(promo, disc))
 
     async def handle_admin_promo_delete(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         parts = (callback.data or "").split(":")
         code = parts[3] if len(parts) > 3 else ""
