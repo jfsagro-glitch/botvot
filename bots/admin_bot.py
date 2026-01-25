@@ -254,6 +254,18 @@ class AdminBot:
         self.dp.message.register(self.handle_sync_button, F.text == "🔄 Обновить контент")
         self.dp.message.register(self.handle_restore_button, F.text == "⏪ Откатить обновление")
     
+    async def _check_authorization(self, message: Message) -> bool:
+        """Check if user is authorized. Returns True if authorized, False otherwise."""
+        chat_id = message.chat.id
+        if chat_id not in self.authorized_users:
+            await message.answer(
+                "🔐 <b>Требуется авторизация</b>\n\n"
+                "Для доступа к этой функции необходимо ввести PIN-код.\n\n"
+                "Используйте /start для ввода PIN."
+            )
+            return False
+        return True
+    
     async def handle_start(self, message: Message):
         """Handle /start command - show PIN prompt or admin menu."""
         chat_id = message.chat.id
