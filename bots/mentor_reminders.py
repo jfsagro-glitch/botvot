@@ -71,7 +71,7 @@ def get_mentor_reminder_text(assignment_text: str, user_temperature: int = None,
             available_templates = SOFT_TEMPLATES[20:]
         reminder_template = random.choice(available_templates)
     else:
-        reminder_template = random.choice(SOFT_TEMPLATES)
+    reminder_template = random.choice(SOFT_TEMPLATES)
 
     # Keep message compact: show only first chunk of the task to avoid huge spam.
     task = (assignment_text or "").strip()

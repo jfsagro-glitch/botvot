@@ -220,7 +220,8 @@ class CourseBot:
     
     async def _send_video_with_retry(self, user_id: int, video, caption: str = None, 
                                      width: int = None, height: int = None, 
-                                     supports_streaming: bool = True, max_retries: int = 3):
+                                     supports_streaming: bool = True, max_retries: int = 3,
+                                     protect_content: bool = False):
         """
         Отправляет видео с повторными попытками и оптимизированными параметрами.
         Автоматически сжимает видео, если оно превышает лимит 50 МБ.
@@ -266,7 +267,8 @@ class CourseBot:
                     width=width,
                     height=height,
                     supports_streaming=supports_streaming,
-                    request_timeout=request_timeout
+                    request_timeout=request_timeout,
+                    protect_content=protect_content
                 )
                 logger.info(f"   ✅ Видео успешно отправлено (попытка {attempt + 1})")
                 return
@@ -803,7 +805,7 @@ class CourseBot:
             # Убираем разделители - caption должен браться из данных карточки или быть None
             caption = None
             if file_id:
-                await self.bot.send_photo(user_id, file_id, caption=caption)
+                await self.bot.send_photo(user_id, file_id, caption=caption, protect_content=True)
                 logger.info(f"   ✅ Sent card {card_number} for lesson 21 to user {user_id}")
             else:
                 # Fallback: загрузка с диска
@@ -821,7 +823,7 @@ class CourseBot:
                         photo_file = FSInputFile(card_file)
                         # Убираем разделители - caption должен браться из данных карточки или быть None
                         caption = None
-                        await self.bot.send_photo(user_id, photo_file, caption=caption)
+                        await self.bot.send_photo(user_id, photo_file, caption=caption, protect_content=True)
                         logger.info(f"   ✅ Sent card {card_number} (from file) for lesson 21 to user {user_id}")
                     else:
                         await callback.message.answer(f"❌ Файл карточки {card_number} не найден.")
@@ -901,8 +903,8 @@ class CourseBot:
                                 )
                 
                 if media_group:
-                    # Отправляем медиа-группу
-                    await self.bot.send_media_group(user_id, media_group)
+                    # Отправляем медиа-группу (защищенную от копирования)
+                    await self.bot.send_media_group(user_id, media_group, protect_content=True)
                     logger.info(f"   ✅ Sent media group {group_start // MAX_MEDIA_PER_GROUP + 1} with {len(media_group)} cards to user {user_id}")
                     
                     # Небольшая пауза между группами
@@ -1044,14 +1046,14 @@ class CourseBot:
                         media_item = media_group[0]
                         if isinstance(media_item.media, str):
                             # file_id
-                            await self.bot.send_photo(user_id, media_item.media)
+                            await self.bot.send_photo(user_id, media_item.media, protect_content=True)
                         else:
                             # FSInputFile
-                            await self.bot.send_photo(user_id, media_item.media)
+                            await self.bot.send_photo(user_id, media_item.media, protect_content=True)
                         total_sent += 1
                     else:
-                        # Медиа-группа (2-10 изображений)
-                        await self.bot.send_media_group(user_id, media_group)
+                        # Медиа-группа (2-10 изображений) (защищенная от копирования)
+                        await self.bot.send_media_group(user_id, media_group, protect_content=True)
                         total_sent += len(media_group)
                     
                     # Минимальная пауза между группами для стабильности API
@@ -1064,9 +1066,9 @@ class CourseBot:
                     for media_item in media_group:
                         try:
                             if isinstance(media_item.media, str):
-                                await self.bot.send_photo(user_id, media_item.media)
+                                await self.bot.send_photo(user_id, media_item.media, protect_content=True)
                             else:
-                                await self.bot.send_photo(user_id, media_item.media)
+                                await self.bot.send_photo(user_id, media_item.media, protect_content=True)
                             total_sent += 1
                             await asyncio.sleep(0.1)
                         except:
@@ -1094,7 +1096,7 @@ class CourseBot:
                     
                     try:
                         if file_id:
-                            await self.bot.send_photo(user_id, file_id)
+                            await self.bot.send_photo(user_id, file_id, protect_content=True)
                             sent_count += 1
                             await asyncio.sleep(0.3)
                         elif file_path:
@@ -1115,7 +1117,7 @@ class CourseBot:
                             
                             if image_file.exists():
                                 photo_file = FSInputFile(image_file)
-                                await self.bot.send_photo(user_id, photo_file)
+                                await self.bot.send_photo(user_id, photo_file, protect_content=True)
                                 sent_count += 1
                                 await asyncio.sleep(0.3)
                             else:
@@ -1238,14 +1240,14 @@ class CourseBot:
                         caption_text = None
                         remaining_text = None
                     
-                    await self.bot.send_photo(user_id, follow_up_photo_file_id, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None)
+                    await self.bot.send_photo(user_id, follow_up_photo_file_id, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None, protect_content=True)
                     logger.info(f"   ✅ Sent final message photo with text (file_id) for lesson 30")
                     photo_sent = True
                     
                     # Если есть остаток текста, отправляем его отдельным сообщением
                     if remaining_text:
                         await asyncio.sleep(0.5)
-                        await self.bot.send_message(user_id, remaining_text, reply_markup=persistent_keyboard)
+                        await self.bot.send_message(user_id, remaining_text, reply_markup=persistent_keyboard, protect_content=True)
                         logger.info(f"   ✅ Sent remaining final message text for lesson 30")
                     
                     await asyncio.sleep(0.8)
@@ -1343,14 +1345,14 @@ class CourseBot:
                             caption_text = None
                             remaining_text = None
                         
-                        await self.bot.send_photo(user_id, photo_file, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None)
+                        await self.bot.send_photo(user_id, photo_file, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None, protect_content=True)
                         logger.info(f"   ✅ Sent final message photo with text (file path: {photo_path}) for lesson 30")
                         photo_sent = True
                         
                         # Если есть остаток текста, отправляем его отдельным сообщением
                         if remaining_text:
                             await asyncio.sleep(0.5)
-                            await self.bot.send_message(user_id, remaining_text, reply_markup=persistent_keyboard)
+                            await self.bot.send_message(user_id, remaining_text, reply_markup=persistent_keyboard, protect_content=True)
                             logger.info(f"   ✅ Sent remaining final message text for lesson 30")
                         
                         await asyncio.sleep(0.8)
@@ -1364,14 +1366,14 @@ class CourseBot:
                 try:
                     # Анимация перед отправкой текста
                     await send_typing_action(self.bot, user_id, 0.8)
-                    await self.bot.send_message(user_id, follow_up_text, reply_markup=persistent_keyboard)
+                    await self.bot.send_message(user_id, follow_up_text, reply_markup=persistent_keyboard, protect_content=True)
                     logger.info(f"   ✅ Sent final message text (no photo) for lesson 30")
                 except Exception as text_error:
                     error_msg = str(text_error)
                     logger.error(f"   ❌ Error sending final message text for lesson 30: {error_msg}", exc_info=True)
                     # Пробуем отправить еще раз без клавиатуры
                     try:
-                        await self.bot.send_message(user_id, follow_up_text)
+                        await self.bot.send_message(user_id, follow_up_text, protect_content=True)
                         logger.info(f"   ✅ Sent final message text without keyboard for lesson 30")
                     except Exception as retry_error:
                         logger.error(f"   ❌ Retry also failed for lesson 30: {retry_error}")
@@ -1422,15 +1424,15 @@ class CourseBot:
                 parts = self._split_long_message(text, MAX_MESSAGE_LENGTH)
                 for part in parts[:-1]:
                     if part and part.strip():
-                        await self.bot.send_message(user_id, part)
+                        await self.bot.send_message(user_id, part, protect_content=True)
                         await asyncio.sleep(0.3)
                 last_part = parts[-1]
                 if last_part and last_part.strip():
-                    await self.bot.send_message(user_id, last_part, reply_markup=persistent_keyboard)
+                    await self.bot.send_message(user_id, last_part, reply_markup=persistent_keyboard, protect_content=True)
                 elif persistent_keyboard:
                     await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
             else:
-                await self.bot.send_message(user_id, text, reply_markup=persistent_keyboard)
+                await self.bot.send_message(user_id, text, reply_markup=persistent_keyboard, protect_content=True)
 
         # 1) Photo by file_id
         if follow_up_photo_file_id:
@@ -1465,7 +1467,8 @@ class CourseBot:
                         user_id,
                         FSInputFile(photo_path),
                         caption=caption,
-                        reply_markup=persistent_keyboard if (send_keyboard and not remaining) else None
+                        reply_markup=persistent_keyboard if (send_keyboard and not remaining) else None,
+                        protect_content=True
                     )
                     if remaining:
                         await asyncio.sleep(0.5)
@@ -1518,15 +1521,15 @@ class CourseBot:
                 parts = self._split_long_message(text, MAX_MESSAGE_LENGTH)
                 for part in parts[:-1]:
                     if part and part.strip():
-                        await self.bot.send_message(user_id, part)
+                        await self.bot.send_message(user_id, part, protect_content=True)
                         await asyncio.sleep(0.3)
                 last_part = parts[-1]
                 if last_part and last_part.strip():
-                    await self.bot.send_message(user_id, last_part, reply_markup=persistent_keyboard)
+                    await self.bot.send_message(user_id, last_part, reply_markup=persistent_keyboard, protect_content=True)
                 elif persistent_keyboard:
                     await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
             else:
-                await self.bot.send_message(user_id, text, reply_markup=persistent_keyboard)
+                await self.bot.send_message(user_id, text, reply_markup=persistent_keyboard, protect_content=True)
 
         # 1) Photo by file_id
         if follow_up_photo_file_id:
@@ -1984,12 +1987,12 @@ class CourseBot:
             # Используем file_id если есть (самый быстрый способ)
             if file_id:
                 if media_type == "photo":
-                    await self.bot.send_photo(user_id, file_id, caption=caption)
+                    await self.bot.send_photo(user_id, file_id, caption=caption, protect_content=True)
                 elif media_type == "video":
                     # Для видео не указываем width/height, чтобы сохранить родные пропорции
                     # Урок 1 имеет специальную обработку в _send_lesson_from_json (не доходит до сюда)
                     # Для всех остальных видео (включая уроки 11 и 30) сохраняем пропорции
-                    await self.bot.send_video(user_id, file_id, caption=caption, supports_streaming=True)
+                    await self.bot.send_video(user_id, file_id, caption=caption, supports_streaming=True, protect_content=True)
                 await asyncio.sleep(0.2)  # Минимальная пауза для стабильности
                 return True
             
@@ -2040,13 +2043,13 @@ class CourseBot:
                     # Убираем разделители - caption должен браться из данных медиа или быть None
                     caption = None
                     if media_type == "photo":
-                        await self.bot.send_photo(user_id, media_file, caption=caption)
+                        await self.bot.send_photo(user_id, media_file, caption=caption, protect_content=True)
                     elif media_type == "video":
                         # Для видео не указываем width/height, чтобы сохранить родные пропорции
                         # Урок 1 имеет специальную обработку в _send_lesson_from_json (не доходит до сюда)
                         # Для всех остальных видео (включая уроки 11 и 30) сохраняем пропорции
                         try:
-                            await self.bot.send_video(user_id, media_file, caption=caption, supports_streaming=True)
+                            await self.bot.send_video(user_id, media_file, caption=caption, supports_streaming=True, protect_content=True)
                         except Exception as video_error:
                             error_msg = str(video_error).lower()
                             if "entity too large" in error_msg or "file too large" in error_msg:
@@ -2247,6 +2250,7 @@ class CourseBot:
                             message_text,
                             disable_web_page_preview=False,
                             parse_mode=None,
+                            protect_content=True
                         )
                     except Exception:
                         try:
@@ -2255,6 +2259,7 @@ class CourseBot:
                                 url,
                                 disable_web_page_preview=False,
                                 parse_mode=None,
+                                protect_content=True
                             )
                         except Exception:
                             pass
@@ -2272,7 +2277,7 @@ class CourseBot:
                         if not filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
                             filename = "image.png" if content_type == "image/png" else "image.jpg"
                         photo = BufferedInputFile(data, filename=filename)
-                        await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None))
+                        await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None), protect_content=True)
                         seen.add(url)
                         sent += 1
                     except Exception:
@@ -2295,10 +2300,11 @@ class CourseBot:
                                 video,
                                 caption=(caption if caption != url else None),
                                 supports_streaming=True,
+                                protect_content=True
                             )
                         except Exception:
                             await self.bot.send_document(
-                                user_id, video, caption=(caption if caption != url else None)
+                                user_id, video, caption=(caption if caption != url else None), protect_content=True
                             )
                         seen.add(url)
                         sent += 1
@@ -2313,7 +2319,7 @@ class CourseBot:
                     )
                     if kind == "image":
                         photo = BufferedInputFile(data, filename=(filename or "image.jpg"))
-                        await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None))
+                        await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None), protect_content=True)
                     elif kind == "video":
                         video = BufferedInputFile(data, filename=(filename or "video.mp4"))
                         try:
@@ -2322,10 +2328,11 @@ class CourseBot:
                                 video,
                                 caption=(caption if caption != url else None),
                                 supports_streaming=True,
+                                protect_content=True
                             )
                         except Exception:
                             await self.bot.send_document(
-                                user_id, video, caption=(caption if caption != url else None)
+                                user_id, video, caption=(caption if caption != url else None), protect_content=True
                             )
                     else:
                         await self.bot.send_message(
@@ -2333,6 +2340,7 @@ class CourseBot:
                             url,
                             disable_web_page_preview=False,
                             parse_mode=None,
+                            protect_content=True
                         )
                     seen.add(url)
                     sent += 1
@@ -2453,9 +2461,9 @@ class CourseBot:
             logger.info(f"   📎 No markers found, sending text as-is")
             if keyboard:
                 # Если есть клавиатура, отправляем текст с клавиатурой
-                await self.bot.send_message(user_id, text, reply_markup=keyboard, disable_web_page_preview=True)
+                await self.bot.send_message(user_id, text, reply_markup=keyboard, disable_web_page_preview=True, protect_content=True)
             else:
-                await self._safe_send_message(user_id, text)
+                await self._safe_send_message(user_id, text, protect_content=True)
             return sent_media_keys
         
         # Разбиваем текст на части по маркерам
@@ -2505,7 +2513,8 @@ class CourseBot:
                                 sent_message = await self.bot.send_photo(
                                     user_id, 
                                     cached_file_id,
-                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
+                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None,
+                                    protect_content=True
                                 )
                                 if is_last and keyboard and not keyboard_attached:
                                     keyboard_attached = True
@@ -2579,7 +2588,8 @@ class CourseBot:
                                 sent_message = await self.bot.send_photo(
                                     user_id, 
                                     photo_file,
-                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
+                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None,
+                                    protect_content=True
                                 )
                                 if is_last and keyboard and not keyboard_attached:
                                     keyboard_attached = True
@@ -2604,7 +2614,8 @@ class CourseBot:
                                 sent_message = await self.bot.send_video(
                                     user_id, 
                                     video_file,
-                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
+                                    reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None,
+                                    protect_content=True
                                 )
                                 if is_last and keyboard and not keyboard_attached:
                                     keyboard_attached = True
@@ -2656,12 +2667,13 @@ class CourseBot:
                             user_id, 
                             part.strip(), 
                             reply_markup=keyboard,
-                            disable_web_page_preview=True
+                            disable_web_page_preview=True,
+                            protect_content=True
                         )
                         last_sent_message_id = sent_message.message_id
                         keyboard_attached = True
                     else:
-                        await self._safe_send_message(user_id, part.strip())
+                        await self._safe_send_message(user_id, part.strip(), protect_content=True)
                     await asyncio.sleep(0.2)
         
         # Если клавиатура не была добавлена к последнему сообщению, добавляем её отдельным сообщением
@@ -2684,7 +2696,8 @@ class CourseBot:
                         user_id,
                         "📝 <b>Задание</b>",
                         reply_markup=keyboard,
-                        disable_web_page_preview=True
+                        disable_web_page_preview=True,
+                        protect_content=True
                     )
                     keyboard_attached = True
             else:
@@ -2798,15 +2811,21 @@ class CourseBot:
         
         return parts if parts else [text]
     
-    async def _safe_send_message(self, chat_id: int, text: str, reply_markup=None, **kwargs):
+    async def _safe_send_message(self, chat_id: int, text: str, reply_markup=None, protect_content: bool = False, **kwargs):
         """
         Безопасная отправка сообщения с проверкой на пустой текст.
         Фильтрует технические ошибки Telegram API.
+        
+        Args:
+            protect_content: Если True, защищает сообщение от копирования и пересылки
         """
         MAX_MESSAGE_LENGTH = 4000  # запас относительно лимита Telegram (4096)
         # В уроках/заданиях ссылки должны показываться отдельными превью-блоками,
         # поэтому у текстовых сообщений по умолчанию выключаем web-page preview.
         kwargs.setdefault("disable_web_page_preview", True)
+        # Защита от копирования для контента уроков и заданий
+        if protect_content:
+            kwargs["protect_content"] = True
 
         if not text or not text.strip():
             logger.warning(f"⚠️ Attempted to send empty message to {chat_id}, using zero-width space")
@@ -3004,13 +3023,13 @@ class CourseBot:
                     caption = None
                     
                     if intro_photo_file_id:
-                        await self.bot.send_photo(user.user_id, intro_photo_file_id, caption=caption)
+                        await self.bot.send_photo(user.user_id, intro_photo_file_id, caption=caption, protect_content=True)
                         logger.info(f"   ✅ Sent intro photo (file_id) for lesson {day}")
                     elif intro_photo_path:
                         from pathlib import Path
                         from aiogram.types import FSInputFile
                         photo_file = FSInputFile(Path(intro_photo_path))
-                        await self.bot.send_photo(user.user_id, photo_file, caption=caption)
+                        await self.bot.send_photo(user.user_id, photo_file, caption=caption, protect_content=True)
                         logger.info(f"   ✅ Sent intro photo (file path) for lesson {day}")
                     await asyncio.sleep(0.6)  # Пауза для плавности
                 except Exception as photo_error:
@@ -3153,8 +3172,8 @@ class CourseBot:
             # Формируем заголовок урока - только текст из Google Doc, без эмодзи и разделителей
             lesson_message = f"<b>{title}</b>\n\n"
             
-            # Отправляем заголовок урока
-            await self.bot.send_message(user.user_id, lesson_message)
+            # Отправляем заголовок урока (защищен от копирования)
+            await self.bot.send_message(user.user_id, lesson_message, protect_content=True)
             await asyncio.sleep(0.5)  # Пауза для плавности
             
             # Для урока 0: отправляем видео с intro_text в caption сразу после заголовка
@@ -3169,7 +3188,7 @@ class CourseBot:
                     caption = intro_text if intro_text else None
                     
                     if video_file_id:
-                        await self.bot.send_video(user.user_id, video_file_id, caption=caption)
+                        await self.bot.send_video(user.user_id, video_file_id, caption=caption, protect_content=True)
                         logger.info(f"   ✅ Sent lesson 0 video with intro_text (file_id) for lesson {day}")
                     elif video_file_path:
                         from pathlib import Path
@@ -3198,7 +3217,7 @@ class CourseBot:
                         if video_path.exists():
                             video_file = FSInputFile(video_path)
                             caption = intro_text if intro_text else None
-                            await self.bot.send_video(user.user_id, video_file, caption=caption)
+                            await self.bot.send_video(user.user_id, video_file, caption=caption, protect_content=True)
                             logger.info(f"   ✅ Sent lesson 0 video with intro_text (file path: {video_path}) for lesson {day}")
                         else:
                             logger.error(f"   ❌ Lesson 0 video not found: {video_path.absolute()}")
@@ -3329,7 +3348,7 @@ class CourseBot:
                 await send_typing_action(self.bot, user.user_id, 0.5)
                 # Текст берется как есть из Google Doc, без разделителей
                 intro_message = intro_text
-                await self._safe_send_message(user.user_id, intro_message)
+                await self._safe_send_message(user.user_id, intro_message, protect_content=True)
                 intro_text_sent_separately = True
                 logger.info(f"   Sent intro_text for lesson {day}")
                 await asyncio.sleep(0.5)  # Пауза для плавности
@@ -3395,7 +3414,8 @@ class CourseBot:
                         await self.bot.send_photo(
                             user.user_id,
                             about_me_photo_file_id,
-                            caption=caption
+                            caption=caption,
+                            protect_content=True
                         )
                         logger.info(f"   ✅ Sent 'ОБО МНЕ' photo (file_id) for lesson {day}")
                         about_me_sent = True
@@ -3412,19 +3432,20 @@ class CourseBot:
                                 await self.bot.send_photo(
                                     user.user_id,
                                     photo_file,
-                                    caption=caption
+                                    caption=caption,
+                                    protect_content=True
                                 )
                                 logger.info(f"   ✅ Sent 'ОБО МНЕ' photo (file path) for lesson {day}")
                                 about_me_sent = True
                             except Exception as path_error:
                                 logger.warning(f"   ⚠️ Не удалось отправить фото 'ОБО МНЕ' по пути для урока {day}: {path_error}")
                                 # Отправляем только текст как fallback
-                                await self._safe_send_message(user.user_id, about_me_text)
+                                await self._safe_send_message(user.user_id, about_me_text, protect_content=True)
                                 logger.info(f"   ✅ Sent 'ОБО МНЕ' text only (fallback) for lesson {day}")
                                 about_me_sent = True
                         else:
                             # Отправляем только текст как fallback
-                            await self._safe_send_message(user.user_id, about_me_text)
+                            await self._safe_send_message(user.user_id, about_me_text, protect_content=True)
                             logger.info(f"   ✅ Sent 'ОБО МНЕ' text only (fallback) for lesson {day}")
                             about_me_sent = True
                 # Если нет file_id, но есть путь к файлу
@@ -3440,19 +3461,20 @@ class CourseBot:
                         await self.bot.send_photo(
                             user.user_id,
                             photo_file,
-                            caption=caption
+                            caption=caption,
+                            protect_content=True
                         )
                         logger.info(f"   ✅ Sent 'ОБО МНЕ' photo (file path) for lesson {day}")
                         about_me_sent = True
                     except Exception as path_error:
                         logger.warning(f"   ⚠️ Не удалось отправить фото 'ОБО МНЕ' по пути для урока {day}: {path_error}")
                         # Отправляем только текст как fallback
-                        await self._safe_send_message(user.user_id, about_me_text)
+                        await self._safe_send_message(user.user_id, about_me_text, protect_content=True)
                         logger.info(f"   ✅ Sent 'ОБО МНЕ' text only (fallback) for lesson {day}")
                         about_me_sent = True
                 # Если нет фото вообще, отправляем только текст
                 elif not about_me_sent:
-                    await self._safe_send_message(user.user_id, about_me_text)
+                    await self._safe_send_message(user.user_id, about_me_text, protect_content=True)
                     logger.info(f"   ✅ Sent 'ОБО МНЕ' text only for lesson {day}")
                     about_me_sent = True
             else:
@@ -3486,7 +3508,7 @@ class CourseBot:
                         # Отправляем все абзацы до целевого
                         for i in range(target_paragraph_index):
                             if paragraphs[i]:
-                                await self._safe_send_message(user.user_id, paragraphs[i])
+                                await self._safe_send_message(user.user_id, paragraphs[i], protect_content=True)
                                 await asyncio.sleep(0.2)
                         
                         # Отправляем картинку перед целевым абзацем
@@ -3498,13 +3520,13 @@ class CourseBot:
                         
                         # Отправляем целевой абзац после картинки
                         if paragraphs[target_paragraph_index]:
-                            await self._safe_send_message(user.user_id, paragraphs[target_paragraph_index])
+                            await self._safe_send_message(user.user_id, paragraphs[target_paragraph_index], protect_content=True)
                             await asyncio.sleep(0.2)
                         
                         # Отправляем оставшиеся абзацы после целевого
                         for i in range(target_paragraph_index + 1, len(paragraphs)):
                             if paragraphs[i]:
-                                await self._safe_send_message(user.user_id, paragraphs[i])
+                                await self._safe_send_message(user.user_id, paragraphs[i], protect_content=True)
                                 await asyncio.sleep(0.2)
                 
                 # Для урока 1: удаляем текст "Добро пожаловать на корвет" из основного текста, 
@@ -3562,7 +3584,7 @@ class CourseBot:
                                 logger.info(f"   ✅ Sent lesson text with inline media markers for day {day} (after video/photo placement)")
                             else:
                                 # Отправляем текст без медиа-маркеров
-                                await self._safe_send_message(user.user_id, text)
+                                await self._safe_send_message(user.user_id, text, protect_content=True)
                                 logger.info(f"   ✅ Sent lesson text for day {day} (after video/photo placement)")
                         else:
                             logger.info(f"   ⏭️ Skipped sending text for day {day} (empty after marker removal)")
@@ -3703,16 +3725,17 @@ class CourseBot:
                                                     user.user_id,
                                                     full_text,
                                                     reply_markup=button_keyboard,
-                                                    disable_web_page_preview=True
+                                                    disable_web_page_preview=True,
+                                                    protect_content=True
                                                 )
                                                 logger.info(f"   ✅ Sent lesson 30 with buttons after main-hero link")
                                             else:
-                                                await self._safe_send_message(user.user_id, post_text.strip())
+                                                await self._safe_send_message(user.user_id, post_text.strip(), protect_content=True)
                                         else:
-                                            await self._safe_send_message(user.user_id, post_text.strip())
+                                            await self._safe_send_message(user.user_id, post_text.strip(), protect_content=True)
                                     else:
                                         # Отправляем пост без медиа-маркеров как отдельный блок
-                                        await self._safe_send_message(user.user_id, post_text.strip())
+                                        await self._safe_send_message(user.user_id, post_text.strip(), protect_content=True)
                                     logger.info(f"   ✅ Sent lesson post {i + 1}/{len(lesson_posts)} for day {day} (separate block after [POST])")
                                 
                                 # Пауза между блоками (постами)
@@ -4154,10 +4177,11 @@ class CourseBot:
                                 user.user_id,
                                 file_id,
                                 caption=video_caption,
-                                supports_streaming=True
+                                supports_streaming=True,
+                                protect_content=True
                             )
                         else:
-                            await self.bot.send_photo(user.user_id, file_id, caption=video_caption)
+                            await self.bot.send_photo(user.user_id, file_id, caption=video_caption, protect_content=True)
                     elif file_path:
                         from pathlib import Path
                         from aiogram.types import FSInputFile
@@ -4366,7 +4390,7 @@ class CourseBot:
                             # Отправляем все части до последней непустой без клавиатуры
                             for i, part in enumerate(message_parts[:last_non_empty_idx], 1):
                                 if part and part.strip():
-                                    await self.bot.send_message(user.user_id, part, disable_web_page_preview=True)
+                                    await self.bot.send_message(user.user_id, part, disable_web_page_preview=True, protect_content=True)
                                     await asyncio.sleep(0.3)  # Небольшая пауза между сообщениями
                                     logger.info(f"   Sent task part {i}/{len(message_parts)}")
                                 else:
@@ -4378,6 +4402,7 @@ class CourseBot:
                                 message_parts[last_non_empty_idx],
                                 reply_markup=keyboard,
                                 disable_web_page_preview=True,
+                                protect_content=True,
                             )
                             try:
                                 await self.bot.edit_message_reply_markup(
@@ -4392,7 +4417,7 @@ class CourseBot:
                             )
                     else:
                         # Если сообщение короткое, отправляем как есть
-                        sent = await self.bot.send_message(user.user_id, task_message_clean, reply_markup=keyboard, disable_web_page_preview=True)
+                        sent = await self.bot.send_message(user.user_id, task_message_clean, reply_markup=keyboard, disable_web_page_preview=True, protect_content=True)
                         try:
                             await self.bot.edit_message_reply_markup(
                                 chat_id=user.user_id,
@@ -4550,7 +4575,7 @@ class CourseBot:
                             photo_file = FSInputFile(photo_path)
                             # Убираем разделители - caption должен браться из данных или быть None
                             caption = None
-                            await self.bot.send_photo(user.user_id, photo_file, caption=caption)
+                            await self.bot.send_photo(user.user_id, photo_file, caption=caption, protect_content=True)
                             logger.info(f"   ✅ Sent follow_up photo (file path: {photo_path}) for lesson {day}")
                             photo_sent = True
                             await asyncio.sleep(0.7)  # Пауза для плавности
@@ -4589,7 +4614,7 @@ class CourseBot:
                         # Анимация перед отправкой текста
                         await send_typing_action(self.bot, user.user_id, 0.7)
                         logger.info(f"   📤 Sending follow_up_text for lesson {day} (length: {len(follow_up_text)} chars)")
-                        await self.bot.send_message(user.user_id, follow_up_text, reply_markup=persistent_keyboard)
+                        await self.bot.send_message(user.user_id, follow_up_text, reply_markup=persistent_keyboard, protect_content=True)
                         logger.info(f"   ✅ Successfully sent follow_up_text for lesson {day}")
                     except Exception as text_error:
                         error_msg = str(text_error)
@@ -5467,15 +5492,15 @@ class CourseBot:
                 await send_typing_action(self.bot, user.user_id, 0.6)
 
                 header = f"📚 <b>День {lesson.day_number}: {html.escape(lesson.title or '')}</b>"
-                await self._safe_send_message(user.user_id, header, parse_mode="HTML")
+                await self._safe_send_message(user.user_id, header, parse_mode="HTML", protect_content=True)
 
                 content_text = (lesson.content_text or "").strip()
                 lesson_part, embedded_task = self._split_assignment_from_text(content_text)
                 if lesson_part:
-                    await self._safe_send_message(user.user_id, lesson_part)
+                    await self._safe_send_message(user.user_id, lesson_part, protect_content=True)
 
                 if getattr(lesson, "video_url", None):
-                    await self._safe_send_message(user.user_id, f"🎥 Видео: {lesson.video_url}")
+                    await self._safe_send_message(user.user_id, f"🎥 Видео: {lesson.video_url}", protect_content=True)
 
                 if getattr(lesson, "image_url", None):
                     try:

@@ -1714,6 +1714,7 @@ class AdminBot:
                         voice=voice_input,
                         caption=feedback_message,
                         reply_markup=followup_kb,
+                        protect_content=True
                     )
                 except Exception:
                     await course_bot.send_document(
@@ -1721,9 +1722,10 @@ class AdminBot:
                         document=voice_input,
                         caption=feedback_message,
                         reply_markup=followup_kb,
+                        protect_content=True
                     )
             else:
-                await course_bot.send_message(user.user_id, feedback_message, reply_markup=followup_kb)
+                await course_bot.send_message(user.user_id, feedback_message, reply_markup=followup_kb, protect_content=True)
             # Restore persistent reply keyboard (some clients hide it after inline-only messages).
             await course_bot.send_message(user.user_id, "\u200B", reply_markup=self._course_persistent_keyboard())
             await self.assignment_service.mark_feedback_sent(assignment_id)
@@ -1834,6 +1836,7 @@ class AdminBot:
                         voice=voice_input,
                         caption=answer_message,
                         reply_markup=reply_markup,
+                        protect_content=True
                     )
                 except Exception:
                     await target_bot.send_document(
@@ -1841,9 +1844,10 @@ class AdminBot:
                         document=voice_input,
                         caption=answer_message,
                         reply_markup=reply_markup,
+                        protect_content=True
                     )
             else:
-                await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup)
+                await target_bot.send_message(user_id, answer_message, reply_markup=reply_markup, protect_content=True)
                 logger.info(f"✅ Successfully sent answer message to user {user_id}")
         except TelegramBadRequest as e:
             error_msg = str(e).lower()
