@@ -82,6 +82,10 @@ class AdminBot:
         self._course_bot_client: Optional[Bot] = None
         self._sales_bot_client: Optional[Bot] = None
         
+        # PIN authentication system
+        self.ADMIN_PIN = "444444"  # PIN для доступа к ПУП
+        self.authorized_users = set()  # Множество авторизованных chat_id
+        
         # Register handlers
         self._register_handlers()
 
@@ -175,6 +179,13 @@ class AdminBot:
         self.dp.message.register(self.handle_users, Command("users"))
         self.dp.message.register(self.handle_settings, Command("settings"))
         self.dp.message.register(self.handle_sync_content, Command("sync_content"))
+        
+        # PIN input handler (must be registered before other text handlers)
+        # Check if message is 6 digits (potential PIN)
+        self.dp.message.register(
+            self.handle_pin_input,
+            F.text.regexp(r'^\d{6}$') & ~F.command
+        )
 
         # Persistent keyboard buttons (text)
         self.dp.message.register(self.handle_stats, F.text == "📊 Статистика")
@@ -244,7 +255,23 @@ class AdminBot:
         self.dp.message.register(self.handle_restore_button, F.text == "⏪ Откатить обновление")
     
     async def handle_start(self, message: Message):
-        """Handle /start command - show admin menu."""
+        """Handle /start command - show PIN prompt or admin menu."""
+        chat_id = message.chat.id
+        
+        # Проверяем, авторизован ли пользователь
+        if chat_id not in self.authorized_users:
+            await message.answer(
+                "🔐 <b>Пункт управления полетами</b>\n\n"
+                "Для доступа к админ-панели требуется ввести PIN-код.\n\n"
+                "Введите PIN из 6 цифр:"
+            )
+            return
+        
+        # Пользователь уже авторизован - показываем меню
+        await self._show_admin_menu(message)
+    
+    async def _show_admin_menu(self, message: Message):
+        """Show admin menu after successful authentication."""
         # Bind admin chat id for cross-bot forwarding (sales/course -> PUP).
         try:
             await self.db.connect()
@@ -260,8 +287,28 @@ class AdminBot:
             reply_markup=keyboard
         )
     
+    async def handle_pin_input(self, message: Message):
+        """Handle PIN input from user."""
+        chat_id = message.chat.id
+        pin = message.text.strip()
+        
+        # Проверяем PIN
+        if pin == self.ADMIN_PIN:
+            # Авторизация успешна
+            self.authorized_users.add(chat_id)
+            await message.answer("✅ PIN-код верный. Доступ разрешен.")
+            await self._show_admin_menu(message)
+        else:
+            # Неверный PIN
+            await message.answer(
+                "❌ Неверный PIN-код. Доступ запрещен.\n\n"
+                "Попробуйте еще раз или используйте /start для повторного ввода."
+            )
+    
     async def handle_help(self, message: Message):
         """Handle /help command."""
+        if not await self._check_authorization(message):
+            return
         help_text = (
             "📚 <b>Справка по командам</b>\n\n"
             "/start - Главное меню\n"
@@ -305,6 +352,8 @@ class AdminBot:
     
     async def handle_stats(self, message: Message):
         """Handle /stats command - show system statistics and per-user details."""
+        if not await self._check_authorization(message):
+            return
         try:
             await self.db.connect()
             
@@ -424,6 +473,8 @@ class AdminBot:
     
     async def handle_users(self, message: Message):
         """Handle /users command - show user list with stats buttons."""
+        if not await self._check_authorization(message):
+            return
         try:
             await self.db.connect()
             users = await self._get_recent_users(limit=200)  # Show all users (max 200)
@@ -461,6 +512,8 @@ class AdminBot:
     
     async def handle_settings(self, message: Message):
         """Handle /settings command - show bot settings."""
+        if not await self._check_authorization(message):
+            return
         await self.db.connect()
 
         prices_text = await self._format_prices_text()
@@ -910,6 +963,8 @@ class AdminBot:
         await callback.message.answer(f"✅ Промокод <code>{code}</code> удалён (деактивирован).")
 
     async def handle_admin_state_input(self, message: Message):
+        if message.chat.id not in self.authorized_users:
+            raise SkipHandler()  # Skip if not authorized
         state = self._admin_state.get(message.from_user.id)
         if not state:
             raise SkipHandler()
@@ -1135,6 +1190,8 @@ class AdminBot:
     
     async def handle_sync_content(self, message: Message):
         """Handle /sync_content command - sync content from Google Drive."""
+        if not await self._check_authorization(message):
+            return
         ok, reason = (self.drive_sync._admin_ready() if self.drive_sync else (False, "Drive sync not available"))
         if not ok:
             await message.answer(
@@ -1197,11 +1254,16 @@ class AdminBot:
         ])
 
     async def handle_compose_reply_cancel(self, callback: CallbackQuery):
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         self._compose_reply.pop(callback.from_user.id, None)
         await callback.message.answer("✅ Отправка отменена.")
 
     async def handle_compose_reply_text(self, message: Message):
+        if message.chat.id not in self.authorized_users:
+            raise SkipHandler()  # Skip if not authorized
         if message.reply_to_message:
             raise SkipHandler()
 
@@ -1266,6 +1328,8 @@ class AdminBot:
         await message.answer("❌ Не удалось отправить: неизвестный тип ответа.")
 
     async def handle_compose_reply_voice(self, message: Message):
+        if message.chat.id not in self.authorized_users:
+            raise SkipHandler()  # Skip if not authorized
         if message.reply_to_message:
             raise SkipHandler()
 
@@ -1334,6 +1398,9 @@ class AdminBot:
     
     async def handle_reply(self, message: Message):
         """Handle reply to question/assignment message."""
+        if message.chat.id not in self.authorized_users:
+            await message.answer("🔐 Требуется авторизация. Используйте /start для ввода PIN.")
+            return
         if not message.reply_to_message:
             return
         
@@ -1767,6 +1834,9 @@ class AdminBot:
     
     async def handle_reply_button(self, callback: CallbackQuery):
         """Handle reply button click."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация. Используйте /start для ввода PIN.", show_alert=True)
+            return
         await callback.answer()
         try:
             assignment_id = int(callback.data.split(":")[1])
@@ -1806,6 +1876,9 @@ class AdminBot:
     
     async def handle_question_reply_callback(self, callback: CallbackQuery):
         """Handle question reply button."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация. Используйте /start для ввода PIN.", show_alert=True)
+            return
         await callback.answer()
         parts = callback.data.split(":")
         
@@ -1877,6 +1950,8 @@ class AdminBot:
     
     async def handle_questions_button(self, message: Message):
         """Handle questions button from keyboard - show two buttons: answered and unanswered."""
+        if not await self._check_authorization(message):
+            return
         try:
             await self.db.connect()
             
@@ -2165,6 +2240,8 @@ class AdminBot:
     
     async def handle_restore_button(self, message: Message):
         """Handle restore button from keyboard - show list of 5 latest backups."""
+        if not await self._check_authorization(message):
+            return
         if not self.drive_sync or not self.drive_sync._admin_ready():
             await message.answer("❌ Синхронизация с Google Drive не настроена.")
             return
