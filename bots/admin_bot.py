@@ -2015,6 +2015,9 @@ class AdminBot:
     
     async def handle_questions_unanswered(self, callback: CallbackQuery):
         """Handle unanswered questions filter button - show each question as separate message with button."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         try:
             await callback.answer()
         except:
@@ -2083,6 +2086,9 @@ class AdminBot:
     
     async def handle_questions_answered(self, callback: CallbackQuery):
         """Handle answered questions filter button - show menu with dates."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         try:
             await callback.answer()
         except:
@@ -2145,6 +2151,9 @@ class AdminBot:
     
     async def handle_questions_answered_by_date(self, callback: CallbackQuery):
         """Handle answered questions by date - show questions for specific date."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         try:
             await callback.answer()
         except:
@@ -2219,6 +2228,9 @@ class AdminBot:
     
     async def handle_questions_back(self, callback: CallbackQuery):
         """Handle back button from questions filter - show full list."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         try:
             await callback.answer()
         except:
@@ -2295,6 +2307,9 @@ class AdminBot:
     
     async def handle_restore_confirm(self, callback: CallbackQuery):
         """Handle restore confirmation."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         
         try:
@@ -2333,6 +2348,9 @@ class AdminBot:
     
     async def handle_restore_cancel(self, callback: CallbackQuery):
         """Handle restore cancellation."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer("Отменено")
         try:
             await callback.message.edit_text("✅ Откат отменен.")
@@ -2478,6 +2496,9 @@ class AdminBot:
     
     async def handle_user_stats_detail(self, callback: CallbackQuery):
         """Handle callback to show detailed stats for a specific user."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
         await callback.answer()
         try:
             user_id = int(callback.data.split(":")[2])
