@@ -102,14 +102,6 @@ class MentorReminderScheduler:
                     continue
                 enabled += 1
                 
-                # Логируем для отладки
-                logger.debug(
-                    f"   👤 mentor_reminder check: user={user.user_id} "
-                    f"reminders={user.mentor_reminders} current_day={user.current_day} "
-                    f"last_reminder={user.last_mentor_reminder} "
-                    f"window_start={user_window_start_str} window_end={user_window_end_str}"
-                )
-                
                 # Пропускаем пользователей, которые завершили курс
                 # NOTE: do NOT re-import Config here; it causes UnboundLocalError earlier in the function.
                 if user.current_day > Config.COURSE_DURATION_DAYS:
@@ -121,6 +113,14 @@ class MentorReminderScheduler:
                 # We do NOT send reminders outside this window.
                 user_window_start_str = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
                 user_window_end_str = getattr(user, "mentor_reminder_end_local", None) or Config.MENTOR_REMINDER_END_LOCAL
+                
+                # Логируем для отладки (после определения переменных)
+                logger.debug(
+                    f"   👤 mentor_reminder check: user={user.user_id} "
+                    f"reminders={user.mentor_reminders} current_day={user.current_day} "
+                    f"last_reminder={user.last_mentor_reminder} "
+                    f"window_start={user_window_start_str} window_end={user_window_end_str}"
+                )
                 
                 window_start_t = _parse_hhmm(user_window_start_str, time(9, 30))
                 window_end_t = _parse_hhmm(user_window_end_str, time(22, 0))
