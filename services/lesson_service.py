@@ -64,11 +64,16 @@ class LessonService:
         - Subsequent lessons are sent daily at the same delivery time
         - Uses user's custom lesson_delivery_time_local if set, otherwise uses Config default
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if not user.has_access() or not user.start_date:
+            logger.debug(f"User {user.user_id}: No access or no start_date")
             return False
         
         # Lesson 0 is sent immediately after purchase, not by scheduler
         if user.current_day == 0:
+            logger.debug(f"User {user.user_id}: current_day is 0, skipping")
             return False
         
         # Get user's delivery time or use default
@@ -80,6 +85,7 @@ class LessonService:
             delivery_t = time(hour=int(hh), minute=int(mm))
         except Exception:
             delivery_t = time(8, 30)  # Default fallback
+            logger.warning(f"User {user.user_id}: Failed to parse delivery_time '{delivery_time_str}', using default 08:30")
         
         # Calculate expected lesson time in user's timezone
         tz = get_schedule_timezone()
@@ -98,7 +104,31 @@ class LessonService:
         # Convert to UTC for comparison
         expected_lesson_time_utc = expected_lesson_datetime_local.astimezone(timezone.utc).replace(tzinfo=None)
         
-        return datetime.utcnow() >= expected_lesson_time_utc
+        # Check if lesson should be sent (time has passed)
+        should_send = datetime.utcnow() >= expected_lesson_time_utc
+        
+        # Log detailed information for debugging
+        logger.info(
+            f"User {user.user_id} (day {user.current_day}): "
+            f"delivery_time={delivery_time_str}, "
+            f"expected_date={expected_lesson_date}, "
+            f"expected_time_local={expected_lesson_datetime_local.strftime('%Y-%m-%d %H:%M:%S %Z')}, "
+            f"expected_time_utc={expected_lesson_time_utc.strftime('%Y-%m-%d %H:%M:%S')}, "
+            f"now_utc={datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}, "
+            f"now_local={now_local.strftime('%Y-%m-%d %H:%M:%S %Z')}, "
+            f"should_send={should_send}"
+        )
+        
+        # Additional check: ensure we're not trying to send a lesson that's too far in the past
+        # (more than 24 hours late - might indicate a problem)
+        time_diff = (datetime.utcnow() - expected_lesson_time_utc).total_seconds()
+        if should_send and time_diff > 86400:  # More than 24 hours late
+            logger.warning(
+                f"User {user.user_id}: Lesson is {time_diff/3600:.1f} hours late! "
+                f"Expected: {expected_lesson_time_utc}, Now: {datetime.utcnow()}"
+            )
+        
+        return should_send
     
     async def get_next_lesson_day(self, user: User) -> Optional[int]:
         """Get the next lesson day number for a user."""
