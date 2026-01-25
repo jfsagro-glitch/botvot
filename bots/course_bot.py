@@ -2692,22 +2692,23 @@ class CourseBot:
                 except Exception as e:
                     # Если не удалось отредактировать (например, это медиа без caption), отправляем клавиатуру отдельно
                     logger.warning(f"   ⚠️ Could not edit last message to add keyboard: {e}, sending separately")
-                    await self.bot.send_message(
+                    await self._safe_send_message(
                         user_id,
                         "📝 <b>Задание</b>",
                         reply_markup=keyboard,
-                        disable_web_page_preview=True,
-                        protect_content=True
+                        protect_content=True,
+                        parse_mode="HTML"
                     )
                     keyboard_attached = True
             else:
                 # Если не было отправлено ни одного сообщения, отправляем клавиатуру отдельно
                 logger.warning(f"   ⚠️ No messages sent, sending keyboard separately")
-                await self.bot.send_message(
+                await self._safe_send_message(
                     user_id,
                     "📝 <b>Задание</b>",
                     reply_markup=keyboard,
-                    disable_web_page_preview=True
+                    protect_content=True,
+                    parse_mode="HTML"
                 )
                 keyboard_attached = True
         
@@ -2883,12 +2884,12 @@ class CourseBot:
                         await asyncio.sleep(0.2)
                 last_part = parts[-1] if parts else ""
                 if last_part and last_part.strip():
-                    await self.bot.send_message(chat_id, last_part, reply_markup=reply_markup, **kwargs)
+                    return await self.bot.send_message(chat_id, last_part, reply_markup=reply_markup, **kwargs)
                 elif reply_markup:
-                    await self.bot.send_message(chat_id, "\u200B", reply_markup=reply_markup, **kwargs)
-                return
+                    return await self.bot.send_message(chat_id, "\u200B", reply_markup=reply_markup, **kwargs)
+                return None
 
-            await self.bot.send_message(chat_id, text, reply_markup=reply_markup, **kwargs)
+            return await self.bot.send_message(chat_id, text, reply_markup=reply_markup, **kwargs)
         except Exception as e:
             error_msg = str(e)
             # Фильтруем технические ошибки о пустых сообщениях
@@ -2902,9 +2903,10 @@ class CourseBot:
                         await asyncio.sleep(0.2)
                 last_part = parts[-1] if parts else ""
                 if last_part and last_part.strip():
-                    await self.bot.send_message(chat_id, last_part, reply_markup=reply_markup, **kwargs)
+                    return await self.bot.send_message(chat_id, last_part, reply_markup=reply_markup, **kwargs)
                 elif reply_markup:
-                    await self.bot.send_message(chat_id, "\u200B", reply_markup=reply_markup, **kwargs)
+                    return await self.bot.send_message(chat_id, "\u200B", reply_markup=reply_markup, **kwargs)
+                return None
             else:
                 raise
     
@@ -3218,8 +3220,8 @@ class CourseBot:
             await self._safe_send_message(user.user_id, lesson_message, protect_content=True, parse_mode="HTML")
             await asyncio.sleep(0.5)  # Пауза для плавности
             
-            # Для первого урока (день 0 или день 1) отправляем предупреждение о защите контента
-            if day == 0 or day == 1:
+            # Для дня 0 отправляем предупреждение о защите контента
+            if day == 0 or str(day) == "0":
                 protection_warning = (
                     "🔒 <b>Защита контента</b>\n\n"
                     "Весь контент курса защищен от копирования, пересылки и скриншотов.\n\n"
@@ -4478,7 +4480,8 @@ class CourseBot:
                             )
                     else:
                         # Если сообщение короткое, отправляем как есть (с водяным знаком)
-                        sent = await self.bot.send_message(user.user_id, self._add_watermark(task_message_clean, user.user_id), reply_markup=keyboard, disable_web_page_preview=True, protect_content=True)
+                        # Используем _safe_send_message, который автоматически добавит водяной знак
+                        sent = await self._safe_send_message(user.user_id, task_message_clean, reply_markup=keyboard, protect_content=True, parse_mode="HTML")
                         try:
                             await self.bot.edit_message_reply_markup(
                                 chat_id=user.user_id,
