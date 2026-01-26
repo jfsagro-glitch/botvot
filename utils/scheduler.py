@@ -50,6 +50,7 @@ class LessonScheduler:
         """
         self.running = True
         logger = logging.getLogger(__name__)
+        logger.info(f"📚 Lesson Scheduler started (check interval: {check_interval_seconds}s)")
         while self.running:
             try:
                 await self._check_and_deliver_lessons()

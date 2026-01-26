@@ -222,6 +222,8 @@ class AdminBot:
         self.dp.callback_query.register(self.handle_compose_reply_cancel, F.data == "admin:compose_reply:cancel")
         self.dp.callback_query.register(self.handle_all_user_stats, F.data == "admin:all_user_stats")
         self.dp.callback_query.register(self.handle_user_stats_detail, F.data.startswith("admin:user_stats:"))
+        self.dp.callback_query.register(self.handle_user_block, F.data.startswith("admin:user:block:"))
+        self.dp.callback_query.register(self.handle_user_unblock, F.data.startswith("admin:user:unblock:"))
         self.dp.callback_query.register(self.handle_restore_confirm, F.data.startswith("admin:restore_confirm:"))
         self.dp.callback_query.register(self.handle_restore_cancel, F.data == "admin:restore_cancel")
         self.dp.callback_query.register(self.handle_admin_prices_menu, F.data == "admin:prices")
@@ -2567,7 +2569,22 @@ class AdminBot:
         
         stats = await self.db.get_user_statistics(user_id)
         stats_text = await self._format_user_stats_detailed(user, stats)
-        await message_or_callback.answer(stats_text, parse_mode="HTML")
+        
+        # Создаем клавиатуру с кнопками блокировки/разблокировки
+        keyboard_buttons = []
+        if user.is_blocked:
+            keyboard_buttons.append([InlineKeyboardButton(
+                text="✅ Разблокировать",
+                callback_data=f"admin:user:unblock:{user_id}"
+            )])
+        else:
+            keyboard_buttons.append([InlineKeyboardButton(
+                text="🚫 Заблокировать",
+                callback_data=f"admin:user:block:{user_id}"
+            )])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+        await message_or_callback.answer(stats_text, parse_mode="HTML", reply_markup=keyboard)
     
     async def _format_user_stats_short(self, user: User, stats: dict) -> str:
         """Format short user stats (for list view)."""
@@ -2650,12 +2667,14 @@ class AdminBot:
         actions_text = "\n".join([f"  • {action}: {count}" for action, count in top_actions]) if top_actions else "  Нет данных"
         
         display_name = self._format_user_display_name(user)
+        blocked_status = "🚫 <b>ЗАБЛОКИРОВАН</b>" if user.is_blocked else "✅ Активен"
         return (
             f"📊 <b>Детальная статистика пользователя</b>\n\n"
             f"👤 <b>{display_name}</b>\n"
             f"🆔 ID: {user.user_id}\n"
             f"📅 Тариф: {user.tariff.value.upper() if user.tariff else 'Нет'}\n"
-            f"📚 Текущий день: {user.current_day}\n\n"
+            f"📚 Текущий день: {user.current_day}\n"
+            f"🔒 Статус: {blocked_status}\n\n"
             f"⏱️ <b>Время онлайн:</b>\n"
             f"  Всего: {hours}ч {minutes}м {seconds}с\n\n"
             f"🔢 <b>Заходы в ботов:</b>\n"
@@ -2672,6 +2691,44 @@ class AdminBot:
             f"🎯 <b>Популярные действия:</b>\n{actions_text}"
             f"{test_data_section}"
         )
+    
+    async def handle_user_block(self, callback: CallbackQuery):
+        """Handle user blocking."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
+        
+        try:
+            user_id = int(callback.data.split(":")[3])
+            success = await self.db.block_user(user_id)
+            if success:
+                await callback.answer("✅ Пользователь заблокирован")
+                # Обновляем статистику пользователя
+                await self._show_user_stats(callback.message, user_id)
+            else:
+                await callback.answer("❌ Ошибка при блокировке пользователя", show_alert=True)
+        except Exception as e:
+            logger.error(f"Error blocking user: {e}", exc_info=True)
+            await callback.answer("❌ Ошибка при блокировке", show_alert=True)
+    
+    async def handle_user_unblock(self, callback: CallbackQuery):
+        """Handle user unblocking."""
+        if callback.message.chat.id not in self.authorized_users:
+            await callback.answer("🔐 Требуется авторизация.", show_alert=True)
+            return
+        
+        try:
+            user_id = int(callback.data.split(":")[3])
+            success = await self.db.unblock_user(user_id)
+            if success:
+                await callback.answer("✅ Пользователь разблокирован")
+                # Обновляем статистику пользователя
+                await self._show_user_stats(callback.message, user_id)
+            else:
+                await callback.answer("❌ Ошибка при разблокировке пользователя", show_alert=True)
+        except Exception as e:
+            logger.error(f"Error unblocking user: {e}", exc_info=True)
+            await callback.answer("❌ Ошибка при разблокировке", show_alert=True)
     
     async def start(self):
         """Start the admin bot."""

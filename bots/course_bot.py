@@ -51,6 +51,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Ширина мобильного экрана для медиа (в пикселях)
+# Telegram автоматически масштабирует медиа под ширину экрана пользователя
+# Используем стандартную ширину для мобильных устройств
+MOBILE_SCREEN_WIDTH = 720  # Стандартная ширина для мобильных устройств в Telegram
+
 
 class CourseBot:
     """Course Delivery Bot implementation."""
@@ -225,18 +230,29 @@ class CourseBot:
         """
         Отправляет видео с повторными попытками и оптимизированными параметрами.
         Автоматически сжимает видео, если оно превышает лимит 50 МБ.
+        Автоматически масштабирует под ширину мобильного экрана, если размеры не указаны.
         
         Args:
             user_id: ID пользователя
             video: file_id или FSInputFile
             caption: Подпись к видео
-            width: Ширина видео
-            height: Высота видео
+            width: Ширина видео (если None, используется MOBILE_SCREEN_WIDTH)
+            height: Высота видео (если None, вычисляется пропорционально)
             supports_streaming: Поддержка стриминга
             max_retries: Максимальное количество попыток
         """
+        # Если width не указан, используем ширину мобильного экрана
+        # Если height не указан, но width указан, вычисляем height пропорционально
+        # Если оба не указаны, используем ширину мобильного экрана и не указываем height
+        # (Telegram автоматически масштабирует)
+        if width is None:
+            width = MOBILE_SCREEN_WIDTH
+            # Не указываем height, чтобы Telegram автоматически масштабировал пропорционально
+            height = None
+        
         # Если это FSInputFile, проверяем размер и сжимаем при необходимости
         video_to_send = video
+        original_video_path = None
         from aiogram.types import FSInputFile
         if isinstance(video, FSInputFile):
             # Получаем путь к файлу из FSInputFile
@@ -249,6 +265,9 @@ class CourseBot:
             elif hasattr(video, '_path'):
                 video_path = Path(video._path)
             
+            # Сохраняем оригинальный путь для использования в обработчике ошибок
+            original_video_path = video_path
+            
             if video_path and video_path.exists():
                 compressed_path = await self._compress_video_if_needed(video_path)
                 if compressed_path:
@@ -260,6 +279,8 @@ class CourseBot:
                 # Увеличиваем таймаут для больших файлов
                 request_timeout = 300 if attempt == 0 else 600  # 5 минут, затем 10 минут
                 
+                # Отправляем видео с указанными параметрами
+                # Если height не указан, Telegram автоматически масштабирует пропорционально width
                 await self.bot.send_video(
                     user_id,
                     video_to_send,
@@ -397,11 +418,20 @@ class CourseBot:
             return
         
         if not user.has_access():
-            await message.answer(
-                "❌ У вас нет активного доступа к курсу.\n\n"
-                "Пожалуйста, сначала приобретите доступ через нашего продающего бота @StartNowQ_bot",
-                reply_markup=persistent_keyboard
-            )
+            # Проверяем, заблокирован ли пользователь
+            if user.is_blocked:
+                await message.answer(
+                    "🚫 <b>Ваш доступ к курсу заблокирован</b>\n\n"
+                    "Обратитесь в поддержку для выяснения причин.",
+                    reply_markup=persistent_keyboard,
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    "❌ У вас нет активного доступа к курсу.\n\n"
+                    "Пожалуйста, сначала приобретите доступ через нашего продающего бота @StartNowQ_bot",
+                    reply_markup=persistent_keyboard
+                )
             return
         
         # Show welcome and current lesson
@@ -419,7 +449,7 @@ class CourseBot:
         else:
             user_name = "друг"
         
-        logger.info(f"   User name determined: '{user_name}' (first_name={first_name}, user.first_name={safe_first_name}, username={username})")
+        logger.info(f"   User name determined: '{user_name}' (first_name={first_name}, user.first_name={user.first_name}, username={username})")
         
         persistent_keyboard = self._create_persistent_keyboard()
         await message.answer(
@@ -445,7 +475,7 @@ class CourseBot:
         """Handle /lesson command - show current lesson."""
         user_id = message.from_user.id
         logger.info(f"📚 Command /lesson received from user {user_id}")
-        logger.info(f"   Message text: {safe_message_text}")
+        logger.info(f"   Message text: {message.text}")
         logger.info(f"   Chat ID: {message.chat.id}")
         
         # Отправляем индикатор печати
@@ -1989,10 +2019,16 @@ class CourseBot:
                 if media_type == "photo":
                     await self.bot.send_photo(user_id, file_id, caption=caption, protect_content=True)
                 elif media_type == "video":
-                    # Для видео не указываем width/height, чтобы сохранить родные пропорции
-                    # Урок 1 имеет специальную обработку в _send_lesson_from_json (не доходит до сюда)
-                    # Для всех остальных видео (включая уроки 11 и 30) сохраняем пропорции
-                    await self.bot.send_video(user_id, file_id, caption=caption, supports_streaming=True, protect_content=True)
+                    # Используем ширину мобильного экрана для правильного отображения на мобильных устройствах
+                    # Telegram автоматически масштабирует высоту пропорционально
+                    await self.bot.send_video(
+                        user_id, 
+                        file_id, 
+                        caption=caption, 
+                        width=MOBILE_SCREEN_WIDTH,
+                        supports_streaming=True, 
+                        protect_content=True
+                    )
                 await asyncio.sleep(0.2)  # Минимальная пауза для стабильности
                 return True
             
@@ -2045,11 +2081,17 @@ class CourseBot:
                     if media_type == "photo":
                         await self.bot.send_photo(user_id, media_file, caption=caption, protect_content=True)
                     elif media_type == "video":
-                        # Для видео не указываем width/height, чтобы сохранить родные пропорции
-                        # Урок 1 имеет специальную обработку в _send_lesson_from_json (не доходит до сюда)
-                        # Для всех остальных видео (включая уроки 11 и 30) сохраняем пропорции
+                        # Используем ширину мобильного экрана для правильного отображения на мобильных устройствах
+                        # Telegram автоматически масштабирует высоту пропорционально
                         try:
-                            await self.bot.send_video(user_id, media_file, caption=caption, supports_streaming=True, protect_content=True)
+                            await self.bot.send_video(
+                                user_id, 
+                                media_file, 
+                                caption=caption, 
+                                width=MOBILE_SCREEN_WIDTH,
+                                supports_streaming=True, 
+                                protect_content=True
+                            )
                         except Exception as video_error:
                             error_msg = str(video_error).lower()
                             if "entity too large" in error_msg or "file too large" in error_msg:
@@ -2193,67 +2235,191 @@ class CourseBot:
         seen: Optional[set[str]] = None,
         limit: int = 6,
     ):
+        """
+        Отправляет текст с медиа, вставляя медиа строго в том месте, где указана ссылка.
+        Разбивает текст на блоки и вставляет медиа между блоками.
+        """
         if not text:
-            return
-
-        # Prefer per-line extraction so consecutive links become separate preview blocks
-        # with their own captions (e.g. "Фрагмент 1:", "Фрагмент 2:").
-        candidates: list[tuple[str, str]] = []
-        for raw_line in (text or "").splitlines():
-            line = (raw_line or "").strip()
-            if not line:
-                continue
-            for u in self._URL_RE.findall(line):
-                url = self._clean_url(u)
-                if not url:
-                    continue
-                candidates.append((url, line))
-
-        if not candidates:
-            # Fallback: any URL in the whole text
-            urls = [self._clean_url(u) for u in self._URL_RE.findall(text or "")]
-            candidates = [(u, u) for u in urls if u]
-
-        if not candidates:
             return
 
         if seen is None:
             seen = set()
 
-        sent = 0
+        # Находим все URL в тексте с их позициями
+        url_positions = []
+        for match in self._URL_RE.finditer(text):
+            url = self._clean_url(match.group(0))
+            if url and url not in seen:
+                url_positions.append({
+                    'url': url,
+                    'start': match.start(),
+                    'end': match.end(),
+                    'line': self._get_line_for_position(text, match.start())
+                })
+        
+        if not url_positions:
+            # Нет URL, отправляем текст как есть
+            if text.strip():
+                await self._safe_send_message(user_id, text, protect_content=True)
+            return
+
+        # Сортируем по позиции в тексте
+        url_positions.sort(key=lambda x: x['start'])
+
+        # Разбиваем текст на блоки: текст до URL, URL, текст после URL
+        text_blocks = []
+        last_pos = 0
+        urls_to_remove = set()
+        
+        for url_info in url_positions[:limit]:  # Ограничиваем количество медиа
+            # Текст до URL
+            text_before = text[last_pos:url_info['start']].strip()
+            if text_before:
+                text_blocks.append({'type': 'text', 'content': text_before})
+            
+            # URL (медиа)
+            text_blocks.append({
+                'type': 'media',
+                'url': url_info['url'],
+                'line': url_info['line']
+            })
+            
+            urls_to_remove.add(url_info['url'])
+            last_pos = url_info['end']
+            seen.add(url_info['url'])
+        
+        # Текст после последнего URL
+        text_after = text[last_pos:].strip()
+        if text_after:
+            text_blocks.append({'type': 'text', 'content': text_after})
+        
+        # Удаляем URL из текстовых блоков, чтобы избежать дублирования
+        for block in text_blocks:
+            if block['type'] == 'text':
+                block['content'] = self._strip_url_only_lines(block['content'], urls_to_remove)
+
+        # Отправляем блоки в правильном порядке
         headers = {"User-Agent": "Mozilla/5.0"}
         connector = aiohttp.TCPConnector(limit=4, ttl_dns_cache=300)
         async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
-            for url, line in candidates:
-                if url in seen:
-                    continue
-                if sent >= int(limit):
-                    break
+            for block in text_blocks:
+                if block['type'] == 'text':
+                    # Отправляем текстовый блок
+                    if block['content']:
+                        await self._safe_send_message(user_id, block['content'], protect_content=True)
+                elif block['type'] == 'media':
+                    # Отправляем медиа
+                    url = block['url']
+                    line = block.get('line', '')
+                    
+                    caption = url
+                    # Use a short per-line caption when it looks like a "label: link" format.
+                    if line and len(line) <= 180 and (":" in line or "фрагмент" in line.lower()):
+                        caption = line
+                    if len(caption) > 900:
+                        caption = caption[:900] + "…"
 
-                caption = url
-                # Use a short per-line caption when it looks like a "label: link" format.
-                if line and len(line) <= 180 and (":" in line or "фрагмент" in line.lower()):
-                    caption = line
-                if len(caption) > 900:
-                    caption = caption[:900] + "…"
-
-                vid = self._youtube_video_id(url)
-                if vid:
-                    try:
-                        # For YouTube (and similar pages), let Telegram build a native link preview
-                        # with a playable thumbnail (like when a user pastes the link manually).
-                        #
-                        # Important: do NOT send as photo thumb; that loses the in-Telegram "play" UX.
-                        message_text = line if (line and url in line and len(line) <= 900) else url
-                        await self.bot.send_message(
-                            user_id,
-                            message_text,
-                            disable_web_page_preview=False,
-                            parse_mode=None,
-                            protect_content=True
-                        )
-                    except Exception:
+                    vid = self._youtube_video_id(url)
+                    if vid:
                         try:
+                            # For YouTube (and similar pages), let Telegram build a native link preview
+                            message_text = line if (line and url in line and len(line) <= 900) else url
+                            await self.bot.send_message(
+                                user_id,
+                                message_text,
+                                disable_web_page_preview=False,
+                                parse_mode=None,
+                                protect_content=True
+                            )
+                        except Exception:
+                            try:
+                                await self.bot.send_message(
+                                    user_id,
+                                    url,
+                                    disable_web_page_preview=False,
+                                    parse_mode=None,
+                                    protect_content=True
+                                )
+                            except Exception:
+                                pass
+                        continue
+
+                    if self._is_direct_image_url(url):
+                        try:
+                            kind, data, content_type, filename = await self._download_media_from_url(
+                                session, url, timeout_s=20.0
+                            )
+                            if kind != "image":
+                                raise ValueError("Not an image")
+                            if not filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                                filename = "image.png" if content_type == "image/png" else "image.jpg"
+                            photo = BufferedInputFile(data, filename=filename)
+                            await self.bot.send_photo(
+                                user_id, 
+                                photo, 
+                                caption=(caption if caption != url else None), 
+                                protect_content=True
+                            )
+                        except Exception:
+                            pass
+                        continue
+
+                    if self._is_direct_video_url(url):
+                        try:
+                            kind, data, content_type, filename = await self._download_media_from_url(
+                                session, url, timeout_s=35.0
+                            )
+                            if kind != "video":
+                                raise ValueError("Not a video")
+                            if not filename.lower().endswith((".mp4", ".mov", ".webm")):
+                                filename = "video.mp4"
+                            video = BufferedInputFile(data, filename=filename)
+                            try:
+                                await self.bot.send_video(
+                                    user_id,
+                                    video,
+                                    caption=(caption if caption != url else None),
+                                    width=MOBILE_SCREEN_WIDTH,
+                                    supports_streaming=True,
+                                    protect_content=True
+                                )
+                            except Exception:
+                                await self.bot.send_document(
+                                    user_id, video, caption=(caption if caption != url else None), protect_content=True
+                                )
+                        except Exception:
+                            pass
+                        continue
+
+                    # Generic media URLs: download once, decide by Content-Type
+                    try:
+                        kind, data, content_type, filename = await self._download_media_from_url(
+                            session, url, timeout_s=25.0
+                        )
+                        if kind == "image":
+                            photo = BufferedInputFile(data, filename=(filename or "image.jpg"))
+                            await self.bot.send_photo(
+                                user_id, 
+                                photo, 
+                                caption=(caption if caption != url else None), 
+                                protect_content=True
+                            )
+                        elif kind == "video":
+                            video = BufferedInputFile(data, filename=(filename or "video.mp4"))
+                            try:
+                                await self.bot.send_video(
+                                    user_id,
+                                    video,
+                                    caption=(caption if caption != url else None),
+                                    width=MOBILE_SCREEN_WIDTH,
+                                    supports_streaming=True,
+                                    protect_content=True
+                                )
+                            except Exception:
+                                await self.bot.send_document(
+                                    user_id, video, caption=(caption if caption != url else None), protect_content=True
+                                )
+                        else:
                             await self.bot.send_message(
                                 user_id,
                                 url,
@@ -2261,92 +2427,19 @@ class CourseBot:
                                 parse_mode=None,
                                 protect_content=True
                             )
-                        except Exception:
-                            pass
-                    seen.add(url)
-                    sent += 1
-                    continue
-
-                if self._is_direct_image_url(url):
-                    try:
-                        kind, data, content_type, filename = await self._download_media_from_url(
-                            session, url, timeout_s=20.0
-                        )
-                        if kind != "image":
-                            raise ValueError("Not an image")
-                        if not filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
-                            filename = "image.png" if content_type == "image/png" else "image.jpg"
-                        photo = BufferedInputFile(data, filename=filename)
-                        await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None), protect_content=True)
-                        seen.add(url)
-                        sent += 1
                     except Exception:
                         pass
-                    continue
 
-                if self._is_direct_video_url(url):
-                    try:
-                        kind, data, content_type, filename = await self._download_media_from_url(
-                            session, url, timeout_s=35.0
-                        )
-                        if kind != "video":
-                            raise ValueError("Not a video")
-                        if not filename.lower().endswith((".mp4", ".mov", ".webm")):
-                            filename = "video.mp4"
-                        video = BufferedInputFile(data, filename=filename)
-                        try:
-                            await self.bot.send_video(
-                                user_id,
-                                video,
-                                caption=(caption if caption != url else None),
-                                supports_streaming=True,
-                                protect_content=True
-                            )
-                        except Exception:
-                            await self.bot.send_document(
-                                user_id, video, caption=(caption if caption != url else None), protect_content=True
-                            )
-                        seen.add(url)
-                        sent += 1
-                    except Exception:
-                        pass
-                    continue
-
-                # Generic media URLs: download once, decide by Content-Type (e.g., links without extensions).
-                try:
-                    kind, data, content_type, filename = await self._download_media_from_url(
-                        session, url, timeout_s=25.0
-                    )
-                    if kind == "image":
-                        photo = BufferedInputFile(data, filename=(filename or "image.jpg"))
-                        await self.bot.send_photo(user_id, photo, caption=(caption if caption != url else None), protect_content=True)
-                    elif kind == "video":
-                        video = BufferedInputFile(data, filename=(filename or "video.mp4"))
-                        try:
-                            await self.bot.send_video(
-                                user_id,
-                                video,
-                                caption=(caption if caption != url else None),
-                                supports_streaming=True,
-                                protect_content=True
-                            )
-                        except Exception:
-                            await self.bot.send_document(
-                                user_id, video, caption=(caption if caption != url else None), protect_content=True
-                            )
-                    else:
-                        await self.bot.send_message(
-                            user_id,
-                            url,
-                            disable_web_page_preview=False,
-                            parse_mode=None,
-                            protect_content=True
-                        )
-                    seen.add(url)
-                    sent += 1
-                except Exception:
-                    pass
-                continue
+    def _get_line_for_position(self, text: str, position: int) -> str:
+        """Получает строку текста, содержащую указанную позицию."""
+        lines = text.splitlines()
+        current_pos = 0
+        for line in lines:
+            line_end = current_pos + len(line) + 1  # +1 for newline
+            if current_pos <= position < line_end:
+                return line.strip()
+            current_pos = line_end
+        return ""
 
     def _collect_preview_urls(self, text: str, *, seen: Optional[set[str]] = None, limit: int = 6) -> list[str]:
         """
@@ -2523,6 +2616,7 @@ class CourseBot:
                                 sent_message = await self.bot.send_video(
                                     user_id, 
                                     cached_file_id,
+                                    width=MOBILE_SCREEN_WIDTH,
                                     reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
                                 )
                                 if is_last and keyboard and not keyboard_attached:
@@ -2614,6 +2708,7 @@ class CourseBot:
                                 sent_message = await self.bot.send_video(
                                     user_id, 
                                     video_file,
+                                    width=MOBILE_SCREEN_WIDTH,
                                     reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None,
                                     protect_content=True
                                 )
@@ -3251,7 +3346,13 @@ class CourseBot:
                     caption = intro_text if intro_text else None
                     
                     if video_file_id:
-                        await self.bot.send_video(user.user_id, video_file_id, caption=caption, protect_content=True)
+                        await self.bot.send_video(
+                            user.user_id, 
+                            video_file_id, 
+                            caption=caption, 
+                            width=MOBILE_SCREEN_WIDTH,
+                            protect_content=True
+                        )
                         logger.info(f"   ✅ Sent lesson 0 video with intro_text (file_id) for lesson {day}")
                     elif video_file_path:
                         from pathlib import Path
@@ -3280,7 +3381,13 @@ class CourseBot:
                         if video_path.exists():
                             video_file = FSInputFile(video_path)
                             caption = intro_text if intro_text else None
-                            await self.bot.send_video(user.user_id, video_file, caption=caption, protect_content=True)
+                            await self.bot.send_video(
+                                user.user_id, 
+                                video_file, 
+                                caption=caption, 
+                                width=MOBILE_SCREEN_WIDTH,
+                                protect_content=True
+                            )
                             logger.info(f"   ✅ Sent lesson 0 video with intro_text (file path: {video_path}) for lesson {day}")
                         else:
                             logger.error(f"   ❌ Lesson 0 video not found: {video_path.absolute()}")

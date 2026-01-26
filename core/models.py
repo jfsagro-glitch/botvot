@@ -51,10 +51,12 @@ class User:
     mentor_persistence: Optional[int] = None  # 0-5: Настойчивость наставника
     mentor_temperature: Optional[int] = None  # 0-5: Температура (вежливость) наставника
     mentor_charisma: Optional[int] = None  # 0-5: Харизма наставника
+    is_blocked: bool = False  # Флаг блокировки пользователя
     
     def has_access(self) -> bool:
         """Check if user has active course access."""
-        return self.tariff is not None
+        # Пользователь должен иметь тариф И не быть заблокированным
+        return self.tariff is not None and not self.is_blocked
     
     def can_receive_feedback(self) -> bool:
         """Check if user's tariff includes feedback."""

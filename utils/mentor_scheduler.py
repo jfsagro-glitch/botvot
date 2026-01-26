@@ -93,6 +93,10 @@ class MentorReminderScheduler:
         skipped_has_assignment = 0
         skipped_started = 0
         errors = 0
+        
+        # Инициализируем списки для батч-проверки активности
+        users_to_check_activity = []
+        users_ready_for_reminder = []
 
         for user in users:
             try:

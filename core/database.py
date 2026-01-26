@@ -8,12 +8,15 @@ to switch to PostgreSQL or another database in the future.
 
 import aiosqlite
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Optional, List
 from pathlib import Path
 
 from core.models import User, Tariff, Lesson, UserProgress, Referral, Assignment
 from core.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -166,6 +169,16 @@ class Database:
             except Exception:
                 # Поле уже существует, игнорируем ошибку
                 pass
+        
+        # Миграция: добавляем поле is_blocked для блокировки пользователей
+        try:
+            await self.conn.execute("""
+                ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0
+            """)
+            await self.conn.commit()
+        except Exception:
+            # Поле уже существует, игнорируем ошибку
+            pass
         
         # Lessons table
         await self.conn.execute("""
@@ -901,6 +914,7 @@ class Database:
                 lesson_delivery_time_local = ?, mentor_reminder_start_local = ?, mentor_reminder_end_local = ?,
                 question_asking_skill = ?, question_answering_skill = ?, listening_skill = ?,
                 mentor_persistence = ?, mentor_temperature = ?, mentor_charisma = ?,
+                is_blocked = ?,
                 updated_at = ?
             WHERE user_id = ?
         """, (
@@ -920,10 +934,39 @@ class Database:
             getattr(user, "mentor_persistence", None),
             getattr(user, "mentor_temperature", None),
             getattr(user, "mentor_charisma", None),
+            1 if getattr(user, "is_blocked", False) else 0,
             datetime.utcnow().isoformat(),
             user.user_id
         ))
         await self.conn.commit()
+    
+    async def block_user(self, user_id: int) -> bool:
+        """Block user access to course bot."""
+        await self._ensure_connection()
+        try:
+            await self.conn.execute(
+                "UPDATE users SET is_blocked = 1, updated_at = ? WHERE user_id = ?",
+                (datetime.utcnow().isoformat(), user_id)
+            )
+            await self.conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error blocking user {user_id}: {e}", exc_info=True)
+            return False
+    
+    async def unblock_user(self, user_id: int) -> bool:
+        """Unblock user access to course bot."""
+        await self._ensure_connection()
+        try:
+            await self.conn.execute(
+                "UPDATE users SET is_blocked = 0, updated_at = ? WHERE user_id = ?",
+                (datetime.utcnow().isoformat(), user_id)
+            )
+            await self.conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error unblocking user {user_id}: {e}", exc_info=True)
+            return False
     
     async def get_users_with_access(self) -> List[User]:
         """Get all users with active course access."""
@@ -1368,7 +1411,8 @@ class Database:
             listening_skill=row["listening_skill"] if ("listening_skill" in row.keys() and row["listening_skill"] is not None) else None,
             mentor_persistence=row["mentor_persistence"] if ("mentor_persistence" in row.keys() and row["mentor_persistence"] is not None) else None,
             mentor_temperature=row["mentor_temperature"] if ("mentor_temperature" in row.keys() and row["mentor_temperature"] is not None) else None,
-            mentor_charisma=row["mentor_charisma"] if ("mentor_charisma" in row.keys() and row["mentor_charisma"] is not None) else None
+            mentor_charisma=row["mentor_charisma"] if ("mentor_charisma" in row.keys() and row["mentor_charisma"] is not None) else None,
+            is_blocked=bool(row["is_blocked"]) if ("is_blocked" in row.keys() and row["is_blocked"] is not None) else False
         )
     
     def _row_to_lesson(self, row) -> Lesson:
