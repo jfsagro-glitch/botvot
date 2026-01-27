@@ -2310,43 +2310,72 @@ class CourseBot:
 
     def _format_text_for_display(self, text: str) -> str:
         """
-        Форматирует текст для отображения: сохраняет пробелы и отступы из файла,
-        увеличивает отступы между абзацами для лучшей читаемости.
+        Форматирует текст для отображения: убирает лишние отступы, делает все ровно и строго,
+        хорошо читается. Сохраняет структуру (заголовки, вопросы, итоги).
         """
         if not text:
             return text
         
-        # Разбиваем на строки, сохраняя оригинальные отступы
+        # Разбиваем на строки
         lines = text.split('\n')
         formatted_lines = []
         prev_line_empty = False
         
         for i, line in enumerate(lines):
-            current_line_empty = not line.strip()
+            stripped = line.strip()
+            current_line_empty = not stripped
             
-            # Сохраняем оригинальную строку с отступами
-            formatted_lines.append(line)
+            # Если строка пустая
+            if current_line_empty:
+                # Убираем множественные пустые строки подряд (максимум 1)
+                if not prev_line_empty:
+                    formatted_lines.append('')
+                prev_line_empty = True
+                continue
             
-            # Увеличиваем отступ между абзацами: если текущая строка не пустая,
-            # следующая тоже не пустая, и между ними нет пустой строки - добавляем пустую строку
-            if i < len(lines) - 1:
-                next_line = lines[i + 1]
-                next_line_empty = not next_line.strip()
-                
-                # Если текущая строка не пустая и следующая тоже не пустая
-                if not current_line_empty and not next_line_empty:
-                    # Проверяем, не является ли следующая строка продолжением текущего абзаца
-                    # (начинается с пробела или табуляции)
-                    is_continuation = next_line.startswith(' ') or next_line.startswith('\t')
-                    
-                    # Если это не продолжение абзаца и предыдущая строка не была пустой,
-                    # добавляем пустую строку для отступа между абзацами
-                    if not is_continuation and not prev_line_empty:
-                        formatted_lines.append('')
+            prev_line_empty = False
             
-            prev_line_empty = current_line_empty
+            # Убираем все отступы в начале строки - все строки выравниваем по левому краю
+            formatted_line = stripped
+            
+            # Определяем тип строки для правильной расстановки пустых строк
+            is_heading = (
+                stripped.startswith('📘') or
+                (stripped.startswith('💠') and '#' in stripped) or
+                stripped.startswith('Тактика №') or
+                (stripped.startswith('День ') and len(stripped.split()) <= 3)
+            )
+            
+            is_question = stripped.startswith('❔') or stripped.startswith('?')
+            is_summary = stripped.startswith('=>') or stripped.startswith('Выход на')
+            
+            # Добавляем пустую строку перед заголовками и итогами для лучшей читаемости
+            if is_heading or is_summary:
+                if formatted_lines and formatted_lines[-1].strip():
+                    formatted_lines.append('')
+            
+            formatted_lines.append(formatted_line)
         
-        return '\n'.join(formatted_lines)
+        # Убираем лишние пустые строки в начале и конце
+        while formatted_lines and not formatted_lines[0].strip():
+            formatted_lines.pop(0)
+        while formatted_lines and not formatted_lines[-1].strip():
+            formatted_lines.pop()
+        
+        # Финальная проверка: убираем множественные пустые строки подряд (максимум 1)
+        result_lines = []
+        prev_was_empty = False
+        for line in formatted_lines:
+            is_empty = not line.strip()
+            if is_empty:
+                if not prev_was_empty:
+                    result_lines.append('')
+                prev_was_empty = True
+            else:
+                result_lines.append(line)
+                prev_was_empty = False
+        
+        return '\n'.join(result_lines)
 
     async def _send_previews_from_text(
         self,
