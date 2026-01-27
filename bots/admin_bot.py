@@ -11,7 +11,9 @@ Centralized admin interface for:
 import asyncio
 import io
 import logging
-from datetime import datetime
+import subprocess
+import os
+from datetime import datetime, timedelta
 import secrets
 import string
 from typing import Optional
@@ -369,6 +371,167 @@ class AdminBot:
         )
         return keyboard
     
+    def _calculate_project_costs(self) -> dict:
+        """Рассчитывает затраты на проект."""
+        # Начало проекта
+        project_start = datetime(2026, 1, 6)
+        current_date = datetime.now()
+        days_worked = (current_date - project_start).days
+        
+        # Инициализация значений по умолчанию
+        git_commits = 0
+        deployments = 0
+        last_deployment = "Неизвестно"
+        last_commit_date = current_date
+        
+        # Попытка получить данные из git
+        git_repo_paths = [
+            Path(__file__).parent.parent,  # Стандартный путь
+            Path.cwd(),  # Текущая рабочая директория
+            Path("/app"),  # Railway/Docker путь
+        ]
+        
+        git_found = False
+        for repo_path in git_repo_paths:
+            if not repo_path.exists():
+                continue
+                
+            try:
+                git_dir = repo_path / ".git"
+                if not git_dir.exists():
+                    continue
+                
+                # Подсчет коммитов
+                result = subprocess.run(
+                    ["git", "rev-list", "--count", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=str(repo_path)
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    try:
+                        git_commits = int(result.stdout.strip())
+                        git_found = True
+                        logger.debug(f"Found {git_commits} commits in {repo_path}")
+                    except ValueError:
+                        logger.warning(f"Invalid git commit count: {result.stdout.strip()}")
+                
+                if git_found:
+                    # Подсчет деплоев (коммиты с deploy-сообщениями)
+                    deploy_keywords = ["задеплой", "deploy", "ЗАДЕПЛОЙ", "DEPLOY", "railway", "push"]
+                    deploy_result = subprocess.run(
+                        ["git", "log", "--pretty=format:%s", "--all"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        cwd=str(repo_path)
+                    )
+                    if deploy_result.returncode == 0 and deploy_result.stdout:
+                        commit_messages = deploy_result.stdout.strip().split('\n')
+                        deployments = sum(1 for msg in commit_messages if any(keyword.lower() in msg.lower() for keyword in deploy_keywords))
+                        if deployments == 0 and git_commits > 0:
+                            deployments = git_commits
+                    
+                    # Дата последнего коммита
+                    last_commit_result = subprocess.run(
+                        ["git", "log", "-1", "--pretty=format:%ad", "--date=short"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        cwd=str(repo_path)
+                    )
+                    if last_commit_result.returncode == 0 and last_commit_result.stdout.strip():
+                        try:
+                            last_commit_date = datetime.strptime(last_commit_result.stdout.strip(), "%Y-%m-%d")
+                            current_date = max(current_date, last_commit_date)
+                        except ValueError:
+                            pass
+                    
+                    # Дата последнего деплоя
+                    last_deploy_result = subprocess.run(
+                        ["git", "log", "-1", "--pretty=format:%ad", "--date=format:%d.%m.%Y %H:%M"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        cwd=str(repo_path)
+                    )
+                    if last_deploy_result.returncode == 0 and last_deploy_result.stdout.strip():
+                        last_deployment = last_deploy_result.stdout.strip()
+                    
+                    break
+                    
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Git command timeout for {repo_path}")
+                continue
+            except Exception as e:
+                logger.debug(f"Git command failed for {repo_path}: {e}")
+                continue
+        
+        # Fallback на переменные окружения (Railway может установить их)
+        if not git_found:
+            git_commits = int(os.getenv("GIT_COMMITS", "0"))
+            deployments = int(os.getenv("GIT_DEPLOYMENTS", "0"))
+            env_last_deploy = os.getenv("LAST_DEPLOYMENT", "")
+            
+            if git_commits == 0:
+                git_commits = int(os.getenv("RAILWAY_GIT_COMMIT_COUNT", "0"))
+            
+            if deployments == 0 and git_commits > 0:
+                deployments = int(os.getenv("GIT_DEPLOYMENTS", str(git_commits)))
+            
+            if env_last_deploy:
+                last_deployment = env_last_deploy
+            elif last_deployment == "Неизвестно":
+                last_deployment = current_date.strftime("%d.%m.%Y %H:%M")
+        
+        # Расчет времени работы в Cursor (на основе коммитов)
+        # Предполагаем, что каждый коммит = ~15 минут работы
+        estimated_hours = max(10, (git_commits * 15) / 60) if git_commits > 0 else 10
+        
+        # Расчет затрат
+        # Подписка Cursor: 20$ в месяц
+        cursor_monthly = 20.0
+        months_worked = max(1, days_worked / 30.0)
+        # Предполагаем, что 80% времени работы в Cursor ушло на этот проект
+        cursor_project_share = 0.8
+        cursor_cost = cursor_monthly * months_worked * cursor_project_share
+        
+        # OpenAI/Codex пакеты: 30.24$
+        openai_packages = 30.24
+        
+        # Railway хостинг: 5$ в месяц
+        railway_monthly = 5.0
+        railway_cost = railway_monthly * months_worked
+        
+        # Токены AI (количество, без стоимости, так как включены в подписку)
+        # Примерное количество токенов (можно обновить из реальных данных)
+        tokens_input = 56400000  # Примерное значение
+        tokens_output = 5152300  # Примерное значение
+        tokens_total = tokens_input + tokens_output
+        
+        # Итого
+        total_usd = cursor_cost + openai_packages + railway_cost
+        total_rub = total_usd * 100  # Курс 1$ = 100₽
+        
+        return {
+            "tokens_total": tokens_total,
+            "tokens_input": tokens_input,
+            "tokens_output": tokens_output,
+            "cursor_cost": cursor_cost,
+            "cursor_hours": estimated_hours,
+            "cursor_project_share": cursor_project_share,
+            "openai_packages": openai_packages,
+            "railway_cost": railway_cost,
+            "total_usd": total_usd,
+            "total_rub": total_rub,
+            "project_start": project_start.strftime("%d.%m.%Y"),
+            "last_deployment": last_deployment,
+            "days_worked": days_worked,
+            "git_commits": git_commits,
+            "deployments": deployments,
+        }
+    
     async def handle_stats(self, message: Message):
         """Handle /stats command - show system statistics and per-user details."""
         if not await self._check_authorization(message):
@@ -460,6 +623,27 @@ class AdminBot:
 
             if sales_text:
                 stats_text += sales_text
+            
+            # Добавляем статистику затрат на проект
+            try:
+                costs = self._calculate_project_costs()
+                costs_text = (
+                    f"\n\n💰 <b>Затраты на проект:</b>\n"
+                    f"• Токены AI: {costs['tokens_total']:,} токенов\n"
+                    f"  └ Input: {costs['tokens_input']:,} | Output: {costs['tokens_output']:,}\n"
+                    f"  └ (стоимость включена в подписку Cursor и Codex пакеты)\n"
+                    f"• Подписка Cursor: {costs['cursor_cost']:.2f} $\n"
+                    f"  └ {costs['cursor_project_share']*100:.0f}% времени на проект ({costs['cursor_hours']:.1f} ч.)\n"
+                    f"• OpenAI/Codex пакеты: {costs['openai_packages']:.2f} $\n"
+                    f"• Railway (хостинг): {costs['railway_cost']:.2f} $ ({costs['days_worked']/30:.2f} мес.)\n"
+                    f"• Итого: {costs['total_usd']:.2f} $ ({costs['total_rub']:.0f} ₽)\n"
+                    f"\n📅 Начало проекта: {costs['project_start']}\n"
+                    f"📅 Последний деплой: {costs['last_deployment']}\n"
+                    f"📝 Дней работы: {costs['days_worked']} | Коммитов: {costs['git_commits']} | Деплоев: {costs['deployments']}"
+                )
+                stats_text += costs_text
+            except Exception as e:
+                logger.error(f"Error calculating project costs: {e}", exc_info=True)
              
             # Add keyboard with button to get all users stats
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
