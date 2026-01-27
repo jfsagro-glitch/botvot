@@ -2227,6 +2227,46 @@ class CourseBot:
 
             return kind, data, content_type, filename
 
+    def _format_text_for_display(self, text: str) -> str:
+        """
+        Форматирует текст для отображения: сохраняет пробелы и отступы из файла,
+        увеличивает отступы между абзацами для лучшей читаемости.
+        """
+        if not text:
+            return text
+        
+        # Разбиваем на строки, сохраняя оригинальные отступы
+        lines = text.split('\n')
+        formatted_lines = []
+        prev_line_empty = False
+        
+        for i, line in enumerate(lines):
+            current_line_empty = not line.strip()
+            
+            # Сохраняем оригинальную строку с отступами
+            formatted_lines.append(line)
+            
+            # Увеличиваем отступ между абзацами: если текущая строка не пустая,
+            # следующая тоже не пустая, и между ними нет пустой строки - добавляем пустую строку
+            if i < len(lines) - 1:
+                next_line = lines[i + 1]
+                next_line_empty = not next_line.strip()
+                
+                # Если текущая строка не пустая и следующая тоже не пустая
+                if not current_line_empty and not next_line_empty:
+                    # Проверяем, не является ли следующая строка продолжением текущего абзаца
+                    # (начинается с пробела или табуляции)
+                    is_continuation = next_line.startswith(' ') or next_line.startswith('\t')
+                    
+                    # Если это не продолжение абзаца и предыдущая строка не была пустой,
+                    # добавляем пустую строку для отступа между абзацами
+                    if not is_continuation and not prev_line_empty:
+                        formatted_lines.append('')
+            
+            prev_line_empty = current_line_empty
+        
+        return '\n'.join(formatted_lines)
+
     async def _send_previews_from_text(
         self,
         user_id: int,
@@ -2236,11 +2276,11 @@ class CourseBot:
         limit: int = 6,
     ):
         """
-        Отправляет текст с медиа, вставляя медиа строго в том месте, где указана ссылка.
-        Разбивает текст на блоки и вставляет медиа между блоками.
+        Отправляет только медиа из URL в тексте, НЕ отправляет сам текст.
+        Возвращает множество отправленных URL для последующего удаления из текста.
         """
         if not text:
-            return
+            return set()
 
         if seen is None:
             seen = set()
@@ -2258,56 +2298,157 @@ class CourseBot:
                 })
         
         if not url_positions:
-            # Нет URL, отправляем текст как есть
-            if text.strip():
-                await self._safe_send_message(user_id, text, protect_content=True)
-            return
+            # Нет URL, ничего не отправляем
+            return set()
 
         # Сортируем по позиции в тексте
         url_positions.sort(key=lambda x: x['start'])
 
-        # Разбиваем текст на блоки: текст до URL, URL, текст после URL
-        text_blocks = []
-        last_pos = 0
-        urls_to_remove = set()
-        
-        for url_info in url_positions[:limit]:  # Ограничиваем количество медиа
-            # Текст до URL
-            text_before = text[last_pos:url_info['start']].strip()
-            if text_before:
-                text_blocks.append({'type': 'text', 'content': text_before})
-            
-            # URL (медиа)
-            text_blocks.append({
-                'type': 'media',
-                'url': url_info['url'],
-                'line': url_info['line']
-            })
-            
-            urls_to_remove.add(url_info['url'])
-            last_pos = url_info['end']
-            seen.add(url_info['url'])
-        
-        # Текст после последнего URL
-        text_after = text[last_pos:].strip()
-        if text_after:
-            text_blocks.append({'type': 'text', 'content': text_after})
-        
-        # Удаляем URL из текстовых блоков, чтобы избежать дублирования
-        for block in text_blocks:
-            if block['type'] == 'text':
-                block['content'] = self._strip_url_only_lines(block['content'], urls_to_remove)
-
-        # Отправляем блоки в правильном порядке
+        # Отправляем только медиа, не отправляем текст
+        sent_urls = set()
         headers = {"User-Agent": "Mozilla/5.0"}
         connector = aiohttp.TCPConnector(limit=4, ttl_dns_cache=300)
         async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
-            for block in text_blocks:
-                if block['type'] == 'text':
-                    # Отправляем текстовый блок
-                    if block['content']:
-                        await self._safe_send_message(user_id, block['content'], protect_content=True)
-                elif block['type'] == 'media':
+            for url_info in url_positions[:limit]:  # Ограничиваем количество медиа
+                url = url_info['url']
+                line = url_info.get('line', '')
+                
+                if url in sent_urls:
+                    continue
+                
+                caption = url
+                # Use a short per-line caption when it looks like a "label: link" format.
+                if line and len(line) <= 180 and (":" in line or "фрагмент" in line.lower()):
+                    caption = line
+                if len(caption) > 900:
+                    caption = caption[:900] + "…"
+
+                vid = self._youtube_video_id(url)
+                if vid:
+                    try:
+                        # For YouTube (and similar pages), let Telegram build a native link preview
+                        message_text = line if (line and url in line and len(line) <= 900) else url
+                        await self.bot.send_message(
+                            user_id,
+                            message_text,
+                            disable_web_page_preview=False,
+                            parse_mode=None,
+                            protect_content=True
+                        )
+                        sent_urls.add(url)
+                        seen.add(url)
+                    except Exception:
+                        try:
+                            await self.bot.send_message(
+                                user_id,
+                                url,
+                                disable_web_page_preview=False,
+                                parse_mode=None,
+                                protect_content=True
+                            )
+                            sent_urls.add(url)
+                            seen.add(url)
+                        except Exception:
+                            pass
+                    continue
+
+                if self._is_direct_image_url(url):
+                    try:
+                        kind, data, content_type, filename = await self._download_media_from_url(
+                            session, url, timeout_s=20.0
+                        )
+                        if kind != "image":
+                            raise ValueError("Not an image")
+                        if not filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                            filename = "image.png" if content_type == "image/png" else "image.jpg"
+                        photo = BufferedInputFile(data, filename=filename)
+                        await self.bot.send_photo(
+                            user_id, 
+                            photo, 
+                            caption=(caption if caption != url else None), 
+                            protect_content=True
+                        )
+                        sent_urls.add(url)
+                        seen.add(url)
+                    except Exception:
+                        pass
+                    continue
+
+                if self._is_direct_video_url(url):
+                    try:
+                        kind, data, content_type, filename = await self._download_media_from_url(
+                            session, url, timeout_s=35.0
+                        )
+                        if kind != "video":
+                            raise ValueError("Not a video")
+                        if not filename.lower().endswith((".mp4", ".mov", ".webm")):
+                            filename = "video.mp4"
+                        video = BufferedInputFile(data, filename=filename)
+                        try:
+                            await self.bot.send_video(
+                                user_id,
+                                video,
+                                caption=(caption if caption != url else None),
+                                width=MOBILE_SCREEN_WIDTH,
+                                supports_streaming=True,
+                                protect_content=True
+                            )
+                        except Exception:
+                            await self.bot.send_document(
+                                user_id, video, caption=(caption if caption != url else None), protect_content=True
+                            )
+                        sent_urls.add(url)
+                        seen.add(url)
+                    except Exception:
+                        pass
+                    continue
+
+                # Generic media URLs: download once, decide by Content-Type
+                try:
+                    kind, data, content_type, filename = await self._download_media_from_url(
+                        session, url, timeout_s=25.0
+                    )
+                    if kind == "image":
+                        photo = BufferedInputFile(data, filename=(filename or "image.jpg"))
+                        await self.bot.send_photo(
+                            user_id, 
+                            photo, 
+                            caption=(caption if caption != url else None), 
+                            protect_content=True
+                        )
+                        sent_urls.add(url)
+                        seen.add(url)
+                    elif kind == "video":
+                        video = BufferedInputFile(data, filename=(filename or "video.mp4"))
+                        try:
+                            await self.bot.send_video(
+                                user_id,
+                                video,
+                                caption=(caption if caption != url else None),
+                                width=MOBILE_SCREEN_WIDTH,
+                                supports_streaming=True,
+                                protect_content=True
+                            )
+                        except Exception:
+                            await self.bot.send_document(
+                                user_id, video, caption=(caption if caption != url else None), protect_content=True
+                            )
+                        sent_urls.add(url)
+                        seen.add(url)
+                    else:
+                        await self.bot.send_message(
+                            user_id,
+                            url,
+                            disable_web_page_preview=False,
+                            parse_mode=None,
+                            protect_content=True
+                        )
+                        sent_urls.add(url)
+                        seen.add(url)
+                except Exception:
+                    pass
+        
+        return sent_urls
                     # Отправляем медиа
                     url = block['url']
                     line = block.get('line', '')
@@ -2946,6 +3087,7 @@ class CourseBot:
         """
         Безопасная отправка сообщения с проверкой на пустой текст.
         Фильтрует технические ошибки Telegram API.
+        Форматирует текст: сохраняет пробелы и отступы, увеличивает отступы между строками.
         
         Args:
             chat_id: ID чата (в личных чатах совпадает с user_id)
@@ -2968,6 +3110,9 @@ class CourseBot:
         if not text or not text.strip():
             logger.warning(f"⚠️ Attempted to send empty message to {chat_id}, using zero-width space")
             text = "\u200B"
+        else:
+            # Форматируем текст: сохраняем пробелы и отступы, увеличиваем отступы между строками
+            text = self._format_text_for_display(text)
         
         try:
             # Plain text only: split proactively to avoid Telegram "message is too long".
@@ -3135,7 +3280,8 @@ class CourseBot:
                     logger.info(f"   ⏭️ Skipping intro_text for day {day}: already present in main text")
                     intro_text = ""
 
-            # Collect preview URLs once and strip URL-only lines to avoid duplicates
+            # Собираем combined_text_raw для отправки медиа из URL
+            # URL будут удалены из текста после отправки медиа
             combined_text_raw = "\n\n".join(
                 [
                     (intro_text_raw or ""),
@@ -3143,11 +3289,6 @@ class CourseBot:
                     "\n\n".join([p for p in lesson_posts_raw if isinstance(p, str) and p.strip()]),
                 ]
             )
-            preview_urls = set(self._collect_preview_urls(combined_text_raw, seen=link_preview_seen, limit=6))
-            if preview_urls:
-                intro_text = self._strip_url_only_lines(intro_text, preview_urls)
-                about_me_text = self._strip_url_only_lines(about_me_text, preview_urls)
-                lesson_posts = [self._strip_url_only_lines(p, preview_urls) for p in lesson_posts]
             
             # Проверяем, есть ли фото для начала урока (для урока 30)
             intro_photo_file_id = lesson_data.get("intro_photo_file_id", "")
@@ -4421,18 +4562,25 @@ class CourseBot:
                 except Exception as video_error:
                     logger.warning(f"   ⚠️ Не удалось отправить первое видео перед заданием для урока 30: {video_error}")
             
-            # Если в тексте урока есть ссылки на видео/картинки — показываем превью отдельными сообщениями.
-            # (Например, YouTube: отправляем миниатюру, чтобы было «видно».)
+            # Если в тексте урока есть ссылки на видео/картинки — отправляем медиа из URL.
+            # Медиа отправляется в том месте, где указана ссылка в тексте.
+            # URL удаляются из текста перед отправкой, чтобы избежать дублирования.
+            sent_preview_urls = set()
             try:
                 combined_text = combined_text_raw
-                await self._send_previews_from_text(
+                sent_preview_urls = await self._send_previews_from_text(
                     user.user_id,
                     combined_text,
                     seen=link_preview_seen,
                     limit=6,
                 )
-            except Exception:
-                pass
+                # Удаляем отправленные URL из текста перед отправкой
+                if sent_preview_urls:
+                    intro_text = self._strip_url_only_lines(intro_text, sent_preview_urls)
+                    about_me_text = self._strip_url_only_lines(about_me_text, sent_preview_urls)
+                    lesson_posts = [self._strip_url_only_lines(p, sent_preview_urls) for p in lesson_posts]
+            except Exception as e:
+                logger.warning(f"   ⚠️ Error sending previews from text: {e}")
 
             # Формируем сообщение с заданием - только текст из Google Doc, без эмодзи и разделителей
             task_message = ""
@@ -4445,23 +4593,23 @@ class CourseBot:
                 else:
                     task_message = f"📝 Задание:\n\n{task}".strip()
             
-            # If we will show previews for task links, remove URL-only lines from the task message.
-            task_message_clean = task_message
-            task_preview_urls = set(self._collect_preview_urls(task_message, seen=link_preview_seen, limit=6))
-            if task_preview_urls:
-                task_message_clean = self._strip_url_only_lines(task_message, task_preview_urls)
-
-            # Show previews for task links BEFORE sending the task block so the "submit" button
-            # stays directly under the task message (no messages should go after it).
+            # Если в задании есть ссылки на медиа — отправляем медиа из URL.
+            # URL удаляются из текста задания перед отправкой, чтобы избежать дублирования.
+            task_sent_preview_urls = set()
             try:
-                await self._send_previews_from_text(
+                task_sent_preview_urls = await self._send_previews_from_text(
                     user.user_id,
                     task_message,
                     seen=link_preview_seen,
                     limit=6,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"   ⚠️ Error sending task previews: {e}")
+            
+            # Удаляем отправленные URL из текста задания перед отправкой
+            task_message_clean = task_message
+            if task_sent_preview_urls:
+                task_message_clean = self._strip_url_only_lines(task_message, task_sent_preview_urls)
             
             # Отправляем задание, если есть
             if task_message_clean:
