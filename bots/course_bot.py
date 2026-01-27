@@ -850,7 +850,10 @@ class CourseBot:
                     card_file = project_root / normalized_path
                     
                     if card_file.exists():
-                        photo_file = FSInputFile(card_file)
+                        # Обрабатываем изображение для мобильных устройств
+                        resized_path = await self._resize_image_for_mobile(card_file)
+                        image_path_to_use = resized_path if resized_path else card_file
+                        photo_file = FSInputFile(image_path_to_use)
                         # Убираем разделители - caption должен браться из данных карточки или быть None
                         caption = None
                         await self.bot.send_photo(user_id, photo_file, caption=caption, protect_content=True)
@@ -925,7 +928,10 @@ class CourseBot:
                             card_file = project_root / normalized_path
                             
                             if card_file.exists():
-                                photo_file = FSInputFile(card_file)
+                                # Обрабатываем изображение для мобильных устройств
+                                resized_path = await self._resize_image_for_mobile(card_file)
+                                image_path_to_use = resized_path if resized_path else card_file
+                                photo_file = FSInputFile(image_path_to_use)
                                 media_group.append(
                                     InputMediaPhoto(
                                         media=photo_file
@@ -1047,7 +1053,10 @@ class CourseBot:
                             image_file = project_root / original_path.replace('/', os.sep)
                         
                         if image_file.exists() and image_file.is_file():
-                            photo_file = FSInputFile(image_file)
+                            # Обрабатываем изображение для мобильных устройств
+                            resized_path = await self._resize_image_for_mobile(image_file)
+                            image_path_to_use = resized_path if resized_path else image_file
+                            photo_file = FSInputFile(image_path_to_use)
                             media_item = InputMediaPhoto(media=photo_file)
                             current_group.append(media_item)
                         else:
@@ -1146,7 +1155,10 @@ class CourseBot:
                                     image_file = original_file
                             
                             if image_file.exists():
-                                photo_file = FSInputFile(image_file)
+                                # Обрабатываем изображение для мобильных устройств
+                                resized_path = await self._resize_image_for_mobile(image_file)
+                                image_path_to_use = resized_path if resized_path else image_file
+                                photo_file = FSInputFile(image_path_to_use)
                                 await self.bot.send_photo(user_id, photo_file, protect_content=True)
                                 sent_count += 1
                                 await asyncio.sleep(0.3)
@@ -1314,7 +1326,10 @@ class CourseBot:
                     if photo_path.exists():
                         # Анимация перед отправкой фото
                         await send_typing_action(self.bot, user_id, 0.6)
-                        photo_file = FSInputFile(photo_path)
+                        # Обрабатываем изображение для мобильных устройств
+                        resized_path = await self._resize_image_for_mobile(photo_path)
+                        image_path_to_use = resized_path if resized_path else photo_path
+                        photo_file = FSInputFile(image_path_to_use)
                         # Разделяем текст на части, если он длиннее 1024 символов
                         # Важно: не делим слова при разбиении
                         if follow_up_text and follow_up_text.strip():
@@ -1493,9 +1508,12 @@ class CourseBot:
                 if photo_path.exists():
                     caption, remaining = _split_caption(follow_up_text)
                     await send_typing_action(self.bot, user_id, 0.6)
+                    # Обрабатываем изображение для мобильных устройств
+                    resized_path = await self._resize_image_for_mobile(photo_path)
+                    image_path_to_use = resized_path if resized_path else photo_path
                     await self.bot.send_photo(
                         user_id,
-                        FSInputFile(photo_path),
+                        FSInputFile(image_path_to_use),
                         caption=caption,
                         reply_markup=persistent_keyboard if (send_keyboard and not remaining) else None,
                         protect_content=True
@@ -1591,9 +1609,12 @@ class CourseBot:
                 if photo_path.exists():
                     caption, remaining = split_caption(follow_up_text)
                     await send_typing_action(self.bot, user_id, 0.6)
+                    # Обрабатываем изображение для мобильных устройств
+                    resized_path = await self._resize_image_for_mobile(photo_path)
+                    image_path_to_use = resized_path if resized_path else photo_path
                     await self.bot.send_photo(
                         user_id,
-                        FSInputFile(photo_path),
+                        FSInputFile(image_path_to_use),
                         caption=caption,
                         reply_markup=persistent_keyboard if (send_keyboard and not remaining) else None
                     )
@@ -1859,6 +1880,63 @@ class CourseBot:
             f"<i>Совет: чем конкретнее вопрос, тем быстрее вы получите ответ.</i>"
         )
     
+    async def _resize_image_for_mobile(self, image_path: Path) -> Optional[Path]:
+        """
+        Изменяет размер изображения для мобильных устройств (ширина = MOBILE_SCREEN_WIDTH).
+        Сохраняет пропорции изображения.
+        
+        Args:
+            image_path: Путь к исходному изображению
+        
+        Returns:
+            Path к обработанному изображению, или None если обработка не требуется или не удалась
+        """
+        try:
+            from PIL import Image
+        except ImportError:
+            logger.warning("   ⚠️ PIL/Pillow not available, skipping image resize")
+            return None
+        
+        if not image_path.exists():
+            logger.warning(f"   ⚠️ Image file not found: {image_path}")
+            return None
+        
+        try:
+            # Открываем изображение
+            with Image.open(image_path) as img:
+                original_width, original_height = img.size
+                
+                # Если изображение уже меньше или равно ширине мобильного экрана, не обрабатываем
+                if original_width <= MOBILE_SCREEN_WIDTH:
+                    logger.debug(f"   ✅ Image size OK: {original_width}x{original_height} (width <= {MOBILE_SCREEN_WIDTH})")
+                    return None
+                
+                # Вычисляем новую высоту с сохранением пропорций
+                aspect_ratio = original_height / original_width
+                new_width = MOBILE_SCREEN_WIDTH
+                new_height = int(MOBILE_SCREEN_WIDTH * aspect_ratio)
+                
+                logger.info(f"   📷 Resizing image: {original_width}x{original_height} -> {new_width}x{new_height}")
+                
+                # Изменяем размер изображения с высоким качеством
+                resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                # Создаем путь для обработанного изображения
+                resized_dir = image_path.parent / "resized_mobile"
+                resized_dir.mkdir(exist_ok=True)
+                resized_path = resized_dir / f"mobile_{image_path.name}"
+                
+                # Сохраняем обработанное изображение
+                # Сохраняем в том же формате, что и оригинал
+                resized_img.save(resized_path, quality=95, optimize=True)
+                
+                logger.info(f"   ✅ Image resized and saved: {resized_path.name}")
+                return resized_path
+                
+        except Exception as e:
+            logger.error(f"   ❌ Error resizing image {image_path}: {e}", exc_info=True)
+            return None
+    
     async def _compress_video_if_needed(self, video_path: Path, max_size_mb: float = 45.0) -> Optional[Path]:
         """
         Сжимает видео, если оно превышает максимальный размер.
@@ -2072,7 +2150,10 @@ class CourseBot:
                             video_path_to_use = compressed_path if compressed_path else test_path
                             media_file = FSInputFile(video_path_to_use)
                         else:
-                            media_file = FSInputFile(test_path)
+                            # Для изображений изменяем размер для мобильных устройств
+                            resized_path = await self._resize_image_for_mobile(test_path)
+                            image_path_to_use = resized_path if resized_path else test_path
+                            media_file = FSInputFile(image_path_to_use)
                         break
                 
                 if media_file:
@@ -2696,7 +2777,10 @@ class CourseBot:
                         
                         try:
                             if media_type == "photo":
-                                photo_file = FSInputFile(file_path)
+                                # Обрабатываем изображение для мобильных устройств
+                                resized_path = await self._resize_image_for_mobile(file_path)
+                                image_path_to_use = resized_path if resized_path else file_path
+                                photo_file = FSInputFile(image_path_to_use)
                                 # Если это последняя часть и есть клавиатура, добавляем её к фото
                                 is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip() if i + 1 < len(parts) else True)
                                 sent_message = await self.bot.send_photo(
@@ -3187,7 +3271,11 @@ class CourseBot:
                     elif intro_photo_path:
                         from pathlib import Path
                         from aiogram.types import FSInputFile
-                        photo_file = FSInputFile(Path(intro_photo_path))
+                        photo_path = Path(intro_photo_path)
+                        # Обрабатываем изображение для мобильных устройств
+                        resized_path = await self._resize_image_for_mobile(photo_path)
+                        image_path_to_use = resized_path if resized_path else photo_path
+                        photo_file = FSInputFile(image_path_to_use)
                         await self.bot.send_photo(user.user_id, photo_file, caption=caption, protect_content=True)
                         logger.info(f"   ✅ Sent intro photo (file path) for lesson {day}")
                     await asyncio.sleep(0.6)  # Пауза для плавности
@@ -3616,7 +3704,11 @@ class CourseBot:
                             try:
                                 from pathlib import Path
                                 from aiogram.types import FSInputFile
-                                photo_file = FSInputFile(Path(about_me_photo_path))
+                                photo_path = Path(about_me_photo_path)
+                                # Обрабатываем изображение для мобильных устройств
+                                resized_path = await self._resize_image_for_mobile(photo_path)
+                                image_path_to_use = resized_path if resized_path else photo_path
+                                photo_file = FSInputFile(image_path_to_use)
                                 # Подпись - только текст из Google Doc, без разделителей
                                 caption = about_me_text if about_me_text else None
                                 await self.bot.send_photo(
@@ -3645,7 +3737,11 @@ class CourseBot:
                         await send_typing_action(self.bot, user.user_id, 0.4)
                         from pathlib import Path
                         from aiogram.types import FSInputFile
-                        photo_file = FSInputFile(Path(about_me_photo_path))
+                        photo_path = Path(about_me_photo_path)
+                        # Обрабатываем изображение для мобильных устройств
+                        resized_path = await self._resize_image_for_mobile(photo_path)
+                        image_path_to_use = resized_path if resized_path else photo_path
+                        photo_file = FSInputFile(image_path_to_use)
                         # Подпись - только текст из Google Doc, без разделителей
                         caption = about_me_text if about_me_text else None
                         await self.bot.send_photo(
@@ -4770,7 +4866,10 @@ class CourseBot:
                         if photo_path.exists():
                             # Анимация перед отправкой фото
                             await send_typing_action(self.bot, user.user_id, 0.5)
-                            photo_file = FSInputFile(photo_path)
+                            # Обрабатываем изображение для мобильных устройств
+                            resized_path = await self._resize_image_for_mobile(photo_path)
+                            image_path_to_use = resized_path if resized_path else photo_path
+                            photo_file = FSInputFile(image_path_to_use)
                             # Убираем разделители - caption должен браться из данных или быть None
                             caption = None
                             await self.bot.send_photo(user.user_id, photo_file, caption=caption, protect_content=True)
@@ -4795,7 +4894,10 @@ class CourseBot:
                                     logger.info(f"   🔍 Found photo at alternative path: {possible_path.absolute()}")
                                     # Анимация перед отправкой фото
                                     await send_typing_action(self.bot, user.user_id, 0.5)
-                                    photo_file = FSInputFile(possible_path)
+                                    # Обрабатываем изображение для мобильных устройств
+                                    resized_path = await self._resize_image_for_mobile(possible_path)
+                                    image_path_to_use = resized_path if resized_path else possible_path
+                                    photo_file = FSInputFile(image_path_to_use)
                                     # Убираем разделители - caption должен браться из данных или быть None
                                     caption = None
                                     await self.bot.send_photo(user.user_id, photo_file, caption=caption)
