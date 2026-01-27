@@ -3334,11 +3334,13 @@ class CourseBot:
                     logger.info(f"   🧹 De-duplicated media_list for day {day}: {len(media_list)} -> {len(unique_media)}")
                 media_list = unique_media
 
-            # If a media file is referenced via an inline marker in any text block, do not send it again
-            # from the generic media_list flow (prevents duplicate photos/videos).
+            # Если медиа встроено в текст через маркеры [MEDIA_...], НЕ отправляем его отдельно из media_list
+            # Все медиа должно отправляться строго в тех местах, где указана ссылка в тексте
             try:
                 inline_marker_file_ids: set[str] = set()
                 inline_marker_paths: set[str] = set()
+                has_inline_markers = False
+                
                 if media_markers:
                     haystacks = []
                     if intro_text:
@@ -3352,6 +3354,7 @@ class CourseBot:
                     for marker_id, marker_info in media_markers.items():
                         token = f"[{marker_id}]"
                         if any(token in h for h in haystacks):
+                            has_inline_markers = True
                             # Отслеживаем как по file_id, так и по path для надежности
                             fid = marker_info.get("file_id")
                             if fid:
@@ -3366,7 +3369,9 @@ class CourseBot:
                                 if file_name:
                                     inline_marker_paths.add(file_name)
 
-                if (inline_marker_file_ids or inline_marker_paths) and media_list:
+                # Если есть inline маркеры в тексте, полностью очищаем media_list
+                # Все медиа должно отправляться только inline в тексте, где указаны ссылки
+                if has_inline_markers and media_list:
                     before = len(media_list)
                     filtered_media = []
                     for m in media_list:
@@ -3376,27 +3381,31 @@ class CourseBot:
                         
                         # Проверяем по file_id
                         if m_fid and m_fid in inline_marker_file_ids:
-                            logger.debug(f"   🧹 Skipping media (file_id match): {m_path or m_name}")
+                            logger.debug(f"   🧹 Skipping media (file_id match with inline marker): {m_path or m_name}")
                             continue
                         
                         # Проверяем по path
                         if m_path:
                             normalized_m_path = str(Path(m_path)).replace('\\', '/')
                             if normalized_m_path in inline_marker_paths:
-                                logger.debug(f"   🧹 Skipping media (path match): {m_path}")
+                                logger.debug(f"   🧹 Skipping media (path match with inline marker): {m_path}")
                                 continue
                         
                         # Проверяем по имени файла
                         if m_name and m_name in inline_marker_paths:
-                            logger.debug(f"   🧹 Skipping media (filename match): {m_name}")
+                            logger.debug(f"   🧹 Skipping media (filename match with inline marker): {m_name}")
                             continue
                         
+                        # Если медиа не найдено в inline маркерах, оставляем его для отдельной отправки
+                        # (на случай, если оно не встроено в текст)
                         filtered_media.append(m)
                     
                     media_list = filtered_media
                     removed = before - len(media_list)
                     if removed:
                         logger.info(f"   🧹 Removed {removed} media items already referenced via inline markers for day {day}")
+                    if has_inline_markers and len(media_list) == 0:
+                        logger.info(f"   ✅ All media for day {day} is embedded inline in text blocks, no separate media_list items")
             except Exception as e:
                 logger.debug(f"Could not filter media_list by inline markers for day {day}: {e}")
             
@@ -3538,23 +3547,56 @@ class CourseBot:
                     lesson0_intro_sent_with_video = False
             
             # ЛОГИКА РАЗМЕЩЕНИЯ МЕДИА:
-            # Если медиа одно - размещаем сразу после заголовка
-            # Если медиа несколько - распределяем по структуре урока
-            # Исключение: для урока 0 видео уже отправлено с intro_text
-            # Исключение: для урока 1 видео отправляется перед заданием, не после заголовка
-            if media_count == 1 and not lesson0_video_with_intro and day != 1:
+            # Если медиа встроено в текст через маркеры [MEDIA_...], НЕ отправляем его отдельно
+            # Медиа должно отправляться строго в тех местах, где указана ссылка в тексте
+            has_inline_media_markers = False
+            if media_markers:
+                # Проверяем, есть ли маркеры в тексте
+                haystacks = []
+                if intro_text:
+                    haystacks.append(intro_text)
+                if about_me_text:
+                    haystacks.append(about_me_text)
+                if task:
+                    haystacks.append(task)
+                haystacks.extend([p for p in lesson_posts if isinstance(p, str) and p])
+                
+                for marker_id in media_markers.keys():
+                    token = f"[{marker_id}]"
+                    if any(token in h for h in haystacks):
+                        has_inline_media_markers = True
+                        break
+            
+            # Сохраняем флаг для использования в других местах функции
+            self._has_inline_media_markers = has_inline_media_markers
+            
+            # Если медиа встроено в текст через маркеры, НЕ отправляем его отдельно из media_list
+            # Медиа будет отправлено inline в тексте, где указаны ссылки
+            if has_inline_media_markers:
+                logger.info(f"   ✅ Media for day {day} is embedded inline in text blocks, skipping separate media_list sending")
+                # Очищаем media_list, так как все медиа должно отправляться только inline в тексте
+                # Медиа, которое не встроено в текст, уже отфильтровано выше
+                original_media_count = len(media_list)
+                media_list = []
+                media_count = 0
+                media_index = 0
+                logger.info(f"   🧹 Cleared {original_media_count} media items from media_list (all embedded inline in text)")
+            elif media_count == 1 and not lesson0_video_with_intro and day != 1:
                 # Одно медиа - сразу после заголовка (кроме дня 1, где видео отправляется перед заданием)
+                # Только если медиа НЕ встроено в текст через маркеры
                 await self._send_media_item(user.user_id, media_list[0], day)
                 logger.info(f"   ✅ Sent single media item after title for lesson {day}")
                 media_index = 1  # Помечаем, что медиа отправлено
             elif media_count > 1 and not lesson0_video_with_intro and day != 1:
                 # Несколько медиа - распределяем по структуре урока (кроме дня 1)
                 # Первое медиа - сразу после заголовка
+                # Только если медиа НЕ встроено в текст через маркеры
                 await self._send_media_item(user.user_id, media_list[media_index], day)
                 logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} after title for lesson {day}")
                 media_index += 1
-            elif day == 1 and media_count > 0:
+            elif day == 1 and media_count > 0 and not has_inline_media_markers:
                 # Для дня 1: медиа не отправляем сразу после заголовка, оно будет отправлено перед заданием
+                # Только если медиа НЕ встроено в текст через маркеры
                 logger.info(f"   ⏭️ Skipping media after title for lesson 1 (will be sent before assignment)")
             
             # Отправляем вводный текст отдельным сообщением, если есть (пропускаем для навигатора)
@@ -3661,7 +3703,8 @@ class CourseBot:
                 await asyncio.sleep(0.5)  # Пауза для плавности
                 
                 # Второе медиа - после intro_text (если есть несколько медиа)
-                if media_count > 1 and media_index < media_count:
+                # Только если медиа НЕ встроено в текст через маркеры
+                if media_count > 1 and media_index < media_count and not has_inline_media_markers:
                     await self._send_media_item(user.user_id, media_list[media_index], day)
                     logger.info(f"   ✅ Sent media {media_index + 1}/{media_count} after intro_text for lesson {day}")
                     media_index += 1
@@ -3827,11 +3870,16 @@ class CourseBot:
                                 await asyncio.sleep(0.2)
                         
                         # Отправляем картинку перед целевым абзацем
-                        await self._send_media_item(user.user_id, media_list[media_index], day)
-                        logger.info(f"   ✅ Sent lesson 2 photo before target paragraph for lesson {day}")
-                        media_index += 1
-                        lesson2_photo_placed = True
-                        await asyncio.sleep(0.3)
+                        # Только если медиа НЕ встроено в текст через маркеры
+                        if not has_inline_media_markers:
+                            await self._send_media_item(user.user_id, media_list[media_index], day)
+                            logger.info(f"   ✅ Sent lesson 2 photo before target paragraph for lesson {day}")
+                            media_index += 1
+                            lesson2_photo_placed = True
+                            await asyncio.sleep(0.3)
+                        else:
+                            logger.info(f"   ⏭️ Skipped lesson 2 photo (embedded inline in text) for lesson {day}")
+                            lesson2_photo_placed = True
                         
                         # Отправляем целевой абзац после картинки
                         if paragraphs[target_paragraph_index]:
