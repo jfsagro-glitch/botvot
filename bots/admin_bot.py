@@ -384,7 +384,7 @@ class AdminBot:
         last_deployment = "Неизвестно"
         last_commit_date = current_date
         
-        # Попытка получить данные из git
+        # Попытка получить данные из git (только коммиты после начала проекта)
         git_repo_paths = [
             Path(__file__).parent.parent,  # Стандартный путь
             Path.cwd(),  # Текущая рабочая директория
@@ -392,6 +392,8 @@ class AdminBot:
         ]
         
         git_found = False
+        project_start_str = project_start.strftime("%Y-%m-%d")
+        
         for repo_path in git_repo_paths:
             if not repo_path.exists():
                 continue
@@ -401,63 +403,55 @@ class AdminBot:
                 if not git_dir.exists():
                     continue
                 
-                # Подсчет коммитов
+                # Подсчет коммитов с начала проекта
                 result = subprocess.run(
-                    ["git", "rev-list", "--count", "HEAD"],
+                    ["git", "rev-list", "--count", f"--since={project_start_str}", "HEAD"],
                     capture_output=True,
                     text=True,
-                    timeout=5,
+                    timeout=10,
                     cwd=str(repo_path)
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     try:
                         git_commits = int(result.stdout.strip())
                         git_found = True
-                        logger.debug(f"Found {git_commits} commits in {repo_path}")
+                        logger.debug(f"Found {git_commits} commits since {project_start_str} in {repo_path}")
                     except ValueError:
                         logger.warning(f"Invalid git commit count: {result.stdout.strip()}")
                 
                 if git_found:
-                    # Подсчет деплоев (коммиты с deploy-сообщениями)
+                    # Подсчет деплоев (коммиты с deploy-сообщениями с начала проекта)
                     deploy_keywords = ["задеплой", "deploy", "ЗАДЕПЛОЙ", "DEPLOY", "railway", "push"]
                     deploy_result = subprocess.run(
-                        ["git", "log", "--pretty=format:%s", "--all"],
+                        ["git", "log", f"--since={project_start_str}", "--pretty=format:%s", "--all"],
                         capture_output=True,
                         text=True,
-                        timeout=5,
+                        timeout=10,
                         cwd=str(repo_path)
                     )
                     if deploy_result.returncode == 0 and deploy_result.stdout:
                         commit_messages = deploy_result.stdout.strip().split('\n')
                         deployments = sum(1 for msg in commit_messages if any(keyword.lower() in msg.lower() for keyword in deploy_keywords))
+                        # Если деплоев не найдено, но есть коммиты, считаем все коммиты как деплои
                         if deployments == 0 and git_commits > 0:
                             deployments = git_commits
                     
                     # Дата последнего коммита
                     last_commit_result = subprocess.run(
-                        ["git", "log", "-1", "--pretty=format:%ad", "--date=short"],
+                        ["git", "log", "-1", f"--since={project_start_str}", "--pretty=format:%ad", "--date=format:%d.%m.%Y %H:%M"],
                         capture_output=True,
                         text=True,
-                        timeout=5,
+                        timeout=10,
                         cwd=str(repo_path)
                     )
                     if last_commit_result.returncode == 0 and last_commit_result.stdout.strip():
                         try:
-                            last_commit_date = datetime.strptime(last_commit_result.stdout.strip(), "%Y-%m-%d")
+                            last_deployment = last_commit_result.stdout.strip()
+                            # Парсим дату для проверки
+                            last_commit_date = datetime.strptime(last_deployment.split()[0], "%d.%m.%Y")
                             current_date = max(current_date, last_commit_date)
                         except ValueError:
                             pass
-                    
-                    # Дата последнего деплоя
-                    last_deploy_result = subprocess.run(
-                        ["git", "log", "-1", "--pretty=format:%ad", "--date=format:%d.%m.%Y %H:%M"],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                        cwd=str(repo_path)
-                    )
-                    if last_deploy_result.returncode == 0 and last_deploy_result.stdout.strip():
-                        last_deployment = last_deploy_result.stdout.strip()
                     
                     break
                     
@@ -485,34 +479,53 @@ class AdminBot:
             elif last_deployment == "Неизвестно":
                 last_deployment = current_date.strftime("%d.%m.%Y %H:%M")
         
-        # Расчет времени работы в Cursor (на основе коммитов)
-        # Предполагаем, что каждый коммит = ~15 минут работы
-        estimated_hours = max(10, (git_commits * 15) / 60) if git_commits > 0 else 10
+        # Расчет времени работы в Cursor
+        # Более точный расчет: учитываем интенсивность работы
+        # Предполагаем среднюю интенсивность: 1 коммит = 20 минут работы
+        # Плюс базовое время на настройку и планирование
+        base_hours = 5.0  # Базовое время на настройку проекта
+        commit_hours = (git_commits * 20) / 60 if git_commits > 0 else 0
+        estimated_hours = base_hours + commit_hours
         
-        # Расчет затрат
-        # Подписка Cursor: 20$ в месяц
-        cursor_monthly = 20.0
-        months_worked = max(1, days_worked / 30.0)
-        # Предполагаем, что 80% времени работы в Cursor ушло на этот проект
-        cursor_project_share = 0.8
-        cursor_cost = cursor_monthly * months_worked * cursor_project_share
+        # Расчет затрат на Cursor
+        # Реальные инвойсы Cursor за январь 2026:
+        # - 02.01.2026: 20.00 USD
+        # - 25.01.2026: 20.21 USD (cycle starting January 2, 2026)
+        # Итого: 40.21 USD за январь
+        cursor_invoice_total = 40.21  # USD
+        
+        # Проект начался 6 января, инвойсы с 2 января
+        # Рассчитываем пропорцию: с 6 января до конца месяца = 26 дней из 30 дней цикла
+        invoice_start = datetime(2026, 1, 2)
+        invoice_days = 30  # Дни в цикле инвойса
+        project_days_in_cycle = (datetime(2026, 1, 31) - project_start).days + 1  # Дни проекта в январе
+        project_share_in_january = project_days_in_cycle / invoice_days if invoice_days > 0 else 1.0
+        
+        # Стоимость Cursor для проекта в январе
+        cursor_cost_january = cursor_invoice_total * project_share_in_january
+        
+        # Если проект продолжается в феврале, добавляем стоимость (пока только январь)
+        cursor_cost = cursor_cost_january
         
         # OpenAI/Codex пакеты: 30.24$
         openai_packages = 30.24
         
         # Railway хостинг: 5$ в месяц
         railway_monthly = 5.0
+        months_worked = max(1, days_worked / 30.0)
         railway_cost = railway_monthly * months_worked
         
         # Токены AI (количество, без стоимости, так как включены в подписку)
-        # Примерное количество токенов (можно обновить из реальных данных)
-        tokens_input = 56400000  # Примерное значение
-        tokens_output = 5152300  # Примерное значение
+        tokens_input = 56400000
+        tokens_output = 5152300
         tokens_total = tokens_input + tokens_output
+        
+        # Курс доллара ЦБ РФ на 27.01.2026: 76.0101 руб за доллар
+        usd_to_rub_rate = 76.0101
         
         # Итого
         total_usd = cursor_cost + openai_packages + railway_cost
-        total_rub = total_usd * 100  # Курс 1$ = 100₽
+        total_rub = total_usd * usd_to_rub_rate
         
         return {
             "tokens_total": tokens_total,
@@ -520,11 +533,11 @@ class AdminBot:
             "tokens_output": tokens_output,
             "cursor_cost": cursor_cost,
             "cursor_hours": estimated_hours,
-            "cursor_project_share": cursor_project_share,
             "openai_packages": openai_packages,
             "railway_cost": railway_cost,
             "total_usd": total_usd,
             "total_rub": total_rub,
+            "usd_rate": usd_to_rub_rate,
             "project_start": project_start.strftime("%d.%m.%Y"),
             "last_deployment": last_deployment,
             "days_worked": days_worked,
@@ -633,10 +646,11 @@ class AdminBot:
                     f"  └ Input: {costs['tokens_input']:,} | Output: {costs['tokens_output']:,}\n"
                     f"  └ (стоимость включена в подписку Cursor и Codex пакеты)\n"
                     f"• Подписка Cursor: {costs['cursor_cost']:.2f} $\n"
-                    f"  └ {costs['cursor_project_share']*100:.0f}% времени на проект ({costs['cursor_hours']:.1f} ч.)\n"
+                    f"  └ Время работы на проект: {costs['cursor_hours']:.1f} ч.\n"
                     f"• OpenAI/Codex пакеты: {costs['openai_packages']:.2f} $\n"
                     f"• Railway (хостинг): {costs['railway_cost']:.2f} $ ({costs['days_worked']/30:.2f} мес.)\n"
                     f"• Итого: {costs['total_usd']:.2f} $ ({costs['total_rub']:.0f} ₽)\n"
+                    f"  └ Курс ЦБ: 1$ = {costs['usd_rate']:.4f} ₽\n"
                     f"\n📅 Начало проекта: {costs['project_start']}\n"
                     f"📅 Последний деплой: {costs['last_deployment']}\n"
                     f"📝 Дней работы: {costs['days_worked']} | Коммитов: {costs['git_commits']} | Деплоев: {costs['deployments']}"
