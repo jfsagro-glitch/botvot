@@ -56,6 +56,10 @@ logger = logging.getLogger(__name__)
 # Используем стандартную ширину для мобильных устройств
 MOBILE_SCREEN_WIDTH = 720  # Стандартная ширина для мобильных устройств в Telegram
 
+# Разделитель для медиафайлов - визуально расширяет блок медиа
+# Используется в caption медиафайлов для улучшения визуального восприятия
+MEDIA_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
 
 class CourseBot:
     """Course Delivery Bot implementation."""
@@ -274,6 +278,9 @@ class CourseBot:
                     video_to_send = FSInputFile(compressed_path)
                     logger.info(f"   📹 Using compressed video: {compressed_path.name}")
         
+        # Добавляем разделитель к caption для визуального расширения блока медиа
+        caption_with_separator = self._add_media_separator(caption)
+        
         for attempt in range(max_retries):
             try:
                 # Увеличиваем таймаут для больших файлов
@@ -284,7 +291,7 @@ class CourseBot:
                 await self.bot.send_video(
                     user_id,
                     video_to_send,
-                    caption=caption,
+                    caption=caption_with_separator,
                     width=width,
                     height=height,
                     supports_streaming=supports_streaming,
@@ -2069,6 +2076,24 @@ class CourseBot:
             logger.error(f"   ❌ Error compressing video: {e}", exc_info=True)
             return None
     
+    @staticmethod
+    def _add_media_separator(caption: Optional[str] = None) -> Optional[str]:
+        """
+        Добавляет визуальный разделитель к caption медиафайла для расширения блока.
+        
+        Args:
+            caption: Исходный caption (может быть None)
+        
+        Returns:
+            caption с добавленным разделителем внизу, или только разделитель если caption был None
+        """
+        if caption:
+            # Если есть caption, добавляем разделитель внизу
+            return f"{caption}\n\n{MEDIA_SEPARATOR}"
+        else:
+            # Если caption нет, возвращаем только разделитель
+            return MEDIA_SEPARATOR
+    
     async def _send_media_item(self, user_id: int, media_item: dict, day: int) -> bool:
         """
         Отправляет один медиа-файл (фото или видео) с анимацией и центрированием.
@@ -2089,8 +2114,9 @@ class CourseBot:
             # Анимация: показываем, что бот работает (уменьшено для скорости)
             await send_typing_action(self.bot, user_id, 0.2)
             
-            # Убираем разделители - caption должен браться из данных медиа или быть None
-            caption = None
+            # Добавляем разделитель к caption для визуального расширения блока медиа
+            original_caption = media_item.get("caption")  # Берем caption из данных медиа, если есть
+            caption = self._add_media_separator(original_caption)
             
             # Используем file_id если есть (самый быстрый способ)
             if file_id:
@@ -2157,8 +2183,9 @@ class CourseBot:
                         break
                 
                 if media_file:
-                    # Убираем разделители - caption должен браться из данных медиа или быть None
-                    caption = None
+                    # Добавляем разделитель к caption для визуального расширения блока медиа
+                    original_caption = media_item.get("caption")  # Берем caption из данных медиа, если есть
+                    caption = self._add_media_separator(original_caption)
                     if media_type == "photo":
                         await self.bot.send_photo(user_id, media_file, caption=caption, protect_content=True)
                     elif media_type == "video":
@@ -2733,9 +2760,12 @@ class CourseBot:
                             is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip() if i + 1 < len(parts) else True)
                             
                             if media_type == "photo":
+                                # Добавляем разделитель к caption для визуального расширения блока медиа
+                                caption = self._add_media_separator()
                                 sent_message = await self.bot.send_photo(
                                     user_id, 
                                     cached_file_id,
+                                    caption=caption,
                                     reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None,
                                     protect_content=True
                                 )
@@ -2743,9 +2773,12 @@ class CourseBot:
                                     keyboard_attached = True
                                 logger.info(f"   ✅ Sent inline photo from cache (file_id) for marker {part}, lesson {day}")
                             elif media_type == "video":
+                                # Добавляем разделитель к caption для визуального расширения блока медиа
+                                caption = self._add_media_separator()
                                 sent_message = await self.bot.send_video(
                                     user_id, 
                                     cached_file_id,
+                                    caption=caption,
                                     width=MOBILE_SCREEN_WIDTH,
                                     reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
                                 )
@@ -2812,9 +2845,12 @@ class CourseBot:
                                 photo_file = FSInputFile(image_path_to_use)
                                 # Если это последняя часть и есть клавиатура, добавляем её к фото
                                 is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip() if i + 1 < len(parts) else True)
+                                # Добавляем разделитель к caption для визуального расширения блока медиа
+                                caption = self._add_media_separator()
                                 sent_message = await self.bot.send_photo(
                                     user_id, 
                                     photo_file,
+                                    caption=caption,
                                     reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None,
                                     protect_content=True
                                 )
@@ -2838,9 +2874,12 @@ class CourseBot:
                                 # Если это последняя часть и есть клавиатура, добавляем её к видео
                                 is_last = (i == len(parts) - 1) or (i == len(parts) - 2 and not parts[i + 1].strip() if i + 1 < len(parts) else True)
                                 video_file = FSInputFile(video_path_to_use)
+                                # Добавляем разделитель к caption для визуального расширения блока медиа
+                                caption = self._add_media_separator()
                                 sent_message = await self.bot.send_video(
                                     user_id, 
                                     video_file,
+                                    caption=caption,
                                     width=MOBILE_SCREEN_WIDTH,
                                     reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None,
                                     protect_content=True
@@ -3488,8 +3527,9 @@ class CourseBot:
                     video_file_id = lesson0_video_with_intro.get("file_id")
                     video_file_path = lesson0_video_with_intro.get("path")
                     
-                    # Подпись с intro_text - только текст из Google Doc, без разделителей
-                    caption = intro_text if intro_text else None
+                    # Подпись с intro_text + разделитель для визуального расширения блока медиа
+                    original_caption = intro_text if intro_text else None
+                    caption = self._add_media_separator(original_caption)
                     
                     if video_file_id:
                         await self.bot.send_video(
@@ -3526,7 +3566,7 @@ class CourseBot:
                         
                         if video_path.exists():
                             video_file = FSInputFile(video_path)
-                            caption = intro_text if intro_text else None
+                            # Используем тот же caption с разделителем
                             await self.bot.send_video(
                                 user.user_id, 
                                 video_file, 
@@ -4525,7 +4565,9 @@ class CourseBot:
                     # Do not hardcode caption text here: it causes duplicate text if the same lines
                     # are already present in the lesson body. If you need a caption, store it in
                     # lessons.json (e.g. lesson1_video_caption) and keep the body text unchanged.
-                    video_caption = (lesson_data.get("lesson1_video_caption") or "").strip() or None
+                    original_video_caption = (lesson_data.get("lesson1_video_caption") or "").strip() or None
+                    # Добавляем разделитель к caption для визуального расширения блока медиа
+                    video_caption = self._add_media_separator(original_video_caption)
                     
                     # Отправляем видео с текстом
                     media_type = lesson1_video_media.get("type", "video")
