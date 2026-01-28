@@ -2411,10 +2411,18 @@ class CourseBot:
         *,
         seen: Optional[set[str]] = None,
         limit: int = 6,
+        day: Optional[int] = None,
     ):
         """
         Отправляет только медиа из URL в тексте, НЕ отправляет сам текст.
         Возвращает множество отправленных URL для последующего удаления из текста.
+        
+        Args:
+            user_id: ID пользователя
+            text: Текст с URL
+            seen: Множество уже обработанных URL
+            limit: Максимальное количество медиа для отправки
+            day: Номер урока (для специальной обработки урока 11 - YouTube ссылки остаются в тексте)
         """
         if not text:
             return set()
@@ -2462,6 +2470,12 @@ class CourseBot:
 
                 vid = self._youtube_video_id(url)
                 if vid:
+                    # Для урока 11: YouTube ссылки не отправляем отдельно, оставляем в тексте как гиперссылки
+                    if day == 11 or str(day) == "11":
+                        # Пропускаем YouTube ссылки для урока 11 - они останутся в тексте как гиперссылки
+                        logger.info(f"   ⏭️ Skipping YouTube link for lesson 11: {url} (will remain in text as hyperlink)")
+                        continue
+                    
                     try:
                         # For YouTube (and similar pages), let Telegram build a native link preview
                         message_text = line if (line and url in line and len(line) <= 900) else url
@@ -4696,6 +4710,7 @@ class CourseBot:
                     task_message,
                     seen=link_preview_seen,
                     limit=6,
+                    day=day,
                 )
             except Exception as e:
                 logger.warning(f"   ⚠️ Error sending task previews: {e}")
