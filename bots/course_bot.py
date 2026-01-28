@@ -58,7 +58,8 @@ MOBILE_SCREEN_WIDTH = 720  # Стандартная ширина для моби
 
 # Разделитель для медиафайлов - визуально расширяет блок медиа
 # Используется в caption медиафайлов для улучшения визуального восприятия
-MEDIA_SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Волнистая линия, длина сокращена в два раза
+MEDIA_SEPARATOR = "〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️"
 
 
 class CourseBot:
@@ -1285,11 +1286,13 @@ class CourseBot:
                                 caption_text = follow_up_text
                                 remaining_text = None
                     else:
-                        # Убираем разделители - если нет текста, caption = None
+                        # Если нет текста, используем только разделитель для визуального расширения блока медиа
                         caption_text = None
                         remaining_text = None
                     
-                    await self.bot.send_photo(user_id, follow_up_photo_file_id, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None, protect_content=True)
+                    # Добавляем разделитель к caption для визуального расширения блока медиа
+                    caption_with_separator = self._add_media_separator(caption_text)
+                    await self.bot.send_photo(user_id, follow_up_photo_file_id, caption=caption_with_separator, reply_markup=persistent_keyboard if not remaining_text else None, protect_content=True)
                     logger.info(f"   ✅ Sent final message photo with text (file_id) for lesson 30")
                     photo_sent = True
                     
@@ -1397,7 +1400,9 @@ class CourseBot:
                             caption_text = None
                             remaining_text = None
                         
-                        await self.bot.send_photo(user_id, photo_file, caption=caption_text, reply_markup=persistent_keyboard if not remaining_text else None, protect_content=True)
+                        # Добавляем разделитель к caption для визуального расширения блока медиа
+                        caption_with_separator = self._add_media_separator(caption_text)
+                        await self.bot.send_photo(user_id, photo_file, caption=caption_with_separator, reply_markup=persistent_keyboard if not remaining_text else None, protect_content=True)
                         logger.info(f"   ✅ Sent final message photo with text (file path: {photo_path}) for lesson 30")
                         photo_sent = True
                         
@@ -3813,8 +3818,9 @@ class CourseBot:
                 # Пробуем отправить фото, если есть file_id (приоритет)
                 if about_me_photo_file_id:
                     try:
-                        # Подпись - только текст из Google Doc, без разделителей
-                        caption = about_me_text if about_me_text else None
+                        # Подпись - текст из Google Doc + разделитель для визуального расширения блока медиа
+                        original_caption = about_me_text if about_me_text else None
+                        caption = self._add_media_separator(original_caption)
                         await self.bot.send_photo(
                             user.user_id,
                             about_me_photo_file_id,
@@ -3835,8 +3841,9 @@ class CourseBot:
                                 resized_path = await self._resize_image_for_mobile(photo_path)
                                 image_path_to_use = resized_path if resized_path else photo_path
                                 photo_file = FSInputFile(image_path_to_use)
-                                # Подпись - только текст из Google Doc, без разделителей
-                                caption = about_me_text if about_me_text else None
+                                # Подпись - текст из Google Doc + разделитель для визуального расширения блока медиа
+                                original_caption = about_me_text if about_me_text else None
+                                caption = self._add_media_separator(original_caption)
                                 await self.bot.send_photo(
                                     user.user_id,
                                     photo_file,
@@ -3868,8 +3875,9 @@ class CourseBot:
                         resized_path = await self._resize_image_for_mobile(photo_path)
                         image_path_to_use = resized_path if resized_path else photo_path
                         photo_file = FSInputFile(image_path_to_use)
-                        # Подпись - только текст из Google Doc, без разделителей
-                        caption = about_me_text if about_me_text else None
+                        # Подпись - текст из Google Doc + разделитель для визуального расширения блока медиа
+                        original_caption = about_me_text if about_me_text else None
+                        caption = self._add_media_separator(original_caption)
                         await self.bot.send_photo(
                             user.user_id,
                             photo_file,
@@ -4970,8 +4978,8 @@ class CourseBot:
                     try:
                         # Анимация перед отправкой фото
                         await send_typing_action(self.bot, user.user_id, 0.5)
-                        # Убираем разделители - caption должен браться из данных или быть None
-                        caption = None
+                        # Добавляем разделитель к caption для визуального расширения блока медиа
+                        caption = self._add_media_separator()
                         await self.bot.send_photo(user.user_id, follow_up_photo_file_id, caption=caption)
                         logger.info(f"   ✅ Sent follow_up photo (file_id) for lesson {day}")
                         photo_sent = True
@@ -5004,8 +5012,8 @@ class CourseBot:
                             resized_path = await self._resize_image_for_mobile(photo_path)
                             image_path_to_use = resized_path if resized_path else photo_path
                             photo_file = FSInputFile(image_path_to_use)
-                            # Убираем разделители - caption должен браться из данных или быть None
-                            caption = None
+                            # Добавляем разделитель к caption для визуального расширения блока медиа
+                            caption = self._add_media_separator()
                             await self.bot.send_photo(user.user_id, photo_file, caption=caption, protect_content=True)
                             logger.info(f"   ✅ Sent follow_up photo (file path: {photo_path}) for lesson {day}")
                             photo_sent = True
@@ -5032,8 +5040,8 @@ class CourseBot:
                                     resized_path = await self._resize_image_for_mobile(possible_path)
                                     image_path_to_use = resized_path if resized_path else possible_path
                                     photo_file = FSInputFile(image_path_to_use)
-                                    # Убираем разделители - caption должен браться из данных или быть None
-                                    caption = None
+                                    # Добавляем разделитель к caption для визуального расширения блока медиа
+                                    caption = self._add_media_separator()
                                     await self.bot.send_photo(user.user_id, photo_file, caption=caption)
                                     logger.info(f"   ✅ Sent follow_up photo from alternative path for lesson {day}")
                                     photo_sent = True
