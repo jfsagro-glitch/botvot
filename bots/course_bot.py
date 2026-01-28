@@ -6106,6 +6106,49 @@ class CourseBot:
                 reply_markup=persistent_keyboard
             )
     
+    @staticmethod
+    def _normalize_time_display(time_str: str) -> str:
+        """
+        Нормализует отображение времени в формат ЧЧ:ММ.
+        
+        Args:
+            time_str: Время в формате "HH", "HH:MM" или "H:MM"
+        
+        Returns:
+            Время в формате "HH:MM" (например, "08:00", "09:30")
+        """
+        if not time_str:
+            return "08:00"
+        
+        time_str = time_str.strip()
+        
+        # Если время уже в формате ЧЧ:ММ, возвращаем как есть
+        if ":" in time_str:
+            try:
+                parts = time_str.split(":")
+                hh = parts[0].zfill(2)  # Дополняем до 2 цифр
+                mm = parts[1] if len(parts) > 1 else "00"
+                if len(mm) == 1:
+                    mm = f"0{mm}"  # Дополняем минуты до 2 цифр
+                # Проверяем валидность
+                hour = int(hh)
+                minute = int(mm)
+                if 0 <= hour <= 23 and 0 <= minute <= 59:
+                    return f"{hh}:{mm}"
+            except (ValueError, IndexError):
+                pass
+        
+        # Если только часы (например, "08" или "8")
+        try:
+            hour = int(time_str)
+            if 0 <= hour <= 23:
+                return f"{hour:02d}:00"  # Добавляем :00 для минут
+        except ValueError:
+            pass
+        
+        # Если не удалось распарсить, возвращаем значение по умолчанию
+        return "08:00"
+    
     async def handle_keyboard_mentor(self, message: Message):
         """Handle 'Наставник' button from persistent keyboard - show mentor menu."""
         try:
@@ -6155,10 +6198,14 @@ class CourseBot:
         else:
             status_text = f"☑️ Напоминаний в день: {user.mentor_reminders}"
         
-        # Получаем текущие настройки времени
-        lesson_time = getattr(user, "lesson_delivery_time_local", None) or Config.LESSON_DELIVERY_TIME_LOCAL
-        reminder_start = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
-        reminder_end = getattr(user, "mentor_reminder_end_local", None) or Config.MENTOR_REMINDER_END_LOCAL
+        # Получаем текущие настройки времени и нормализуем их для отображения
+        lesson_time_raw = getattr(user, "lesson_delivery_time_local", None) or Config.LESSON_DELIVERY_TIME_LOCAL
+        reminder_start_raw = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
+        reminder_end_raw = getattr(user, "mentor_reminder_end_local", None) or Config.MENTOR_REMINDER_END_LOCAL
+        
+        lesson_time = self._normalize_time_display(lesson_time_raw)
+        reminder_start = self._normalize_time_display(reminder_start_raw)
+        reminder_end = self._normalize_time_display(reminder_end_raw)
         
         # Добавляем кнопки для настройки времени
         buttons.append([InlineKeyboardButton(
@@ -6276,8 +6323,11 @@ class CourseBot:
         del self._user_time_input_context[user_id]
         
         # Обновляем соответствующую настройку на основе контекста
+        # Нормализуем время перед сохранением (всегда формат HH:MM)
+        normalized_time = self._normalize_time_display(text)
+        
         if time_context == "lesson":
-            user.lesson_delivery_time_local = text
+            user.lesson_delivery_time_local = normalized_time
             await self.db.update_user(user)
             
             # Пересчитываем start_date с новым временем
@@ -6295,33 +6345,34 @@ class CourseBot:
             
             persistent_keyboard = self._create_persistent_keyboard()
             await message.answer(
-                f"✅ Время получения заданий установлено: <b>{text}</b>\n\n"
+                f"✅ Время получения заданий установлено: <b>{normalized_time}</b>\n\n"
                 f"Новые задания будут приходить каждый день в это время.",
                 reply_markup=persistent_keyboard
             )
-            logger.info(f"User {user_id} set lesson delivery time to {text}")
+            logger.info(f"User {user_id} set lesson delivery time to {normalized_time}")
         
         elif time_context == "reminder_start":
-            user.mentor_reminder_start_local = text
+            user.mentor_reminder_start_local = normalized_time
             await self.db.update_user(user)
             await message.answer(
-                f"✅ Время начала уведомлений установлено: <b>{text}</b>\n\n"
+                f"✅ Время начала уведомлений установлено: <b>{normalized_time}</b>\n\n"
                 f"Теперь установите время конца промежутка уведомлений."
             )
-            logger.info(f"User {user_id} set reminder start time to {text}")
+            logger.info(f"User {user_id} set reminder start time to {normalized_time}")
         
         elif time_context == "reminder_end":
             reminder_start = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
-            user.mentor_reminder_end_local = text
+            user.mentor_reminder_end_local = normalized_time
             await self.db.update_user(user)
+            reminder_start_normalized = self._normalize_time_display(reminder_start)
             persistent_keyboard = self._create_persistent_keyboard()
             await message.answer(
                 f"✅ Временной промежуток уведомлений установлен: "
-                f"<b>{reminder_start} - {text}</b>\n\n"
+                f"<b>{reminder_start_normalized} - {normalized_time}</b>\n\n"
                 f"Напоминания будут равномерно распределены в течение этого промежутка.",
                 reply_markup=persistent_keyboard
             )
-            logger.info(f"User {user_id} set reminder window to {reminder_start} - {text}")
+            logger.info(f"User {user_id} set reminder window to {reminder_start_normalized} - {normalized_time}")
     
     async def handle_mentor_settings(self, callback: CallbackQuery):
         """Handle mentor settings menu (time settings)."""
@@ -6348,7 +6399,8 @@ class CourseBot:
     
     async def _show_lesson_time_settings(self, message: Message, user: User):
         """Show lesson delivery time settings."""
-        current_time = getattr(user, "lesson_delivery_time_local", None) or Config.LESSON_DELIVERY_TIME_LOCAL
+        current_time_raw = getattr(user, "lesson_delivery_time_local", None) or Config.LESSON_DELIVERY_TIME_LOCAL
+        current_time = self._normalize_time_display(current_time_raw)
         
         # Создаем кнопки с популярными временами
         buttons = []
@@ -6356,7 +6408,8 @@ class CourseBot:
         row = []
         for time_str in popular_times:
             text = time_str
-            if time_str == current_time:
+            # Сравниваем нормализованные значения
+            if self._normalize_time_display(time_str) == current_time:
                 text = f"{time_str} ☑️"
             row.append(InlineKeyboardButton(
                 text=text,
@@ -6384,8 +6437,11 @@ class CourseBot:
     
     async def _show_reminder_window_settings(self, message: Message, user: User):
         """Show reminder window time settings."""
-        current_start = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
-        current_end = getattr(user, "mentor_reminder_end_local", None) or Config.MENTOR_REMINDER_END_LOCAL
+        current_start_raw = getattr(user, "mentor_reminder_start_local", None) or Config.MENTOR_REMINDER_START_LOCAL
+        current_end_raw = getattr(user, "mentor_reminder_end_local", None) or Config.MENTOR_REMINDER_END_LOCAL
+        
+        current_start = self._normalize_time_display(current_start_raw)
+        current_end = self._normalize_time_display(current_end_raw)
         
         # Создаем кнопки для настройки начала и конца промежутка
         buttons = [
@@ -6436,9 +6492,10 @@ class CourseBot:
                 )
                 return
             else:
-                # Установлено конкретное время
+                # Установлено конкретное время - нормализуем перед сохранением
                 time_str = parts[3]
-                user.lesson_delivery_time_local = time_str
+                normalized_time = self._normalize_time_display(time_str)
+                user.lesson_delivery_time_local = normalized_time
                 await self.db.update_user(user)
                 
                 # Пересчитываем start_date с новым временем
@@ -6450,7 +6507,9 @@ class CourseBot:
                     now_local = now_utc.astimezone(tz)
                     tomorrow_local_date = (now_local + timedelta(days=1)).date()
                     try:
-                        hh, mm = time_str.strip().split(":", 1)
+                        # Используем нормализованное время для парсинга
+                        normalized_time_str = self._normalize_time_display(time_str)
+                        hh, mm = normalized_time_str.split(":", 1)
                         delivery_t = time(hour=int(hh), minute=int(mm))
                     except Exception:
                         delivery_t = time(8, 30)
@@ -6460,11 +6519,11 @@ class CourseBot:
                 
                 persistent_keyboard = self._create_persistent_keyboard()
                 await callback.message.answer(
-                    f"✅ Время получения заданий установлено: <b>{time_str}</b>\n\n"
+                    f"✅ Время получения заданий установлено: <b>{normalized_time}</b>\n\n"
                     f"Новые задания будут приходить каждый день в это время.",
                     reply_markup=persistent_keyboard
                 )
-                logger.info(f"User {user_id} set lesson delivery time to {time_str}")
+                logger.info(f"User {user_id} set lesson delivery time to {normalized_time}")
         
         elif setting_type == "reminder_start":
             self._user_time_input_context[user_id] = "reminder_start"

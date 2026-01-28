@@ -38,12 +38,13 @@ class MentorReminderScheduler:
         self.reminder_callback = reminder_callback
         self.running = False
     
-    async def start(self, check_interval_seconds: int = 300):
+    async def start(self, check_interval_seconds: int = 180):
         """
         Запуск планировщика напоминаний.
         
         Args:
-            check_interval_seconds: Как часто проверять пользователей (по умолчанию 30 минут)
+            check_interval_seconds: Как часто проверять пользователей (по умолчанию 3 минуты = 180 секунд)
+            Уменьшено с 300 до 180 для более частой проверки и надежной доставки уведомлений
         """
         self.running = True
         logger.info("👨‍🏫 Mentor Reminder Scheduler started")
@@ -78,11 +79,36 @@ class MentorReminderScheduler:
         local_now = now_utc.astimezone(tz)
 
         def _parse_hhmm(value: str, default: time) -> time:
-            try:
-                hh, mm = (value or "").strip().split(":", 1)
-                return time(hour=int(hh), minute=int(mm))
-            except Exception:
+            """
+            Парсит время из строки в формате "HH:MM" или "HH".
+            Если формат неверный, возвращает значение по умолчанию.
+            """
+            if not value:
                 return default
+            
+            value = value.strip()
+            
+            # Если формат "HH:MM"
+            if ":" in value:
+                try:
+                    parts = value.split(":", 1)
+                    hh = int(parts[0])
+                    mm = int(parts[1]) if len(parts) > 1 else 0
+                    if 0 <= hh <= 23 and 0 <= mm <= 59:
+                        return time(hour=hh, minute=mm)
+                except (ValueError, IndexError):
+                    pass
+            else:
+                # Если только часы (например, "08" или "8")
+                try:
+                    hh = int(value)
+                    if 0 <= hh <= 23:
+                        return time(hour=hh, minute=0)
+                except ValueError:
+                    pass
+            
+            # Если не удалось распарсить, возвращаем значение по умолчанию
+            return default
         
         enabled = 0
         sent = 0
