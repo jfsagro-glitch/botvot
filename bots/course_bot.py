@@ -46,9 +46,11 @@ from utils.navigator import create_navigator_keyboard, format_navigator_message
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+# Reduce spam from noisy third-party libraries if necessary
+logging.getLogger('asyncio').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Ширина мобильного экрана для медиа (в пикселях)

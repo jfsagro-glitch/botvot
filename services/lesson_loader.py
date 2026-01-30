@@ -40,6 +40,8 @@ class LessonLoader:
         """Загружает уроки из JSON файла."""
         logger.info(f"Загрузка уроков из: {self.lessons_file.absolute()}")
         
+        old_cache = self._lessons_cache
+        
         if not self.lessons_file.exists():
             logger.error(f"❌ Файл уроков {self.lessons_file.absolute()} не найден!")
             logger.error(f"   Текущая рабочая директория: {Path.cwd()}")
@@ -78,14 +80,36 @@ class LessonLoader:
         
         try:
             with open(self.lessons_file, "r", encoding="utf-8") as f:
-                self._lessons_cache = json.load(f)
+                new_cache = json.load(f)
+
+            # Basic validation: must be a dict with numeric day keys
+            if not isinstance(new_cache, dict) or not any(k.isdigit() for k in new_cache.keys()):
+                logger.error(f"❌ Загруженный файл {self.lessons_file} не содержит корректной структуры уроков; пропускаю перезагрузку")
+                # keep old cache if present
+                if old_cache is None:
+                    self._lessons_cache = {}
+                else:
+                    self._lessons_cache = old_cache
+                return
+
+            # If new cache is empty but we have old cache, keep old one (protect against bad sync)
+            if (not new_cache or len([k for k in new_cache.keys() if k.isdigit()]) == 0) and old_cache:
+                logger.warning(f"⚠️ Загруженный lessons.json пустой; сохраняю прежний кэш уроков")
+                self._lessons_cache = old_cache
+                return
+
+            self._lessons_cache = new_cache
             logger.info(f"✅ Загружено {len(self._lessons_cache)} уроков из {self.lessons_file.absolute()}")
             if self._lessons_cache:
                 available_days = sorted([int(k) for k in self._lessons_cache.keys() if k.isdigit()])
                 logger.info(f"   Доступные дни: {available_days[:20]}...")
         except Exception as e:
             logger.error(f"❌ Ошибка при загрузке уроков: {e}", exc_info=True)
-            self._lessons_cache = {}
+            # keep old cache if available
+            if old_cache is None:
+                self._lessons_cache = {}
+            else:
+                self._lessons_cache = old_cache
     
     def reload(self):
         """Перезагружает уроки из файла."""

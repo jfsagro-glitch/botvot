@@ -1631,13 +1631,25 @@ class DriveContentSync:
             raise RuntimeError("No lessons compiled (check Drive folder contents)")
 
         # Basic validation: ensure each lesson has text
+        empty_days = 0
         for k, v in compiled.items():
             text = v.get("text", "")
             if isinstance(text, list):
                 if not text or all(not (block or "").strip() for block in text):
                     warnings.append(f"day {k}: empty lesson text (all blocks are empty)")
+                    empty_days += 1
             elif not (text or "").strip():
                 warnings.append(f"day {k}: empty lesson text")
+                empty_days += 1
+
+        # If too many days are empty, abort to avoid replacing a good lessons.json with a broken one
+        try:
+            total_days = len(compiled)
+            if total_days > 0 and (empty_days / total_days) > 0.5:
+                raise RuntimeError(f"Aborting sync: {empty_days}/{total_days} lessons are empty (safety threshold exceeded)")
+        except Exception as e:
+            logger.error(f"❌ Drive sync validation failed: {e}")
+            raise
 
         target = self._target_lessons_path()
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -20,12 +20,13 @@ from core.config import Config
 from services.payment_service import PaymentService
 from core.models import Tariff
 
-# Настройка логирования
+# Настройка логирования (включаем DEBUG для детальной диагностики)
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
+logging.getLogger('asyncio').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
