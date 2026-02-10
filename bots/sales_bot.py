@@ -1087,9 +1087,15 @@ class SalesBot:
             
             # Если запрошены тарифы - показываем только тарифы
             if tariffs_requested:
+                flag_enabled = Config.is_sales_new_flow_enabled()
+                has_access = bool(user and user.has_access())
+                logger.debug("tariffs_requested branch: tariffs_requested=%s flag_enabled=%s has_access=%s", tariffs_requested, flag_enabled, has_access)
+                if flag_enabled and (not user or not user.has_access()):
+                    await self._new_flow_send_format_choice(message)
+                    return
                 await self._show_program_tariff_menu(message)
                 return
-            
+
             # Если запрошен апгрейд и пользователь имеет доступ - показываем меню апгрейда
             if upgrade_requested and user.has_access():
                 await self._show_upgrade_menu(message, user, first_name)
@@ -1147,10 +1153,11 @@ class SalesBot:
                 return
             
             # No access -> new linear flow (if enabled) or legacy menu
-            if Config.is_sales_new_flow_enabled():
+            # Условие явно: новый флоу только при выключенном доступе; после показа нового флоу — обязательно return.
+            if Config.is_sales_new_flow_enabled() and not user.has_access():
                 logger.debug("sales_new_flow: showing format choice screen, user_id=%s", user_id)
                 await self._new_flow_send_format_choice(message)
-                return
+                return  # ОБЯЗАТЕЛЬНО: не показывать legacy-меню после нового флоу
             logger.info("Showing program/tariff start menu...")
             persistent_keyboard = create_persistent_keyboard()
             await message.answer("Используйте кнопки внизу для навигации 👇", reply_markup=persistent_keyboard)
@@ -3248,7 +3255,7 @@ class SalesBot:
             user = await self.user_service.get_user(message.from_user.id)
             if not user or not user.has_access():
                 await self._new_flow_send_format_choice(message)
-                return
+                return  # ОБЯЗАТЕЛЬНО: не показывать legacy-меню после нового флоу
         await self._show_program_tariff_menu(message)
     
     async def handle_keyboard_online(self, message: Message):
