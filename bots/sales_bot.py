@@ -134,6 +134,7 @@ class SalesBot:
         self.dp.message.register(self.handle_start, CommandStart())
         self.dp.message.register(self.handle_help, Command("help"))
         self.dp.message.register(self.handle_menu, Command("menu"))
+        self.dp.message.register(self.handle_sales_new_flow_status, Command("sales_new_flow_status"))
         self.dp.message.register(self.handle_author, Command("author"))
         # Bind curator/answers group (run inside target group)
         self.dp.message.register(self.handle_bind_sales_group, Command("bind_sales_group"))
@@ -188,9 +189,11 @@ class SalesBot:
         
         # Free promo instant access (must be BEFORE generic handlers)
         self.dp.callback_query.register(self.handle_free_promo_choice, F.data.startswith("free_promo:"))
-         
-        # Обработчик для pay:
-        self.dp.callback_query.register(self.handle_payment_initiate, F.data.startswith("pay:"))
+        
+        # New linear flow (sale:*) — screens only; sale:pay:* goes to payment
+        self.dp.callback_query.register(self.handle_sale_screen, F.data.startswith("sale:") & ~F.data.startswith("sale:pay:"))
+        # Обработчик оплаты: pay:* и sale:pay:* (sale:pay:* маппится на pay:* внутри)
+        self.dp.callback_query.register(self.handle_payment_initiate, F.data.startswith("pay:") | F.data.startswith("sale:pay:"))
         
         # Обработчик для check_payment:
         self.dp.callback_query.register(self.handle_payment_check, F.data.startswith("check_payment:"))
@@ -219,9 +222,9 @@ class SalesBot:
         self.dp.callback_query.register(self.handle_unhandled_callback)
 
     def _legal_consent_text(self) -> str:
-        offer = "https://docs.google.com/document/d/1TJKkr0A4YFpiY5NIG5mBJnhoY3BQzwMiee6zMnpC6OI/edit?usp=sharing"
-        privacy = "https://docs.google.com/document/d/1INTWXjxfSH58sv51oYFeVOT6tXAd8iUMCqEPFXxEGrw/edit?usp=sharing"
-        personal = "https://docs.google.com/document/d/1Yh1CzAf5s9ZexrfxLU2IaTr2ptgIC0n6cM9TFCvWwXw/edit?usp=sharing"
+        offer = "https://docs.google.com/document/d/1ZMCRWMQ55HnbRf3aG7iRO4RBW6DWP0IpD1PfggqWXaQ/edit?tab=t.0#heading=h.no50wre9bb33"
+        privacy = "https://docs.google.com/document/d/1OCL_LNnnJwqlSiFYM_efZD9cJmWYCTdR9nCI_IXFAtE/edit?tab=t.0#heading=h.b2ctj5b7k1vd"
+        personal = "https://docs.google.com/document/d/1RLFfg-vPnGcyFXVv0rtafJ8V2OZY2b7GNJkpYOAO6Ts/edit?usp=sharing"
         return (
             "✔️ <b>Согласие</b>\n\n"
             "Нажимая кнопку ниже, вы соглашаетесь с "
@@ -1143,7 +1146,11 @@ class SalesBot:
                 await send_animated_message(self.bot, message.chat.id, "", keyboard, 0.5)
                 return
             
-            # No access -> show compact start menu (no duplicated long course info)
+            # No access -> new linear flow (if enabled) or legacy menu
+            if Config.is_sales_new_flow_enabled():
+                logger.debug("sales_new_flow: showing format choice screen, user_id=%s", user_id)
+                await self._new_flow_send_format_choice(message)
+                return
             logger.info("Showing program/tariff start menu...")
             persistent_keyboard = create_persistent_keyboard()
             await message.answer("Используйте кнопки внизу для навигации 👇", reply_markup=persistent_keyboard)
@@ -1169,6 +1176,325 @@ class SalesBot:
             text, 
             keyboard, 
             typing_duration=0.8
+        )
+
+    # ---------- New linear flow (SALES_NEW_FLOW=1) ----------
+    async def _new_flow_send_format_choice(self, message: Message):
+        """Send 'Выберите формат обучения' with online/offline buttons (from /start)."""
+        text = "Выберите формат обучения 👇"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔵 Онлайн", callback_data="sale:format:online")],
+            [InlineKeyboardButton(text="🟣 Офлайн (Москва)", callback_data="sale:format:offline")],
+        ])
+        await message.answer(text, reply_markup=keyboard)
+
+    async def _new_flow_edit_or_send(self, callback: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup):
+        """Edit message or send new one to avoid spam. No personal data in logs."""
+        try:
+            await callback.message.edit_text(text, reply_markup=reply_markup)
+            logger.debug("sales_new_flow screen edited message_id=%s user_id=%s", callback.message.message_id, callback.from_user.id)
+        except Exception as e:
+            logger.debug("sales_new_flow edit failed, sending new message: %s", e)
+            await callback.message.answer(text, reply_markup=reply_markup)
+
+    async def handle_sale_screen(self, callback: CallbackQuery):
+        """Dispatch sale:* callbacks to the correct screen (format, back, online, offline)."""
+        try:
+            await callback.answer()
+        except Exception:
+            pass
+        data = (callback.data or "").strip()
+        logger.debug("sales_new_flow screen_id=%s user_id=%s", data[:50] if data else "", callback.from_user.id)
+        if data == "sale:format:online":
+            await self._new_flow_show_online_programs(callback)
+        elif data == "sale:format:offline":
+            await self._new_flow_show_offline_main(callback)
+        elif data == "sale:back:start":
+            await self._new_flow_show_format_choice(callback)
+        elif data == "sale:back:online_programs":
+            await self._new_flow_show_online_programs(callback)
+        elif data == "sale:back:online_step_1":
+            await self._new_flow_show_online_step_1(callback)
+        elif data == "sale:back:online_step_2":
+            await self._new_flow_show_online_step_2(callback)
+        elif data == "sale:back:online_plans_step_1":
+            await self._new_flow_show_online_plans_step_1(callback)
+        elif data == "sale:back:online_plans_step_2":
+            await self._new_flow_show_online_plans_step_2(callback)
+        elif data == "sale:back:offline_main":
+            await self._new_flow_show_offline_main(callback)
+        elif data == "sale:online:course:q:step:1":
+            await self._new_flow_show_online_step_1(callback)
+        elif data == "sale:online:course:q:step:2":
+            await self._new_flow_show_online_step_2(callback)
+        elif data == "sale:online:course:q:about":
+            await self._new_flow_show_online_about(callback)
+        elif data == "sale:online:q:step:1:plans":
+            await self._new_flow_show_online_plans_step_1(callback)
+        elif data == "sale:online:q:step:2:plans":
+            await self._new_flow_show_online_plans_step_2(callback)
+        elif data in ("sale:online:q:step:1:plan:basic", "sale:online:q:step:1:plan:feedback", "sale:online:q:step:1:plan:practic"):
+            await self._new_flow_show_online_plan_details(callback, 1, data.split(":")[-1])
+        elif data in ("sale:online:q:step:2:plan:basic", "sale:online:q:step:2:plan:feedback", "sale:online:q:step:2:plan:practic"):
+            await self._new_flow_show_online_plan_details(callback, 2, data.split(":")[-1])
+        elif data in ("sale:online:q:step:1:plans:details", "sale:online:q:step:2:plans:details"):
+            step = 1 if "step:1" in data else 2
+            await self._new_flow_show_online_plans_details_screen(callback, step)
+        elif data == "sale:offline:hero:about":
+            await self._new_flow_show_offline_about(callback)
+        elif data == "sale:offline:hero:plans":
+            await self._new_flow_show_offline_plans(callback)
+        elif data in ("sale:offline:hero:plan:listener", "sale:offline:hero:plan:aktivist", "sale:offline:hero:plan:media", "sale:offline:hero:plan:hero"):
+            plan = data.split(":")[-1]
+            await self._new_flow_show_offline_plan_details(callback, plan)
+        else:
+            logger.warning("sales_new_flow unhandled callback_data: %s", data[:64])
+
+    async def _new_flow_show_format_choice(self, callback: CallbackQuery):
+        text = "Выберите формат обучения 👇"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔵 Онлайн", callback_data="sale:format:online")],
+            [InlineKeyboardButton(text="🟣 Офлайн (Москва)", callback_data="sale:format:offline")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_online_programs(self, callback: CallbackQuery):
+        text = (
+            "Онлайн-программы обучения\n\n"
+            "💠 «Вопросы, которые меняют всё»"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="▶️ 1-я ступень", callback_data="sale:online:course:q:step:1")],
+            [InlineKeyboardButton(text="▶️ 2-я ступень", callback_data="sale:online:course:q:step:2")],
+            [InlineKeyboardButton(text="📄 О программе", callback_data="sale:online:course:q:about")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="sale:back:start")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_online_step_1(self, callback: CallbackQuery):
+        text = (
+            "💠 Онлайн\n<b>«Вопросы, которые меняют всё»</b>\n<b>1-я ступень</b>\n\n"
+            "30 дней практики.\nВопросы как инструмент мышления, диалога и изменений."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="sale:online:q:step:1:plans")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="sale:back:online_programs")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_online_step_2(self, callback: CallbackQuery):
+        text = (
+            "💠 Онлайн\n<b>«Вопросы, которые меняют всё»</b>\n<b>2-я ступень</b>\n\n"
+            "30 дней практики.\nВопросы как инструмент мышления, диалога и изменений."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Выбрать тариф", callback_data="sale:online:q:step:2:plans")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="sale:back:online_programs")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_online_about(self, callback: CallbackQuery):
+        text = (
+            "💠 <b>«Вопросы, которые меняют всё»</b>\n\n"
+            "Онлайн-программа из 30 занятий: вопросы как инструмент мышления, диалога и изменений. "
+            "Ежедневные материалы, задания и поддержка сообщества."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="sale:back:online_programs")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_online_plans_step_1(self, callback: CallbackQuery):
+        user_id = callback.from_user.id
+        prices = await self._get_online_prices_for_user(user_id)
+        basic_price = int(prices.get(Tariff.BASIC, 5000))
+        feedback_price = int(prices.get(Tariff.FEEDBACK, 10000))
+        practic_price = int(prices.get(Tariff.PRACTIC, 20000))
+        text = (
+            "Выберите формат участия 👇\n\n"
+            f"💎 BASIC — самостоятельно\nПрохождение программы в своём темпе\n{basic_price} ₽\n\n"
+            f"⭐ FEEDBACK — с поддержкой\nОбратная связь и ответы на вопросы\n{feedback_price} ₽\n\n"
+            f"👑 PRACTIC — живая практика\nМаксимальное погружение через опыт\n{practic_price} ₽"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💎 BASIC", callback_data="sale:online:q:step:1:plan:basic")],
+            [InlineKeyboardButton(text="⭐ FEEDBACK", callback_data="sale:online:q:step:1:plan:feedback")],
+            [InlineKeyboardButton(text="👑 PRACTIC", callback_data="sale:online:q:step:1:plan:practic")],
+            [InlineKeyboardButton(text="🔍 Подробнее о тарифах", callback_data="sale:online:q:step:1:plans:details")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="sale:back:online_step_1")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_online_plans_step_2(self, callback: CallbackQuery):
+        user_id = callback.from_user.id
+        prices = await self._get_online_prices_for_user(user_id)
+        basic_price = int(prices.get(Tariff.BASIC, 5000))
+        feedback_price = int(prices.get(Tariff.FEEDBACK, 10000))
+        practic_price = int(prices.get(Tariff.PRACTIC, 20000))
+        text = (
+            "Выберите формат участия 👇\n\n"
+            f"💎 BASIC — самостоятельно\nПрохождение программы в своём темпе\n{basic_price} ₽\n\n"
+            f"⭐ FEEDBACK — с поддержкой\nОбратная связь и ответы на вопросы\n{feedback_price} ₽\n\n"
+            f"👑 PRACTIC — живая практика\nМаксимальное погружение через опыт\n{practic_price} ₽"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💎 BASIC", callback_data="sale:online:q:step:2:plan:basic")],
+            [InlineKeyboardButton(text="⭐ FEEDBACK", callback_data="sale:online:q:step:2:plan:feedback")],
+            [InlineKeyboardButton(text="👑 PRACTIC", callback_data="sale:online:q:step:2:plan:practic")],
+            [InlineKeyboardButton(text="🔍 Подробнее о тарифах", callback_data="sale:online:q:step:2:plans:details")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="sale:back:online_step_2")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_online_plans_details_screen(self, callback: CallbackQuery, step: int):
+        """Single 'Подробнее о тарифах' screen with all three tariff descriptions."""
+        back_cb = f"sale:back:online_plans_step_{step}"
+        text = (
+            "💎 <b>BASIC</b>\nПодойдёт, если хотите пройти программу в своём темпе.\n"
+            "Внутри: 30 занятий, ежедневные материалы, практические задания, доступ к сообществу. Без личной обратной связи.\n\n"
+            "⭐ <b>FEEDBACK</b>\nДля тех, кому важны ответы и поддержка.\n"
+            "Внутри: всё из BASIC + персональная обратная связь, проверка заданий, ответы на вопросы.\n\n"
+            "👑 <b>PRACTIC</b>\nМаксимальный формат погружения.\n"
+            "Всё из FEEDBACK + 3 онлайн-интервью, видеозаписи, профессиональный разбор."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад к тарифам", callback_data=back_cb)],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_online_plan_details(self, callback: CallbackQuery, step: int, plan: str):
+        """Detail screen for one tariff (basic/feedback/practic) with Pay button."""
+        back_cb = f"sale:back:online_plans_step_{step}"
+        pay_cb = f"sale:pay:online:q:step:{step}:{plan}"
+        user_id = callback.from_user.id
+        prices = await self._get_online_prices_for_user(user_id)
+        if plan == "basic":
+            price = int(prices.get(Tariff.BASIC, 5000))
+            text = (
+                "💎 <b>BASIC</b>\n\n"
+                "Подойдёт, если хотите пройти программу в своём темпе.\n\n"
+                "Внутри:\n- 30 занятий\n- ежедневные материалы\n- практические задания\n- доступ к сообществу\n\n"
+                "Без личной обратной связи."
+            )
+        elif plan == "feedback":
+            price = int(prices.get(Tariff.FEEDBACK, 10000))
+            text = (
+                "⭐ <b>FEEDBACK</b>\n\n"
+                "Для тех, кому важны ответы и поддержка.\n\n"
+                "Внутри:\n- всё из тарифа BASIC\n- персональная обратная связь\n- проверка заданий\n- ответы на вопросы"
+            )
+        else:
+            price = int(prices.get(Tariff.PRACTIC, 20000))
+            text = (
+                "👑 <b>PRACTIC</b>\n\n"
+                "Максимальный формат погружения.\n\n"
+                "Всё из FEEDBACK +\n- 3 онлайн-интервью\n- видеозаписи\n- профессиональный разбор"
+            )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {price} ₽", callback_data=pay_cb)],
+            [InlineKeyboardButton(text="🔙 Назад к тарифам", callback_data=back_cb)],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_offline_main(self, callback: CallbackQuery):
+        text = (
+            "🎬 <b>«Главный герой»</b>\n"
+            "Медиа-практикум по интервью\n\n"
+            "📍 Москва · 2 дня · офлайн\nКамеры включены"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📄 Подробнее о практикуме", callback_data="sale:offline:hero:about")],
+            [InlineKeyboardButton(text="💳 Выбрать формат участия", callback_data="sale:offline:hero:plans")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="sale:back:start")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_offline_about(self, callback: CallbackQuery):
+        offline_description = (
+            f"{create_premium_separator()}\n"
+            "🎬 <b>Главный герой</b>\nмедиа-практикум по интервью\n"
+            "📍 Москва · 2 дня живой практики · офлайн · камеры включены\n"
+            f"{create_premium_separator()}\n\n"
+            "💡 <b>Это не лекция про «как надо»</b>\n"
+            "Это интенсив, где вы реально берёте и даёте интервью, попадаете в кадр, ошибаетесь, получаете разбор — и делаете лучше уже в тот же день.\n"
+            f"{create_premium_separator()}\n\n"
+            "📌 <b>В итоге у вас:</b>\n✅ прокачанный навык интервью\n✅ опыт работы в реальных условиях\n"
+            "✅ готовый видеоконтент для продвижения\n"
+            f"{create_premium_separator()}\n\n"
+            "🎯 <b>«Главный герой»</b> — медиа-практикум с профессиональной съёмкой. "
+            "Вы становитесь героем собственного медиа-материала, работаете в кадре, получаете обратную связь и выходите с готовым контентом.\n\n"
+            "👥 <b>Для кого:</b> предприниматели, спикеры, коучи, менеджеры по продажам, преподаватели, блогеры, журналисты, эксперты.\n\n"
+            "📋 <b>Как проходит:</b> вводная, серия интервью 15 мин + разбор 15 мин, вы в роли интервьюера и героя, обратная связь по ходу.\n\n"
+            "🎥 <b>Формат:</b> Москва, очно, до 8 участников, 3 камеры, свет, звук.\n\n"
+            "📱 После оплаты напишите имя в Telegram на @niktatv для включения в рабочую группу."
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Выбрать формат участия", callback_data="sale:offline:hero:plans")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="sale:back:offline_main")],
+        ])
+        await self._new_flow_edit_or_send(callback, offline_description, kb)
+
+    async def _new_flow_show_offline_plans(self, callback: CallbackQuery):
+        user_id = callback.from_user.id
+        prices = await self._get_offline_prices_for_user(user_id)
+        p1 = int(prices.get("slushatel", 6000))
+        p2 = int(prices.get("aktivist", 12000))
+        p3 = int(prices.get("media_persona", 22000))
+        p4 = int(prices.get("glavnyi_geroi", 30000))
+        text = (
+            "Форматы участия 👇\n\n"
+            f"👂 СЛУШАТЕЛЬ\nПрисутствие, обсуждение, нетворкинг\n{p1} ₽\n\n"
+            f"🎯 АКТИВИСТ\nИнтервью + разбор\n{p2} ₽\n\n"
+            f"📹 МЕДИА-ПЕРСОНА\nВидеоинтервью для публикации\n{p3} ₽\n\n"
+            f"👑 ГЛАВНЫЙ ГЕРОЙ\nМаксимальный медиа-результат\n{p4} ₽"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👂 СЛУШАТЕЛЬ", callback_data="sale:offline:hero:plan:listener")],
+            [InlineKeyboardButton(text="🎯 АКТИВИСТ", callback_data="sale:offline:hero:plan:aktivist")],
+            [InlineKeyboardButton(text="📹 МЕДИА-ПЕРСОНА", callback_data="sale:offline:hero:plan:media")],
+            [InlineKeyboardButton(text="👑 ГЛАВНЫЙ ГЕРОЙ", callback_data="sale:offline:hero:plan:hero")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="sale:back:offline_main")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def _new_flow_show_offline_plan_details(self, callback: CallbackQuery, plan: str):
+        """Offline plan detail with Pay button. plan in listener, aktivist, media, hero."""
+        user_id = callback.from_user.id
+        prices = await self._get_offline_prices_for_user(user_id)
+        names = {"listener": "СЛУШАТЕЛЬ", "aktivist": "АКТИВИСТ", "media": "МЕДИА-ПЕРСОНА", "hero": "ГЛАВНЫЙ ГЕРОЙ"}
+        keys = {"listener": "slushatel", "aktivist": "aktivist", "media": "media_persona", "hero": "glavnyi_geroi"}
+        price = int(prices.get(keys.get(plan, plan), 6000))
+        name = names.get(plan, plan.upper())
+        pay_cb = f"sale:pay:offline:hero:{plan}"
+        descriptions = {
+            "listener": "Присутствие, лекционная часть, обсуждение, нетворкинг.",
+            "aktivist": "Всё из Слушателя + берёте интервью как ведущий, даёте как спикер, разбор от тренеров.",
+            "media": "Всё из Активиста + смонтированные видео, 2 видеоинтервью по 10–15 мин.",
+            "hero": "Всё из Медиа-персоны + 10 рилсов для продвижения, личная стратегическая онлайн-консультация.",
+        }
+        desc = descriptions.get(plan, "")
+        emoji = {"listener": "👂", "aktivist": "🎯", "media": "📹", "hero": "👑"}.get(plan, "👑")
+        text = f"{emoji} <b>{name}</b>\n\n{desc}\n\n💵 {price} ₽"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {price} ₽", callback_data=pay_cb)],
+            [InlineKeyboardButton(text="🔙 Назад к тарифам", callback_data="sale:offline:hero:plans")],
+        ])
+        await self._new_flow_edit_or_send(callback, text, kb)
+
+    async def handle_sales_new_flow_status(self, message: Message):
+        """Show SALES_NEW_FLOW flag status (for admins). No secrets."""
+        from core.config import Config
+        enabled = Config.is_sales_new_flow_enabled()
+        admin_chat = getattr(Config, "ADMIN_CHAT_ID", 0) or 0
+        only_admin = " (только для админов)" if admin_chat else ""
+        if admin_chat and message.from_user and message.chat.id != admin_chat:
+            await message.answer("⛔ Недостаточно прав для просмотра статуса.")
+            return
+        await message.answer(
+            f"🔄 <b>Новый флоу продаж (SALES_NEW_FLOW)</b>{only_admin}\n\n"
+            f"Статус: <b>{'включён' if enabled else 'выключен'}</b>\n"
+            f"Переменная: <code>SALES_NEW_FLOW={Config.SALES_NEW_FLOW or '0'}</code>\n\n"
+            "Чтобы включить: установите в .env или переменных окружения <code>SALES_NEW_FLOW=1</code> или <code>true</code> и перезапустите бота."
         )
 
     async def handle_show_tariffs_online(self, callback: CallbackQuery):
@@ -2392,31 +2718,52 @@ class SalesBot:
                 except:
                     pass
     
+    def _map_sale_pay_to_pay(self, sale_pay_data: str) -> str:
+        """Map sale:pay:* callback_data to existing pay:* for payment flow. Returns e.g. pay:online:basic."""
+        if not sale_pay_data or not sale_pay_data.startswith("sale:pay:"):
+            return sale_pay_data
+        rest = sale_pay_data[len("sale:pay:"):].strip().lower()
+        # sale:pay:online:q:step:1:basic -> pay:online:basic; step:2 -> pay:online:second:basic
+        # sale:pay:online:q:step:2:feedback -> pay:online:second:feedback
+        # sale:pay:offline:hero:listener -> pay:offline:slushatel (listener=slushatel, activist=aktivist, media=media_persona, hero=glavnyi_geroi)
+        if rest.startswith("offline:hero:"):
+            plan = rest.split(":")[-1]
+            offline_map = {"listener": "slushatel", "aktivist": "aktivist", "media": "media_persona", "hero": "glavnyi_geroi"}
+            tariff = offline_map.get(plan, plan)
+            return f"pay:offline:{tariff}"
+        if rest.startswith("online:q:step:"):
+            parts = rest.split(":")
+            # online, q, step, 1|2, basic|feedback|practic
+            if len(parts) >= 5:
+                step, tariff = parts[3], parts[4]
+                if step == "2":
+                    return f"pay:online:second:{tariff}"
+                return f"pay:online:{tariff}"
+        return sale_pay_data
+
     async def handle_payment_initiate(self, callback: CallbackQuery):
-        """Handle payment initiation."""
-        # ЛОГИРОВАНИЕ В САМОМ НАЧАЛЕ
-        logger.info("=" * 60)
-        logger.info("✅✅✅ HANDLE_PAYMENT_INITIATE ВЫЗВАН! ✅✅✅")
-        logger.info(f"   Callback data: {callback.data}")
-        logger.info(f"   User ID: {callback.from_user.id}")
-        logger.info(f"   Username: @{callback.from_user.username}")
-        logger.info("=" * 60)
-        
+        """Handle payment initiation (pay:* and sale:pay:*)."""
+        # Normalize sale:pay:* to pay:* for existing logic
+        effective_data = (
+            self._map_sale_pay_to_pay(callback.data)
+            if (callback.data or "").startswith("sale:pay:")
+            else (callback.data or "")
+        )
+        logger.info(
+            "handle_payment_initiate user_id=%s callback_data=%s effective_data=%s",
+            callback.from_user.id, callback.data, effective_data,
+        )
         try:
-            # Отвечаем на callback сразу
             try:
                 await callback.answer()
             except Exception as answer_error:
-                logger.warning(f"   Не удалось ответить на callback: {answer_error}")
-            
-            logger.info(f"💳 Payment initiation requested by user {callback.from_user.id}")
+                logger.warning("callback.answer failed: %s", answer_error)
 
             # Legal consent required before payment
             if not await self._ensure_legal_consent(callback.message.chat.id, callback.from_user.id):
                 # Remember desired payment action so we can continue after consent
                 try:
-                    # supports pay:<tariff> and pay:<program>:<tariff>
-                    tariff_str_pending = callback.data[len("pay:"):]
+                    tariff_str_pending = effective_data[len("pay:"):]
                 except Exception:
                     tariff_str_pending = None
                 if tariff_str_pending:
@@ -2432,7 +2779,7 @@ class SalesBot:
                 return
             
             # supports pay:<tariff> and pay:<program>:<tariff> and pay:<program>:<level>:<tariff>
-            rest = callback.data[len("pay:"):]
+            rest = effective_data[len("pay:"):]
             prog = None
             level = None
             tariff_str = rest.strip()
@@ -2896,7 +3243,12 @@ class SalesBot:
         )
     
     async def handle_keyboard_select_tariff(self, message: Message):
-        """Handle 'Выбор тарифа' button from persistent keyboard - show only tariff descriptions."""
+        """Handle 'Выбор тарифа' button from persistent keyboard - show tariff menu or new flow format choice."""
+        if Config.is_sales_new_flow_enabled():
+            user = await self.user_service.get_user(message.from_user.id)
+            if not user or not user.has_access():
+                await self._new_flow_send_format_choice(message)
+                return
         await self._show_program_tariff_menu(message)
     
     async def handle_keyboard_online(self, message: Message):
