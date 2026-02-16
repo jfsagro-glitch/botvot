@@ -63,6 +63,9 @@ MOBILE_SCREEN_WIDTH = 720  # Стандартная ширина для моби
 # Короткая волнистая линия из 12 символов
 MEDIA_SEPARATOR = "〰️" * 12
 
+# Placeholder for keyboard-only messages (Telegram API rejects empty or zero-width text)
+KEYBOARD_ONLY_PLACEHOLDER = " "
+
 
 class CourseBot:
     """Course Delivery Bot implementation."""
@@ -160,8 +163,7 @@ class CourseBot:
         """Ensure persistent keyboard is always visible by sending it if needed."""
         try:
             persistent_keyboard = self._create_persistent_keyboard()
-            # Используем невидимый символ вместо пустого сообщения
-            await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
+            await self.bot.send_message(user_id, KEYBOARD_ONLY_PLACEHOLDER, reply_markup=persistent_keyboard)
         except Exception as e:
             logger.debug(f"Could not send persistent keyboard to {user_id}: {e}")
 
@@ -1489,7 +1491,7 @@ class CourseBot:
                 if last_part and last_part.strip():
                     await self._safe_send_message(user_id, last_part, reply_markup=persistent_keyboard, protect_content=True)
                 elif persistent_keyboard:
-                    await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
+                    await self.bot.send_message(user_id, KEYBOARD_ONLY_PLACEHOLDER, reply_markup=persistent_keyboard)
             else:
                 await self._safe_send_message(user_id, text, reply_markup=persistent_keyboard, protect_content=True)
 
@@ -1589,7 +1591,7 @@ class CourseBot:
                 if last_part and last_part.strip():
                     await self._safe_send_message(user_id, last_part, reply_markup=persistent_keyboard, protect_content=True)
                 elif persistent_keyboard:
-                    await self.bot.send_message(user_id, "\u200B", reply_markup=persistent_keyboard)
+                    await self.bot.send_message(user_id, KEYBOARD_ONLY_PLACEHOLDER, reply_markup=persistent_keyboard)
             else:
                 await self._safe_send_message(user_id, text, reply_markup=persistent_keyboard, protect_content=True)
 
@@ -3160,8 +3162,8 @@ class CourseBot:
             text = self._add_watermark(text, chat_id)
 
         if not text or not text.strip():
-            logger.warning(f"⚠️ Attempted to send empty message to {chat_id}, using zero-width space")
-            text = "\u200B"
+            logger.warning(f"⚠️ Attempted to send empty message to {chat_id}, using placeholder")
+            text = KEYBOARD_ONLY_PLACEHOLDER
         else:
             # Форматируем текст: сохраняем пробелы и отступы, увеличиваем отступы между строками
             text = self._format_text_for_display(text)
@@ -3178,7 +3180,7 @@ class CourseBot:
                 if last_part and last_part.strip():
                     return await self.bot.send_message(chat_id, last_part, reply_markup=reply_markup, **kwargs)
                 elif reply_markup:
-                    return await self.bot.send_message(chat_id, "\u200B", reply_markup=reply_markup, **kwargs)
+                    return await self.bot.send_message(chat_id, KEYBOARD_ONLY_PLACEHOLDER, reply_markup=reply_markup, **kwargs)
                 return None
 
             return await self.bot.send_message(chat_id, text, reply_markup=reply_markup, **kwargs)
@@ -3197,7 +3199,7 @@ class CourseBot:
                 if last_part and last_part.strip():
                     return await self.bot.send_message(chat_id, last_part, reply_markup=reply_markup, **kwargs)
                 elif reply_markup:
-                    return await self.bot.send_message(chat_id, "\u200B", reply_markup=reply_markup, **kwargs)
+                    return await self.bot.send_message(chat_id, KEYBOARD_ONLY_PLACEHOLDER, reply_markup=reply_markup, **kwargs)
                 return None
             else:
                 raise
@@ -4938,17 +4940,15 @@ class CourseBot:
                     )
                     logger.info(f"   ✅ Sent message with show levels button for lesson 19")
                 elif keyboard and hasattr(keyboard, 'inline_keyboard') and keyboard.inline_keyboard and len(keyboard.inline_keyboard) > 0:
-                    await self.bot.send_message(user.user_id, "\u200B", reply_markup=keyboard)
+                    await self.bot.send_message(user.user_id, KEYBOARD_ONLY_PLACEHOLDER, reply_markup=keyboard)
                     logger.info(f"   ✅ Sent message with keyboard for lesson {day}")
                 else:
-                    # Если клавиатуры нет, отправляем только невидимый символ
-                    await self.bot.send_message(user.user_id, "\u200B")
+                    await self.bot.send_message(user.user_id, KEYBOARD_ONLY_PLACEHOLDER)
                     logger.info(f"   ℹ️ No keyboard to send for lesson {day}")
             
             # Всегда устанавливаем постоянную клавиатуру после отправки урока
-            # Используем невидимый символ вместо пустого сообщения
             persistent_keyboard = self._create_persistent_keyboard()
-            await self.bot.send_message(user.user_id, "\u200B", reply_markup=persistent_keyboard)
+            await self.bot.send_message(user.user_id, KEYBOARD_ONLY_PLACEHOLDER, reply_markup=persistent_keyboard)
             
             # Отправляем follow_up_text в конце урока, если есть (для урока 30)
             # ВАЖНО: Для дня 30 это ОБЯЗАТЕЛЬНО должно быть отправлено

@@ -145,10 +145,12 @@ class LessonService:
         await self.db.mark_lesson_completed(user_id, lesson_id, day_number)
     
     async def advance_user_to_next_day(self, user: User):
-        """Advance user to the next lesson day."""
-        if user.current_day < Config.COURSE_DURATION_DAYS:
+        """Advance user to the next lesson day. After day 30 we set 31 so scheduler stops delivering."""
+        if user.current_day >= Config.COURSE_DURATION_DAYS:
+            user.current_day = Config.COURSE_DURATION_DAYS + 1
+        else:
             user.current_day += 1
-            await self.db.update_user(user)
+        await self.db.update_user(user)
     
     async def get_all_lessons(self) -> List[Lesson]:
         """Get all lessons in the course."""
