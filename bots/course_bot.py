@@ -250,14 +250,10 @@ class CourseBot:
             supports_streaming: Поддержка стриминга
             max_retries: Максимальное количество попыток
         """
-        # Если width не указан, используем ширину мобильного экрана
-        # Если height не указан, но width указан, вычисляем height пропорционально
-        # Если оба не указаны, используем ширину мобильного экрана и не указываем height
-        # (Telegram автоматически масштабирует)
-        if width is None:
-            width = MOBILE_SCREEN_WIDTH
-            # Не указываем height, чтобы Telegram автоматически масштабировал пропорционально
-            height = None
+        # Не передаём width/height в API — сохраняем исходные пропорции видео.
+        # Раньше передавали width=720, из‑за чего Telegram растягивал кадр.
+        if width is None and height is None:
+            width = height = None  # явно не передаём в send_video
         
         # Если это FSInputFile, проверяем размер и сжимаем при необходимости
         video_to_send = video
@@ -291,18 +287,18 @@ class CourseBot:
                 # Увеличиваем таймаут для больших файлов
                 request_timeout = 300 if attempt == 0 else 600  # 5 минут, затем 10 минут
                 
-                # Отправляем видео с указанными параметрами
-                # Если height не указан, Telegram автоматически масштабирует пропорционально width
-                await self.bot.send_video(
-                    user_id,
-                    video_to_send,
+                # Отправляем видео без width/height — сохраняются исходные пропорции
+                send_kw = dict(
                     caption=caption_with_separator,
-                    width=width,
-                    height=height,
                     supports_streaming=supports_streaming,
                     request_timeout=request_timeout,
                     protect_content=protect_content
                 )
+                if width is not None:
+                    send_kw["width"] = width
+                if height is not None:
+                    send_kw["height"] = height
+                await self.bot.send_video(user_id, video_to_send, **send_kw)
                 logger.info(f"   ✅ Видео успешно отправлено (попытка {attempt + 1})")
                 return
             except Exception as e:
@@ -2138,7 +2134,6 @@ class CourseBot:
                         user_id, 
                         file_id, 
                         caption=caption, 
-                        width=MOBILE_SCREEN_WIDTH,
                         supports_streaming=True, 
                         protect_content=True
                     )
@@ -2205,7 +2200,6 @@ class CourseBot:
                                 user_id, 
                                 media_file, 
                                 caption=caption, 
-                                width=MOBILE_SCREEN_WIDTH,
                                 supports_streaming=True, 
                                 protect_content=True
                             )
@@ -2549,7 +2543,6 @@ class CourseBot:
                                 user_id,
                                 video,
                                 caption=(caption if caption != url else None),
-                                width=MOBILE_SCREEN_WIDTH,
                                 supports_streaming=True,
                                 protect_content=True
                             )
@@ -2585,7 +2578,6 @@ class CourseBot:
                                 user_id,
                                 video,
                                 caption=(caption if caption != url else None),
-                                width=MOBILE_SCREEN_WIDTH,
                                 supports_streaming=True,
                                 protect_content=True
                             )
@@ -2802,7 +2794,6 @@ class CourseBot:
                                     user_id, 
                                     cached_file_id,
                                     caption=caption,
-                                    width=MOBILE_SCREEN_WIDTH,
                                     reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None
                                 )
                                 if is_last and keyboard and not keyboard_attached:
@@ -2903,7 +2894,6 @@ class CourseBot:
                                     user_id, 
                                     video_file,
                                     caption=caption,
-                                    width=MOBILE_SCREEN_WIDTH,
                                     reply_markup=keyboard if (is_last and keyboard and not keyboard_attached) else None,
                                     protect_content=True
                                 )
@@ -3559,7 +3549,6 @@ class CourseBot:
                             user.user_id, 
                             video_file_id, 
                             caption=caption, 
-                            width=MOBILE_SCREEN_WIDTH,
                             protect_content=True
                         )
                         logger.info(f"   ✅ Sent lesson 0 video with intro_text (file_id) for lesson {day}")
@@ -3594,7 +3583,6 @@ class CourseBot:
                                 user.user_id, 
                                 video_file, 
                                 caption=caption, 
-                                width=MOBILE_SCREEN_WIDTH,
                                 protect_content=True
                             )
                             logger.info(f"   ✅ Sent lesson 0 video with intro_text (file path: {video_path}) for lesson {day}")
