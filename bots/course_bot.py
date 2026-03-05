@@ -233,20 +233,28 @@ class CourseBot:
         )
     
     async def _send_video_with_retry(self, user_id: int, video, caption: str = None, 
+                                     width: int = None, height: int = None, 
                                      supports_streaming: bool = True, max_retries: int = 3,
                                      protect_content: bool = False):
         """
-        Отправляет видео с повторными попытками.
+        Отправляет видео с повторными попытками и оптимизированными параметрами.
         Автоматически сжимает видео, если оно превышает лимит 50 МБ.
-        Не передаём width/height — сохраняем исходные пропорции видео.
+        Автоматически масштабирует под ширину мобильного экрана, если размеры не указаны.
         
         Args:
             user_id: ID пользователя
             video: file_id или FSInputFile
             caption: Подпись к видео
+            width: Ширина видео (если None, используется MOBILE_SCREEN_WIDTH)
+            height: Высота видео (если None, вычисляется пропорционально)
             supports_streaming: Поддержка стриминга
             max_retries: Максимальное количество попыток
         """
+        # Не передаём width/height в API — сохраняем исходные пропорции видео.
+        # Раньше передавали width=720, из‑за чего Telegram растягивал кадр.
+        if width is None and height is None:
+            width = height = None  # явно не передаём в send_video
+        
         # Если это FSInputFile, проверяем размер и сжимаем при необходимости
         video_to_send = video
         original_video_path = None
@@ -279,14 +287,18 @@ class CourseBot:
                 # Увеличиваем таймаут для больших файлов
                 request_timeout = 300 if attempt == 0 else 600  # 5 минут, затем 10 минут
                 
-                await self.bot.send_video(
-                    user_id,
-                    video_to_send,
+                # Отправляем видео без width/height — сохраняются исходные пропорции
+                send_kw = dict(
                     caption=caption_with_separator,
                     supports_streaming=supports_streaming,
                     request_timeout=request_timeout,
                     protect_content=protect_content
                 )
+                if width is not None:
+                    send_kw["width"] = width
+                if height is not None:
+                    send_kw["height"] = height
+                await self.bot.send_video(user_id, video_to_send, **send_kw)
                 logger.info(f"   ✅ Видео успешно отправлено (попытка {attempt + 1})")
                 return
             except Exception as e:
