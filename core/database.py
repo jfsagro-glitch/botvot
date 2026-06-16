@@ -179,7 +179,49 @@ class Database:
         except Exception:
             # Поле уже существует, игнорируем ошибку
             pass
-        
+
+        # Миграция: KOOB-партнёрский трафик
+        koob_fields = [
+            ("traffic_source", "TEXT"),       # 'koob' или другой источник
+            ("start_tag", "TEXT"),            # полный тег, напр. koob_14_interviews_27m
+            ("banner_id", "TEXT"),            # номер баннера
+            ("banner_topic", "TEXT"),         # тема баннера
+            ("first_touch_at", "TEXT"),       # дата первого перехода
+            ("last_touch_at", "TEXT"),        # дата последнего перехода
+            ("last_start_tag", "TEXT"),       # последний тег (при повторном входе)
+            ("first_source", "TEXT"),         # первый источник (если был не KOOB)
+        ]
+        for field_name, field_type in koob_fields:
+            try:
+                await self.conn.execute(f"""
+                    ALTER TABLE users ADD COLUMN {field_name} {field_type}
+                """)
+                await self.conn.commit()
+            except Exception:
+                pass
+
+        # KOOB events table — детальная аналитика по партнёрскому каналу
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS koob_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                start_tag TEXT,
+                banner_id TEXT,
+                banner_topic TEXT,
+                amount REAL,
+                tariff TEXT,
+                created_at TEXT NOT NULL
+            )
+        """)
+        await self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_koob_events_user ON koob_events(user_id)"
+        )
+        await self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_koob_events_tag ON koob_events(start_tag)"
+        )
+        await self.conn.commit()
+
         # Lessons table
         await self.conn.execute("""
             CREATE TABLE IF NOT EXISTS lessons (
@@ -1412,11 +1454,17 @@ class Database:
             mentor_persistence=row["mentor_persistence"] if ("mentor_persistence" in row.keys() and row["mentor_persistence"] is not None) else None,
             mentor_temperature=row["mentor_temperature"] if ("mentor_temperature" in row.keys() and row["mentor_temperature"] is not None) else None,
             mentor_charisma=row["mentor_charisma"] if ("mentor_charisma" in row.keys() and row["mentor_charisma"] is not None) else None,
-            is_blocked=bool(row["is_blocked"]) if ("is_blocked" in row.keys() and row["is_blocked"] is not None) else False
+            is_blocked=bool(row["is_blocked"]) if ("is_blocked" in row.keys() and row["is_blocked"] is not None) else False,
+            traffic_source=row["traffic_source"] if ("traffic_source" in row.keys() and row["traffic_source"]) else None,            start_tag=row["start_tag"] if ("start_tag" in row.keys() and row["start_tag"]) else None,
+            banner_id=row["banner_id"] if ("banner_id" in row.keys() and row["banner_id"]) else None,
+            banner_topic=row["banner_topic"] if ("banner_topic" in row.keys() and row["banner_topic"]) else None,
+            first_touch_at=datetime.fromisoformat(row["first_touch_at"]) if ("first_touch_at" in row.keys() and row["first_touch_at"]) else None,
+            last_touch_at=datetime.fromisoformat(row["last_touch_at"]) if ("last_touch_at" in row.keys() and row["last_touch_at"]) else None,
+            last_start_tag=row["last_start_tag"] if ("last_start_tag" in row.keys() and row["last_start_tag"]) else None,
+            first_source=row["first_source"] if ("first_source" in row.keys() and row["first_source"]) else None,
         )
-    
+
     def _row_to_lesson(self, row) -> Lesson:
-        """Convert database row to Lesson object."""
         return Lesson(
             lesson_id=row["lesson_id"],
             day_number=row["day_number"],
@@ -1427,9 +1475,8 @@ class Database:
             assignment_text=row["assignment_text"],
             created_at=datetime.fromisoformat(row["created_at"])
         )
-    
+
     def _row_to_progress(self, row) -> UserProgress:
-        """Convert database row to UserProgress object."""
         return UserProgress(
             progress_id=row["progress_id"],
             user_id=row["user_id"],
@@ -1439,18 +1486,16 @@ class Database:
             completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
             created_at=datetime.fromisoformat(row["created_at"])
         )
-    
+
     def _row_to_referral(self, row) -> Referral:
-        """Convert database row to Referral object."""
         return Referral(
             referral_id=row["referral_id"],
             partner_id=row["partner_id"],
             referred_user_id=row["referred_user_id"],
             created_at=datetime.fromisoformat(row["created_at"])
         )
-    
+
     def _row_to_assignment(self, row) -> Assignment:
-        """Convert database row to Assignment object."""
         media_ids = json.loads(row["submission_media_ids"]) if row["submission_media_ids"] else None
         return Assignment(
             assignment_id=row["assignment_id"],
@@ -1464,3 +1509,87 @@ class Database:
             submitted_at=datetime.fromisoformat(row["submitted_at"]),
             status=row["status"]
         )
+
+    # ------------------------------------------------------------------
+    # KOOB partner analytics
+    # ------------------------------------------------------------------
+
+    async def save_koob_user(self, user_id: int, start_tag: str, *, is_first_touch: bool,
+                              had_different_source: bool = False, previous_source: Optional[str] = None):
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        parts = start_tag.split("_")
+        banner_id = parts[1] if len(parts) > 1 else None
+        banner_topic = "_".join(parts[2:]) if len(parts) > 2 else None
+
+        if is_first_touch:
+            fields = {
+                "traffic_source": "koob",
+                "start_tag": start_tag,
+                "banner_id": banner_id,
+                "banner_topic": banner_topic,
+                "first_touch_at": now,
+                "last_touch_at": now,
+                "last_start_tag": start_tag,
+            }
+            if had_different_source and previous_source:
+                fields["first_source"] = previous_source
+        else:
+            fields = {"last_touch_at": now, "last_start_tag": start_tag}
+
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [now, user_id]
+        await self.conn.execute(
+            f"UPDATE users SET {set_clause}, updated_at = ? WHERE user_id = ?", values
+        )
+        await self.conn.commit()
+        return banner_id, banner_topic
+
+    async def log_koob_event(self, user_id: int, event_type: str, start_tag: str, *,
+                              banner_id: Optional[str] = None, banner_topic: Optional[str] = None,
+                              amount: Optional[float] = None, tariff: Optional[str] = None):
+        await self._ensure_connection()
+        now = datetime.utcnow().isoformat()
+        await self.conn.execute(
+            "INSERT INTO koob_events (user_id, event_type, start_tag, banner_id, banner_topic, amount, tariff, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, event_type, start_tag, banner_id, banner_topic, amount, tariff, now),
+        )
+        await self.conn.commit()
+
+    async def get_koob_stats(self) -> dict:
+        await self._ensure_connection()
+        async with self.conn.execute("""
+            SELECT start_tag,
+                COUNT(CASE WHEN event_type='koob_bot_started' THEN 1 END) AS starts,
+                COUNT(DISTINCT user_id) AS unique_users,
+                COUNT(CASE WHEN event_type='koob_offer_reached' THEN 1 END) AS offer_reached,
+                COUNT(CASE WHEN event_type='koob_payment_clicked' THEN 1 END) AS payment_clicked,
+                COUNT(CASE WHEN event_type='koob_payment_success' THEN 1 END) AS payments,
+                COALESCE(SUM(CASE WHEN event_type='koob_payment_success' THEN amount END), 0) AS revenue
+            FROM koob_events GROUP BY start_tag ORDER BY starts DESC
+        """) as c:
+            by_tag = [dict(r) for r in await c.fetchall()]
+        async with self.conn.execute("""
+            SELECT
+                COUNT(CASE WHEN event_type='koob_bot_started' THEN 1 END) AS total_starts,
+                COUNT(DISTINCT user_id) AS total_unique_users,
+                COUNT(CASE WHEN event_type='koob_payment_success' THEN 1 END) AS total_payments,
+                COALESCE(SUM(CASE WHEN event_type='koob_payment_success' THEN amount END), 0) AS total_revenue
+            FROM koob_events
+        """) as c:
+            totals = dict(await c.fetchone())
+        return {"totals": totals, "by_tag": by_tag}
+
+    async def ensure_koob_promo_code(self):
+        await self._ensure_connection()
+        async with self.conn.execute("SELECT code FROM promo_codes WHERE code = 'KOOB'") as c:
+            if await c.fetchone():
+                return
+        now = datetime.utcnow().isoformat()
+        await self.conn.execute(
+            "INSERT INTO promo_codes (code, discount_type, discount_value, created_at, active, used_count) "
+            "VALUES ('KOOB', 'percent', 10, ?, 1, 0)", (now,)
+        )
+        await self.conn.commit()
+        logger.info("✅ KOOB promo code created (10% discount)")

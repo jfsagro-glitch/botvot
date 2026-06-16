@@ -216,7 +216,9 @@ class SalesBot:
         self.dp.callback_query.register(self.handle_show_tariffs_offline, F.data == "sales:tariffs:offline")
         self.dp.callback_query.register(self.handle_offline_info, F.data == "sales:offline_info")
         self.dp.callback_query.register(self.handle_about_course, F.data == "sales:about_course")
-        
+        # KOOB: кнопка "Узнать подробнее" из партнёрского приветствия
+        self.dp.callback_query.register(self.handle_koob_details, F.data == "koob_details")
+
         # Универсальный обработчик для отладки необработанных callback (должен быть последним)
         # Регистрируем БЕЗ фильтров, чтобы он ловил все остальное
         self.dp.callback_query.register(self.handle_unhandled_callback)
@@ -935,6 +937,7 @@ class SalesBot:
             tariffs_requested = False
             second_level_requested = False
             offline_requested = False
+            koob_tag = None  # KOOB partner tag (koob_*)
             if message.text and len(message.text.split()) > 1:
                 param = message.text.split()[1]
                 if param == "upgrade":
@@ -949,6 +952,9 @@ class SalesBot:
                 elif param == "offline":
                     offline_requested = True
                     logger.info(f"User {user_id} requested offline tariffs")
+                elif param.startswith("koob_"):
+                    koob_tag = param
+                    logger.info(f"User {user_id} arrived via KOOB partner link: {koob_tag}")
                 else:
                     referral_partner_id = param
                     logger.info(f"User {user_id} accessed via referral: {referral_partner_id}")
@@ -978,7 +984,13 @@ class SalesBot:
             if referral_partner_id and not user.referral_partner_id:
                 user.referral_partner_id = referral_partner_id
                 await self.db.update_user(user)
-            
+
+            # ---- KOOB partner flow ----
+            if koob_tag:
+                await self._handle_koob_start(message, user, koob_tag)
+                return
+            # ---------------------------
+
             # Если запрошена вторая ступень - показываем тарифы второй ступени
             if second_level_requested:
                 # Создаем временный callback для показа тарифов второй ступени
@@ -1961,6 +1973,108 @@ class SalesBot:
             return
 
         await message.answer("❌ Неизвестная программа.")
+
+    # ------------------------------------------------------------------
+    # KOOB partner flow
+    # ------------------------------------------------------------------
+
+    async def _handle_koob_start(self, message: Message, user, koob_tag: str):
+        """
+        Handle /start with a koob_* deep-link parameter.
+
+        Steps:
+        1. Detect if this is a first or repeated KOOB touch.
+        2. Save KOOB tracking data to DB.
+        3. Ensure KOOB promo code (10%) exists and assign it to the user.
+        4. Show KOOB welcome message.
+        5. Continue existing sales funnel.
+        """
+        user_id = message.from_user.id
+
+        # --- 1. First vs repeated touch ---
+        is_first_touch = user.traffic_source != "koob"
+        had_different_source = bool(user.referral_partner_id or user.traffic_source)
+        previous_source = user.traffic_source or user.referral_partner_id
+
+        # --- 2. Save KOOB data ---
+        try:
+            banner_id, banner_topic = await self.db.save_koob_user(
+                user_id,
+                koob_tag,
+                is_first_touch=is_first_touch,
+                had_different_source=had_different_source,
+                previous_source=previous_source,
+            )
+        except Exception as e:
+            logger.error(f"Failed to save KOOB user data: {e}", exc_info=True)
+            banner_id = koob_tag.split("_")[1] if len(koob_tag.split("_")) > 1 else None
+            banner_topic = "_".join(koob_tag.split("_")[2:]) or None
+
+        logger.info(f"KOOB: user={user_id} tag={koob_tag} banner={banner_id} topic={banner_topic} first={is_first_touch}")
+
+        # --- 3. Ensure KOOB promo exists and assign to user ---
+        try:
+            await self.db.ensure_koob_promo_code()
+            existing_promo = await self.db.get_user_promo_code(user_id)
+            if not existing_promo:
+                await self.db.set_user_promo_code(user_id, "KOOB")
+                logger.info(f"KOOB: assigned promo KOOB to user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to set KOOB promo: {e}", exc_info=True)
+
+        # --- 4. Log funnel event ---
+        try:
+            await self.db.log_koob_event(
+                user_id, "koob_bot_started", koob_tag,
+                banner_id=banner_id, banner_topic=banner_topic,
+            )
+            await self.db.log_koob_event(
+                user_id, "koob_welcome_shown", koob_tag,
+                banner_id=banner_id, banner_topic=banner_topic,
+            )
+        except Exception as e:
+            logger.error(f"Failed to log KOOB event: {e}", exc_info=True)
+
+        # --- 5. Show KOOB welcome message ---
+        first_name = message.from_user.first_name or "друг"
+        welcome_text = (
+            "🎉 <b>Здравствуйте!</b>\n\n"
+            "Вы пришли с сайта <b>КУБ</b> — для вас действует "
+            "<b>скидка 10%</b> на телеграм-практикум «Вопросы, которые меняют всё».\n\n"
+            "За 30 дней вы научитесь задавать вопросы, которые помогают раскрывать людей, "
+            "проводить более содержательные интервью, создавать сильный контент и выстраивать "
+            "ценные связи.\n\n"
+            "✅ <b>Скидка уже активирована.</b>"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Узнать подробнее", callback_data="koob_details")]
+        ])
+        await message.answer(welcome_text, reply_markup=keyboard)
+        logger.info(f"KOOB: welcome message sent to user {user_id}")
+
+    async def handle_koob_details(self, callback: CallbackQuery):
+        """Handle 'Узнать подробнее' button from KOOB welcome message."""
+        await callback.answer()
+        user_id = callback.from_user.id
+
+        # Log funnel event
+        try:
+            user = await self.user_service.get_or_create_user(
+                user_id,
+                callback.from_user.username,
+                callback.from_user.first_name,
+                callback.from_user.last_name,
+            )
+            start_tag = user.last_start_tag or user.start_tag or "koob"
+            await self.db.log_koob_event(
+                user_id, "koob_details_clicked", start_tag,
+                banner_id=user.banner_id, banner_topic=user.banner_topic,
+            )
+        except Exception as e:
+            logger.error(f"Failed to log koob_details_clicked: {e}", exc_info=True)
+
+        # Continue into the standard sales funnel
+        await self._show_course_info(callback.message, first_name=callback.from_user.first_name)
 
     async def _get_user_promo_code(self, user_id: int) -> Optional[str]:
         code = (await self.db.get_user_promo_code(user_id) or "").strip()
@@ -4410,6 +4524,125 @@ class SalesBot:
                         disable_web_page_preview=True
                     )
                 except Exception:
+                    pass
+                logger.warning(f"User {user_id} has not accepted legal terms yet; skipping lesson 0 send")
+                return
+
+            # Используем метод CourseBot для отправки урока с заданием
+            logger.info(f"📚 Sending lesson 0 with assignment to user {user_id}")
+            await course_bot_instance._send_lesson_from_json(user, lesson_data, day=0)
+            logger.info(f"✅ Lesson 0 with assignment sent to user {user_id}")
+
+        except Exception as e:
+            logger.error(f"Error in _send_lesson_0_to_user for user {user_id}: {e}", exc_info=True)
+            raise
+        finally:
+            try:
+                if course_bot_instance and getattr(course_bot_instance, "bot", None):
+                    await course_bot_instance.bot.session.close()
+            except Exception:
+                pass
+
+    async def start(self):
+        """Start the bot."""
+        try:
+            logger.info("Connecting to database...")
+            try:
+                await self.db.connect()
+                logger.info("✅ Database connected")
+            except Exception as db_error:
+                logger.error(f"❌ Failed to connect to database: {db_error}", exc_info=True)
+                try:
+                    await self.db.connect()
+                    logger.info("✅ Database connected on retry")
+                except Exception as retry_error:
+                    logger.error(f"❌ Database connection retry failed: {retry_error}", exc_info=True)
+                    raise
+
+            logger.info("Starting Sales Bot...")
+            me = await self.bot.get_me()
+            logger.info(f"✅ Bot connected: @{me.username} ({me.first_name})")
+            logger.info(f"✅ Bot ID: {me.id}")
+
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("РЕГИСТРАЦИЯ ОБРАБОТЧИКОВ:")
+            logger.info(f"   Message handlers: {len(self.dp.message.handlers)}")
+            for i, handler in enumerate(self.dp.message.handlers):
+                callback_name = handler.callback.__name__ if hasattr(handler, 'callback') else 'unknown'
+                logger.info(f"   [{i+1}] {callback_name}")
+            logger.info(f"   Callback query handlers: {len(self.dp.callback_query.handlers)}")
+            for i, handler in enumerate(self.dp.callback_query.handlers):
+                callback_name = handler.callback.__name__ if hasattr(handler, 'callback') else 'unknown'
+                filters_info = str(handler.filters) if hasattr(handler, 'filters') else 'no filters'
+                logger.info(f"   [{i+1}] {callback_name} (filters: {filters_info[:50]})")
+            logger.info("=" * 60)
+            logger.info("")
+
+            logger.info("✅ Sales Bot started")
+            logger.info("✅ Bot is ready to receive messages")
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("ОТПРАВЬТЕ /start В TELEGRAM: t.me/StartNowQ_bot")
+            logger.info("=" * 60)
+            logger.info("")
+
+            await self.dp.start_polling(self.bot, skip_updates=True)
+        except Exception as e:
+            logger.error(f"❌ Error starting bot: {e}", exc_info=True)
+            raise
+
+    async def stop(self):
+        """Stop the bot."""
+        await self.db.close()
+        await self.bot.session.close()
+
+
+async def main():
+    """Main entry point."""
+    if not Config.validate():
+        logger.error("❌ Неверная конфигурация. Проверьте файл .env")
+        return
+
+    bot = None
+    try:
+        bot = SalesBot()
+        logger.info("Initializing Sales Bot...")
+        await bot.start()
+    except KeyboardInterrupt:
+        logger.info("Stopping bot...")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        if bot:
+            try:
+                await bot.stop()
+            except Exception as e:
+                logger.error(f"Error stopping bot: {e}")
+
+
+if __name__ == "__main__":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except (AttributeError, ValueError):
+        pass
+
+    print("=" * 60)
+    print("WARNING: LOCAL STARTUP DISABLED")
+    print("=" * 60)
+    print("Bots must be started via run_all_bots.py")
+    print("This prevents getUpdates conflicts when running on Railway.")
+    print("")
+    print("To start bots, use:")
+    print("  python run_all_bots.py")
+    print("=" * 60)
+    sys.exit(1)
+)
+    print("To start bots, use:")
+    print("  python run_all_bots.py")
+    print("=" * 60)
+    sys.exit(1)
+except Exception:
                     pass
                 logger.warning(f"User {user_id} has not accepted legal terms yet; skipping lesson 0 send")
                 return

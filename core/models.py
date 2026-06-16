@@ -52,7 +52,16 @@ class User:
     mentor_temperature: Optional[int] = None  # 0-5: Температура (вежливость) наставника
     mentor_charisma: Optional[int] = None  # 0-5: Харизма наставника
     is_blocked: bool = False  # Флаг блокировки пользователя
-    
+    # KOOB partner fields
+    traffic_source: Optional[str] = None    # 'koob' или None
+    start_tag: Optional[str] = None         # полный тег, напр. koob_14_interviews_27m
+    banner_id: Optional[str] = None         # '14'
+    banner_topic: Optional[str] = None      # 'interviews_27m'
+    first_touch_at: Optional[datetime] = None
+    last_touch_at: Optional[datetime] = None
+    last_start_tag: Optional[str] = None
+    first_source: Optional[str] = None
+
     def has_access(self) -> bool:
         """Check if user has active course access."""
         # Пользователь должен иметь тариф И не быть заблокированным

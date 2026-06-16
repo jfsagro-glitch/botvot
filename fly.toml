@@ -1,0 +1,24 @@
+app = "botvot-prod"
+primary_region = "waw"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Постоянный диск для SQLite базы данных
+[mounts]
+  source = "botvot_data"
+  destination = "/app/data"
+
+[env]
+  PYTHONUNBUFFERED = "1"
+  ENV = "prod"
+  PROD_DATABASE_PATH = "/app/data/course_platform.db"
+  DATABASE_PATH = "/app/data/course_platform.db"
+
+# Боты работают через long-polling — HTTP-сервис не нужен.
+# Fly.io требует хотя бы одну секцию [[services]] или [http_service],
+# поэтому отключаем авто-стоп через [[vm]].
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
