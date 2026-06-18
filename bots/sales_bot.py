@@ -9,7 +9,7 @@ Handles:
 - Access granting
 - Group invitations
 """
-
+h
 import asyncio
 import logging
 import sys
@@ -2074,7 +2074,7 @@ class SalesBot:
             logger.error(f"Failed to log koob_details_clicked: {e}", exc_info=True)
 
         # Continue into the standard sales funnel
-        await self._show_course_info(callback.message, first_name=callback.from_user.first_name)
+        await self._show_course_info(callback.message, first_name=callback.from_user.first_name, user_id=callback.from_user.id)
 
     async def _get_user_promo_code(self, user_id: int) -> Optional[str]:
         code = (await self.db.get_user_promo_code(user_id) or "").strip()
@@ -2133,7 +2133,7 @@ class SalesBot:
         )
         await message.answer(author_info, disable_web_page_preview=False)
     
-    async def _show_course_info(self, message: Message, referral_partner_id: str = None, first_name: str = None):
+    async def _show_course_info(self, message: Message, referral_partner_id: str = None, first_name: str = None, user_id: int = None):
         """Show course information and tariff options."""
         # Приветствие с упоминанием партнёра, если есть
         greeting = ""
@@ -2245,11 +2245,12 @@ class SalesBot:
             f"💎 <b>Выберите тариф ниже:</b>"
         )
         
-        promo_code = await self._get_user_promo_code(message.from_user.id)
+        uid = user_id or message.from_user.id
+        promo_code = await self._get_user_promo_code(uid)
         if promo_code:
             final_message += f"\n\n🎟 Промокод применён: <code>{promo_code}</code>"
 
-        prices = await self._get_online_prices_for_user(message.from_user.id)
+        prices = await self._get_online_prices_for_user(uid)
         keyboard = create_tariff_keyboard(prices=prices)
         await send_animated_message(self.bot, message.chat.id, final_message, keyboard, 0.8)
     
