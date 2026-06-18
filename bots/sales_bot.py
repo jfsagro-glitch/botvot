@@ -9,7 +9,6 @@ Handles:
 - Access granting
 - Group invitations
 """
-h
 import asyncio
 import logging
 import sys
