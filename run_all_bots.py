@@ -48,6 +48,17 @@ async def _handle_health(_: web.Request) -> web.Response:
     return web.Response(text="OK")
 
 
+
+async def _handle_koob_landing(_: web.Request) -> web.Response:
+    """KOOB partner landing page."""
+    landing_path = Path(__file__).parent / "static" / "koob.html"
+    try:
+        html = landing_path.read_text(encoding="utf-8")
+        return web.Response(text=html, content_type="text/html", charset="utf-8")
+    except FileNotFoundError:
+        return web.Response(status=404, text="Not found")
+
+
 async def _handle_version(_: web.Request) -> web.Response:
     """
     Small debug endpoint to confirm what revision/config is actually running in Railway.
@@ -210,6 +221,8 @@ async def main():
     web_app.router.add_get("/health", _handle_health)
     web_app.router.add_get("/version", _handle_version)
     web_app.router.add_post("/payment/webhook", _handle_yookassa_webhook)
+    web_app.router.add_get("/koob", _handle_koob_landing)
+    web_app.router.add_get("/koob/", _handle_koob_landing)
     
     # КРИТИЧЕСКИ ВАЖНО: Запускаем HTTP сервер САМЫМ ПЕРВЫМ
     # Railway проверяет healthcheck сразу, даже если боты еще не готовы
