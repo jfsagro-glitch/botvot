@@ -1,5 +1,5 @@
 app = "botvot-prod"
-primary_region = "waw"
+primary_region = "arn"
 
 [build]
   dockerfile = "Dockerfile"
@@ -14,11 +14,22 @@ primary_region = "waw"
   ENV = "prod"
   PROD_DATABASE_PATH = "/app/data/course_platform.db"
   DATABASE_PATH = "/app/data/course_platform.db"
+  PORT = "8080"
 
-# Боты работают через long-polling — HTTP-сервис не нужен.
-# Fly.io требует хотя бы одну секцию [[services]] или [http_service],
-# поэтому отключаем авто-стоп через [[vm]].
+# HTTP-сервис: лендинг /koob, healthcheck и YooKassa webhook
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
 
-[[vm]]
-  size = "shared-cpu-1x"
-  memory = "256mb"
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+    force_https = true
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+  [[services.http_
