@@ -51,3 +51,5 @@ bot_logs.txt
 !*.md
 
 ffmpeg*
+_portrait_backup/
+_update_admin_token.bat

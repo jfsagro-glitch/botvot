@@ -213,7 +213,8 @@ class AdminBot:
             self.dp.message.register(
                 self.handle_forwarded_message,
                 F.chat.id == Config.ADMIN_CHAT_ID,
-                ~F.reply_to_message  # Not a reply, but a new forwarded message
+                ~F.reply_to_message,  # Not a reply, but a new forwarded message
+                ~F.text.startswith("/")  # Don't intercept commands
             )
         
         # Callback handlers
@@ -249,6 +250,9 @@ class AdminBot:
         
         # Commands for user stats
         self.dp.message.register(self.handle_user_stats, Command("user_stats"))
+
+        # KOOB partner analytics
+        self.dp.message.register(self.handle_koob_stats, Command("koob_stats"))
         
         # Persistent keyboard buttons
         self.dp.message.register(self.handle_stats_button, F.text == "📊 Статистика")
@@ -2948,6 +2952,43 @@ class AdminBot:
             logger.error(f"Error unblocking user: {e}", exc_info=True)
             await callback.answer("❌ Ошибка при разблокировке", show_alert=True)
     
+    async def handle_koob_stats(self, message: Message):
+        """Handle /koob_stats command — KOOB partner analytics."""
+        if not await self._check_authorization(message):
+            return
+        try:
+            await self.db._ensure_connection()
+            stats = await self.db.get_koob_stats()
+            totals = stats.get("totals") or {}
+            by_tag = stats.get("by_tag") or []
+
+            lines = [
+                "📊 <b>KOOB — аналитика партнёрского канала</b>\n",
+                f"• Всего переходов: <b>{int(totals.get('total_starts') or 0)}</b>",
+                f"• Уник. пользователей: <b>{int(totals.get('total_unique_users') or 0)}</b>",
+                f"• Оплат: <b>{int(totals.get('total_payments') or 0)}</b>",
+                f"• Выручка: <b>{float(totals.get('total_revenue') or 0):.0f} ₽</b>",
+            ]
+
+            if by_tag:
+                lines.append("\n<b>По баннерам:</b>")
+                for row in by_tag:
+                    tag = row.get("start_tag") or "—"
+                    starts = int(row.get("starts") or 0)
+                    uniq = int(row.get("unique_users") or 0)
+                    pays = int(row.get("payments") or 0)
+                    rev = float(row.get("revenue") or 0)
+                    lines.append(
+                        f"  • <code>{tag}</code>: {starts} стартов, {uniq} уник., {pays} оплат, {rev:.0f}₽"
+                    )
+            else:
+                lines.append("\n<i>Переходов по KOOB-ссылкам ещё не было.</i>")
+
+            await message.answer("\n".join(lines))
+        except Exception as e:
+            logger.error(f"Error in handle_koob_stats: {e}", exc_info=True)
+            await message.answer(f"❌ Ошибка при получении KOOB-статистики: {e}")
+
     async def start(self):
         """Start the admin bot."""
         logger.info("Starting Admin Bot...")

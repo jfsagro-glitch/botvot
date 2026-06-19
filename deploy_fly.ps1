@@ -2,9 +2,9 @@
 # Запустите один раз: .\deploy_fly.ps1
 # После этого деплой будет происходить автоматически при push в main (GitHub Actions)
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $APP_NAME = "botvot-prod"
-$REGION = "waw"
+$REGION = "arn"
 $VOLUME_NAME = "botvot_data"
 
 Write-Host ""
@@ -21,12 +21,17 @@ if (-not (Get-Command flyctl -ErrorAction SilentlyContinue)) {
 Write-Host "flyctl найден: $(flyctl version)" -ForegroundColor Green
 
 # 2. Проверяем авторизацию
+$ErrorActionPreference = "Continue"
 $authStatus = flyctl auth whoami 2>&1
-if ($LASTEXITCODE -ne 0) {
+$ErrorActionPreference = "Continue"
+if ($LASTEXITCODE -ne 0 -or $authStatus -match "Error") {
     Write-Host ""
     Write-Host "Нужна авторизация на Fly.io." -ForegroundColor Yellow
     Write-Host "Откроется браузер — войдите через GitHub." -ForegroundColor Yellow
+    $ErrorActionPreference = "Continue"
     flyctl auth login
+    $ErrorActionPreference = "Continue"
+    $authStatus = flyctl auth whoami 2>&1
 }
 Write-Host "Авторизован: $authStatus" -ForegroundColor Green
 
