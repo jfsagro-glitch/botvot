@@ -4,32 +4,42 @@ primary_region = "arn"
 [build]
   dockerfile = "Dockerfile"
 
-# Постоянный диск для SQLite базы данных
-[mounts]
-  source = "botvot_data"
-  destination = "/app/data"
+  # Постоянный диск для SQLite базы данных
+  [mounts]
+    source = "botvot_data"
+      destination = "/app/data"
 
-[env]
-  PYTHONUNBUFFERED = "1"
-  ENV = "prod"
-  PROD_DATABASE_PATH = "/app/data/course_platform.db"
-  DATABASE_PATH = "/app/data/course_platform.db"
-  PORT = "8080"
+      [env]
+        PYTHONUNBUFFERED = "1"
+          ENV = "prod"
+            PROD_DATABASE_PATH = "/app/data/course_platform.db"
+              DATABASE_PATH = "/app/data/course_platform.db"
+                PORT = "8080"
 
-# HTTP-сервис: лендинг /koob, healthcheck и YooKassa webhook
-[[services]]
-  internal_port = 8080
-  protocol = "tcp"
-  auto_stop_machines = false
-  auto_start_machines = true
+                # HTTP-сервис: лендинг /koob, healthcheck и YooKassa webhook
+                [[services]]
+                  internal_port = 8080
+                    protocol = "tcp"
+                      auto_stop_machines = false
+                        auto_start_machines = true
 
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
-    force_https = true
+                          [[services.ports]]
+                              handlers = ["http"]
+                                  port = 80
+                                      force_https = true
 
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
+                                        [[services.ports]]
+                                            handlers = ["tls", "http"]
+                                                port = 443
 
-  [[services.http_
+                                                  [[services.http_checks]]
+                                                      grace_period = "30s"
+                                                          interval = "30s"
+                                                              timeout = "10s"
+                                                                  path = "/health"
+                                                                      method = "get"
+                                                                          protocol = "http"
+
+                                                                          [[vm]]
+                                                                            size = "shared-cpu-1x"
+                                                                              memory = "256mb"

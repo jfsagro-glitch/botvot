@@ -1,0 +1,52 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+.env
+*.db
+*.sqlite
+*.sqlite3
+# Базы данных (исключаем, но оставляем JSON файлы с уроками!)
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+# Резервные копии
+data/*.backup*
+# Примеры конфигурации
+data/*.example
+# Временные файлы
+data/lessons_manual.json
+*.log
+.DS_Store
+.vscode/
+.idea/
+backups/
+
+# Секретные данные
+*.key
+*.pem
+*.secret
+secrets/
+credentials/
+
+# Тестовые файлы
+test_*.py
+check_bot_*.py
+simple_test_*.py
+run_bots_debug.py
+quick_start_bots.py
+
+# Логи
+*.log
+bot_logs.txt
+*.txt
+!requirements.txt
+!requirements-dev.txt
+!README.md
+!*.md
+
