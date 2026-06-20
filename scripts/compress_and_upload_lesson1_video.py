@@ -211,4 +211,16 @@ async def main():
         print("\n" + "=" * 60)
         print("✅ ГОТОВО!")
         print("=" * 60)
-        r
+        return True
+        
+    except Exception as e:
+        print(f"\n❌ Ошибка: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        await bot.session.close()
+
+if __name__ == "__main__":
+    success = asyncio.run(main())
+    sys.exit(0 if success else 1)
